@@ -6,7 +6,6 @@ const morgan = require('morgan');
 const connectDB = require('./config/database');
 
 dotenv.config();
-
 connectDB();
 
 const app = express();
@@ -16,6 +15,9 @@ app.use(cors());
 app.use(morgan('dev'));
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
+
+const authRoutes = require('./routes/authRoutes');
+app.use('/api/auth', authRoutes);
 
 app.get('/', (req, res) => {
   res.json({
