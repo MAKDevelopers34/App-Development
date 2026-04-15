@@ -19,6 +19,9 @@ app.use(express.urlencoded({ extended: false }));
 const authRoutes = require('./routes/authRoutes');
 app.use('/api/auth', authRoutes);
 
+const gpsRoutes = require('./routes/gpsRoutes');
+app.use('/api/gps', gpsRoutes);
+
 app.get('/', (req, res) => {
   res.json({
     message: 'Electric Bus Tracker API is running!',
