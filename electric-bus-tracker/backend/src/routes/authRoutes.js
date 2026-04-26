@@ -1,10 +1,13 @@
 const express = require('express');
 const router = express.Router();
-const { 
-  login, 
-  logout, 
+const {
+  login,
+  logout,
   getProfile,
-  createFirstAdmin 
+  createFirstAdmin,
+  changePassword,
+  forgotPassword,
+  resetPassword
 } = require('../controllers/authController');
 const { protect } = require('../middleware/auth');
 
@@ -14,3 +17,8 @@ router.get('/profile', protect, getProfile);
 router.post('/setup-admin', createFirstAdmin);
 
 module.exports = router;
+router.post('/change-password', protect, changePassword);
+
+
+router.post('/forgot-password', forgotPassword);
+router.post('/reset-password', resetPassword);

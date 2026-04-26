@@ -1,4 +1,4 @@
-# mobile
+# Electric Bus Tracker
 
 A new Flutter project.
 

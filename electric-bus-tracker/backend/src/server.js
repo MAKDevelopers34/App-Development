@@ -38,3 +38,10 @@ const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+const reportRoutes = require('./routes/reportRoutes');
+const { startScheduler } = require('./utils/scheduler');
+
+app.use('/api/reports', reportRoutes);
+
+// Start auto report scheduler
+startScheduler();

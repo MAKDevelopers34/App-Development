@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'core/theme/app_theme.dart';
-import 'features/tracking/screens/passenger_map_screen.dart';
+import 'features/auth/screens/splash_screen.dart';
 
 void main() {
   runApp(const ElectricBusTrackerApp());
@@ -15,7 +15,7 @@ class ElectricBusTrackerApp extends StatelessWidget {
       title: 'Electric Bus Tracker',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.lightTheme,
-      home: const PassengerMapScreen(),
+      home: const SplashScreen(),
     );
   }
 }

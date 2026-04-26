@@ -121,3 +121,154 @@ const createFirstAdmin = async (req, res) => {
 };
 
 module.exports = { login, logout, getProfile, createFirstAdmin };
+
+const changePassword = async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    const user = await User.findById(req.user._id);
+
+    const isMatch = await user.matchPassword(currentPassword);
+    if (!isMatch) {
+      return res.status(401).json({
+        message: 'Current password is incorrect'
+      });
+    }
+
+    user.password = newPassword;
+    await user.save();
+
+    res.json({
+      success: true,
+      message: 'Password changed successfully'
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+const { sendResetCode } = require('../utils/emailService');
+
+// Step 1 — User enters email, gets code
+const forgotPassword = async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({
+        message: 'Email is required'
+      });
+    }
+
+    const user = await User.findOne({
+      email: email.toLowerCase().trim()
+    });
+
+    // Always say success even if email not found
+    // (security best practice)
+    if (!user) {
+      return res.json({
+        success: true,
+        message: 'If this email exists, a code was sent'
+      });
+    }
+
+    // Generate 6-digit code
+    const code = Math.floor(
+      100000 + Math.random() * 900000
+    ).toString();
+
+    // Save code with 10 min expiry
+    user.resetCode = code;
+    user.resetCodeExpiry = new Date(
+      Date.now() + 10 * 60 * 1000
+    );
+    await user.save();
+
+    // Send email
+    await sendResetCode(
+      user.email,
+      code,
+      user.profileInfo?.fullName
+    );
+
+    res.json({
+      success: true,
+      message: 'Reset code sent to your email'
+    });
+
+  } catch (error) {
+    console.error('Forgot password error:', error.message);
+    res.status(500).json({
+      message: 'Error sending reset code',
+      error: error.message
+    });
+  }
+};
+
+// Step 2 — User enters code + new password
+const resetPassword = async (req, res) => {
+  try {
+    const { email, code, newPassword } = req.body;
+
+    if (!email || !code || !newPassword) {
+      return res.status(400).json({
+        message: 'Email, code and new password are required'
+      });
+    }
+
+    const user = await User.findOne({
+      email: email.toLowerCase().trim()
+    });
+
+    if (!user) {
+      return res.status(404).json({
+        message: 'User not found'
+      });
+    }
+
+    // Check code is correct
+    if (user.resetCode !== code) {
+      return res.status(400).json({
+        message: 'Invalid reset code'
+      });
+    }
+
+    // Check code not expired
+    if (!user.resetCodeExpiry ||
+        user.resetCodeExpiry < new Date()) {
+      return res.status(400).json({
+        message: 'Reset code has expired. Request a new one.'
+      });
+    }
+
+    if (newPassword.length < 6) {
+      return res.status(400).json({
+        message: 'Password must be at least 6 characters'
+      });
+    }
+
+    // Set new password — bcrypt happens in pre-save hook
+    user.password = newPassword;
+    user.resetCode = null;
+    user.resetCodeExpiry = null;
+    await user.save();
+
+    res.json({
+      success: true,
+      message: 'Password reset successfully! Please login.'
+    });
+
+  } catch (error) {
+    res.status(500).json({
+      message: 'Error resetting password',
+      error: error.message
+    });
+  }
+};
+
+module.exports = {
+  login, logout, getProfile,
+  createFirstAdmin, changePassword,
+  forgotPassword,
+  resetPassword
+};

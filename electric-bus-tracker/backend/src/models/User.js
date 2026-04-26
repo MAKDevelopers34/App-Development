@@ -52,7 +52,15 @@ const userSchema = new mongoose.Schema({
   createdAt: {
     type: Date,
     default: Date.now
-  }
+  },
+  resetCode: {
+  type: String,
+  default: null
+},
+resetCodeExpiry: {
+  type: Date,
+  default: null
+},
 });
 
 userSchema.pre('save', async function(next) {
