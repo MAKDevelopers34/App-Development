@@ -11,49 +11,66 @@ const login = async (req, res) => {
   try {
     const { username, userId, password } = req.body;
 
-    const user = await User.findOne({ username, userId });
+    if (!username || !userId || !password) {
+      return res.status(400).json({
+        message: 'Username, User ID and password are required'
+      });
+    }
+
+    // Find user by username only first
+    const user = await User.findOne({ 
+      username: username.trim().toLowerCase()
+    });
 
     if (!user) {
-      return res.status(401).json({ 
-        message: 'Invalid credentials' 
+      return res.status(401).json({
+        message: 'Invalid credentials'
+      });
+    }
+
+    // Then check userId matches
+    if (user.userId !== userId.trim()) {
+      return res.status(401).json({
+        message: 'Invalid credentials'
       });
     }
 
     if (!user.isActive) {
-      return res.status(401).json({ 
-        message: 'Account is deactivated. Contact admin.' 
+      return res.status(401).json({
+        message: 'Account is deactivated. Contact admin.'
       });
     }
 
-    if (user.isLocked()) {
+    if (user.isLocked && user.isLocked()) {
       const minutesLeft = Math.ceil(
         (user.lockUntil - Date.now()) / 60000
       );
-      return res.status(423).json({ 
-        message: `Account locked. Try again in ${minutesLeft} minutes.` 
+      return res.status(423).json({
+        message: `Account locked. Try again in ${minutesLeft} minutes.`
       });
     }
 
     const isMatch = await user.matchPassword(password);
 
     if (!isMatch) {
-      user.loginAttempts += 1;
+      user.loginAttempts = (user.loginAttempts || 0) + 1;
 
       if (user.loginAttempts >= 5) {
         user.lockUntil = new Date(Date.now() + 30 * 60 * 1000);
         user.loginAttempts = 0;
         await user.save();
-        return res.status(423).json({ 
-          message: 'Account locked for 30 minutes due to failed attempts.' 
+        return res.status(423).json({
+          message: 'Account locked for 30 minutes.'
         });
       }
 
       await user.save();
-      return res.status(401).json({ 
-        message: `Invalid credentials. ${5 - user.loginAttempts} attempts remaining.` 
+      return res.status(401).json({
+        message: `Invalid credentials. ${5 - user.loginAttempts} attempts remaining.`
       });
     }
 
+    // Reset login attempts on success
     user.loginAttempts = 0;
     user.lockUntil = null;
     await user.save();
@@ -72,7 +89,11 @@ const login = async (req, res) => {
     });
 
   } catch (error) {
-    res.status(500).json({ message: 'Server error', error: error.message });
+    console.error('Login error:', error.message);
+    res.status(500).json({
+      message: 'Server error',
+      error: error.message
+    });
   }
 };
 
@@ -163,33 +184,35 @@ const forgotPassword = async (req, res) => {
       email: email.toLowerCase().trim()
     });
 
-    // Always say success even if email not found
-    // (security best practice)
     if (!user) {
+      // Still return success for security
       return res.json({
         success: true,
         message: 'If this email exists, a code was sent'
       });
     }
 
-    // Generate 6-digit code
     const code = Math.floor(
       100000 + Math.random() * 900000
     ).toString();
 
-    // Save code with 10 min expiry
     user.resetCode = code;
-    user.resetCodeExpiry = new Date(
-      Date.now() + 10 * 60 * 1000
-    );
+    user.resetCodeExpiry = new Date(Date.now() + 10 * 60 * 1000);
     await user.save();
 
-    // Send email
-    await sendResetCode(
-      user.email,
-      code,
-      user.profileInfo?.fullName
-    );
+    try {
+      await sendResetCode(
+        user.email,
+        code,
+        user.profileInfo?.fullName
+      );
+    } catch (emailError) {
+      console.error('Email failed:', emailError.message);
+      return res.status(500).json({
+        message: 'Failed to send email. Check SendGrid configuration.',
+        detail: emailError.message
+      });
+    }
 
     res.json({
       success: true,
@@ -199,7 +222,7 @@ const forgotPassword = async (req, res) => {
   } catch (error) {
     console.error('Forgot password error:', error.message);
     res.status(500).json({
-      message: 'Error sending reset code',
+      message: 'Server error',
       error: error.message
     });
   }
