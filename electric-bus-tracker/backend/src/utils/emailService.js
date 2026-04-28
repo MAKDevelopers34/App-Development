@@ -1,66 +1,65 @@
 const sgMail = require('@sendgrid/mail');
 
-sgMail.setApiKey(process.env.SENDGRID_API_KEY);
-
 const sendResetCode = async (email, code, fullName) => {
-  try {
-    if (!process.env.SENDGRID_API_KEY) {
-      throw new Error('SENDGRID_API_KEY is not set in environment');
-    }
+  const apiKey = process.env.SENDGRID_API_KEY;
+  const fromEmail = process.env.EMAIL_FROM;
 
-    if (!process.env.EMAIL_FROM) {
-      throw new Error('EMAIL_FROM is not set in environment');
-    }
+  console.log('SendGrid API Key exists:', !!apiKey);
+  console.log('EMAIL_FROM:', fromEmail);
+  console.log('Sending to:', email);
 
-    const msg = {
-      to: email,
-      from: {
-        email: process.env.EMAIL_FROM,
-        name: 'Electric Bus Tracker'
-      },
-      subject: 'Password Reset Code — Electric Bus Tracker',
-      html: `
-        <div style="font-family: Arial, sans-serif;
-                    max-width: 500px; margin: 0 auto;
-                    padding: 30px; border-radius: 10px;
-                    border: 1px solid #eee;">
-          <div style="text-align: center; margin-bottom: 30px;">
-            <h2 style="color: #2ECC71;">
-              Electric Bus Tracker
-            </h2>
-            <p style="color: #666;">Mianwali District, Pakistan</p>
-          </div>
-          <p style="color: #333;">Dear ${fullName || 'User'},</p>
-          <p style="color: #333;">Your password reset code is:</p>
-          <div style="text-align: center; margin: 30px 0;">
-            <div style="background: #2ECC71; color: white;
-                        font-size: 32px; font-weight: bold;
-                        letter-spacing: 8px; padding: 20px;
-                        border-radius: 10px;">
-              ${code}
-            </div>
-          </div>
-          <p style="color: #666; font-size: 13px;">
-            This code expires in <strong>10 minutes</strong>.
-          </p>
-          <p style="color: #666; font-size: 13px;">
-            If you did not request this, ignore this email.
-          </p>
+  if (!apiKey) {
+    throw new Error('SENDGRID_API_KEY missing from environment');
+  }
+  if (!fromEmail) {
+    throw new Error('EMAIL_FROM missing from environment');
+  }
+
+  sgMail.setApiKey(apiKey);
+
+  const msg = {
+    to: email,
+    from: {
+      email: fromEmail,
+      name: 'Electric Bus Tracker'
+    },
+    subject: 'Your Password Reset Code',
+    text: `Your password reset code is: ${code}. Valid for 10 minutes.`,
+    html: `
+      <div style="font-family:Arial,sans-serif;max-width:480px;
+                  margin:0 auto;padding:24px;border:1px solid #eee;
+                  border-radius:10px;">
+        <h2 style="color:#2ECC71;text-align:center;">
+          Electric Bus Tracker
+        </h2>
+        <p>Dear ${fullName},</p>
+        <p>Your password reset code is:</p>
+        <div style="text-align:center;margin:24px 0;">
+          <span style="background:#2ECC71;color:#fff;
+                       font-size:28px;font-weight:bold;
+                       letter-spacing:6px;padding:16px 24px;
+                       border-radius:8px;display:inline-block;">
+            ${code}
+          </span>
         </div>
-      `,
-    };
+        <p style="color:#888;font-size:12px;">
+          This code expires in 10 minutes.
+          If you didn't request this, ignore this email.
+        </p>
+      </div>
+    `
+  };
 
-    const response = await sgMail.send(msg);
-    console.log(`✅ Reset code sent to ${email}`);
-    console.log(`   SendGrid status: ${response[0].statusCode}`);
+  try {
+    const [response] = await sgMail.send(msg);
+    console.log('✅ Email sent! Status:', response.statusCode);
     return true;
-
   } catch (error) {
     console.error('❌ SendGrid error:', error.message);
-    if (error.response) {
-      console.error('   SendGrid body:', 
-        JSON.stringify(error.response.body)
-      );
+    if (error.response?.body?.errors) {
+      error.response.body.errors.forEach(e => {
+        console.error('  Error:', e.message);
+      });
     }
     throw error;
   }

@@ -1,12 +1,17 @@
 const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs');
 const User = require('../models/User');
+const { sendResetCode } = require('../utils/emailService');
 
 const generateToken = (id) => {
-  return jwt.sign({ id }, process.env.JWT_SECRET, {
-    expiresIn: '24h'
-  });
+  return jwt.sign(
+    { id },
+    process.env.JWT_SECRET || 'fallback_secret_key',
+    { expiresIn: '24h' }
+  );
 };
 
+// ── LOGIN ─────────────────────────────────────────
 const login = async (req, res) => {
   try {
     const { username, userId, password } = req.body;
@@ -17,8 +22,8 @@ const login = async (req, res) => {
       });
     }
 
-    // Find user by username only first
-    const user = await User.findOne({ 
+    // Find by username (lowercase)
+    const user = await User.findOne({
       username: username.trim().toLowerCase()
     });
 
@@ -28,20 +33,22 @@ const login = async (req, res) => {
       });
     }
 
-    // Then check userId matches
-    if (user.userId !== userId.trim()) {
+    // Check userId
+    if (user.userId.trim() !== userId.trim()) {
       return res.status(401).json({
         message: 'Invalid credentials'
       });
     }
 
+    // Check active
     if (!user.isActive) {
       return res.status(401).json({
-        message: 'Account is deactivated. Contact admin.'
+        message: 'Account deactivated. Contact administrator.'
       });
     }
 
-    if (user.isLocked && user.isLocked()) {
+    // Check lock
+    if (user.isLocked()) {
       const minutesLeft = Math.ceil(
         (user.lockUntil - Date.now()) / 60000
       );
@@ -50,32 +57,45 @@ const login = async (req, res) => {
       });
     }
 
-    const isMatch = await user.matchPassword(password);
+    // Compare password directly with bcrypt
+    const isMatch = await bcrypt.compare(
+      password, user.password
+    );
 
     if (!isMatch) {
       user.loginAttempts = (user.loginAttempts || 0) + 1;
-
       if (user.loginAttempts >= 5) {
-        user.lockUntil = new Date(Date.now() + 30 * 60 * 1000);
+        user.lockUntil = new Date(
+          Date.now() + 30 * 60 * 1000
+        );
         user.loginAttempts = 0;
-        await user.save();
+        await User.updateOne(
+          { _id: user._id },
+          {
+            loginAttempts: user.loginAttempts,
+            lockUntil: user.lockUntil
+          }
+        );
         return res.status(423).json({
           message: 'Account locked for 30 minutes.'
         });
       }
-
-      await user.save();
+      await User.updateOne(
+        { _id: user._id },
+        { loginAttempts: user.loginAttempts }
+      );
       return res.status(401).json({
-        message: `Invalid credentials. ${5 - user.loginAttempts} attempts remaining.`
+        message: `Invalid credentials. ${5 - user.loginAttempts} attempts left.`
       });
     }
 
-    // Reset login attempts on success
-    user.loginAttempts = 0;
-    user.lockUntil = null;
-    await user.save();
+    // Reset attempts on success
+    await User.updateOne(
+      { _id: user._id },
+      { loginAttempts: 0, lockUntil: null }
+    );
 
-    res.json({
+    return res.json({
       success: true,
       token: generateToken(user._id),
       user: {
@@ -89,37 +109,53 @@ const login = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Login error:', error.message);
-    res.status(500).json({
+    console.error('LOGIN ERROR:', error.message);
+    console.error(error.stack);
+    return res.status(500).json({
       message: 'Server error',
       error: error.message
     });
   }
 };
 
+// ── LOGOUT ────────────────────────────────────────
 const logout = async (req, res) => {
-  res.json({ success: true, message: 'Logged out successfully' });
+  return res.json({
+    success: true,
+    message: 'Logged out successfully'
+  });
 };
 
+// ── GET PROFILE ───────────────────────────────────
 const getProfile = async (req, res) => {
   try {
-    const user = await User.findById(req.user._id).select('-password');
-    res.json({ success: true, user });
+    const user = await User.findById(
+      req.user._id
+    ).select('-password');
+    return res.json({ success: true, user });
   } catch (error) {
-    res.status(500).json({ message: 'Server error' });
+    return res.status(500).json({
+      message: 'Server error'
+    });
   }
 };
 
+// ── CREATE FIRST ADMIN ────────────────────────────
 const createFirstAdmin = async (req, res) => {
   try {
-    const adminExists = await User.findOne({ role: 'admin' });
+    const adminExists = await User.findOne({
+      role: 'admin'
+    });
     if (adminExists) {
-      return res.status(400).json({ 
-        message: 'Admin already exists' 
+      return res.status(400).json({
+        message: 'Admin already exists'
       });
     }
 
-    const { username, userId, password, email, fullName } = req.body;
+    const {
+      username, userId, password,
+      email, fullName
+    } = req.body;
 
     const admin = await User.create({
       username,
@@ -127,49 +163,57 @@ const createFirstAdmin = async (req, res) => {
       password,
       email,
       role: 'admin',
-      profileInfo: { fullName }
+      profileInfo: { fullName: fullName || 'Admin' }
     });
 
-    res.status(201).json({
+    return res.status(201).json({
       success: true,
-      message: 'Admin created successfully',
+      message: 'Admin created',
       token: generateToken(admin._id)
     });
-
   } catch (error) {
-    res.status(500).json({ message: 'Server error', error: error.message });
+    return res.status(500).json({
+      message: 'Server error',
+      error: error.message
+    });
   }
 };
 
-module.exports = { login, logout, getProfile, createFirstAdmin };
-
+// ── CHANGE PASSWORD ───────────────────────────────
 const changePassword = async (req, res) => {
   try {
     const { currentPassword, newPassword } = req.body;
     const user = await User.findById(req.user._id);
 
-    const isMatch = await user.matchPassword(currentPassword);
+    const isMatch = await bcrypt.compare(
+      currentPassword, user.password
+    );
     if (!isMatch) {
       return res.status(401).json({
         message: 'Current password is incorrect'
       });
     }
 
-    user.password = newPassword;
-    await user.save();
+    const salt = await bcrypt.genSalt(10);
+    const hashed = await bcrypt.hash(newPassword, salt);
 
-    res.json({
+    await User.updateOne(
+      { _id: user._id },
+      { password: hashed }
+    );
+
+    return res.json({
       success: true,
       message: 'Password changed successfully'
     });
   } catch (error) {
-    res.status(500).json({ message: 'Server error' });
+    return res.status(500).json({
+      message: 'Server error'
+    });
   }
 };
 
-const { sendResetCode } = require('../utils/emailService');
-
-// Step 1 — User enters email, gets code
+// ── FORGOT PASSWORD ───────────────────────────────
 const forgotPassword = async (req, res) => {
   try {
     const { email } = req.body;
@@ -185,7 +229,6 @@ const forgotPassword = async (req, res) => {
     });
 
     if (!user) {
-      // Still return success for security
       return res.json({
         success: true,
         message: 'If this email exists, a code was sent'
@@ -196,46 +239,44 @@ const forgotPassword = async (req, res) => {
       100000 + Math.random() * 900000
     ).toString();
 
-    user.resetCode = code;
-    user.resetCodeExpiry = new Date(Date.now() + 10 * 60 * 1000);
-    await user.save();
+    await User.updateOne(
+      { _id: user._id },
+      {
+        resetCode: code,
+        resetCodeExpiry: new Date(
+          Date.now() + 10 * 60 * 1000
+        )
+      }
+    );
 
-    try {
-      await sendResetCode(
-        user.email,
-        code,
-        user.profileInfo?.fullName
-      );
-    } catch (emailError) {
-      console.error('Email failed:', emailError.message);
-      return res.status(500).json({
-        message: 'Failed to send email. Check SendGrid configuration.',
-        detail: emailError.message
-      });
-    }
+    await sendResetCode(
+      user.email,
+      code,
+      user.profileInfo?.fullName || 'User'
+    );
 
-    res.json({
+    return res.json({
       success: true,
       message: 'Reset code sent to your email'
     });
 
   } catch (error) {
-    console.error('Forgot password error:', error.message);
-    res.status(500).json({
-      message: 'Server error',
+    console.error('FORGOT PASSWORD ERROR:', error.message);
+    return res.status(500).json({
+      message: 'Failed to send reset code',
       error: error.message
     });
   }
 };
 
-// Step 2 — User enters code + new password
+// ── RESET PASSWORD ────────────────────────────────
 const resetPassword = async (req, res) => {
   try {
     const { email, code, newPassword } = req.body;
 
     if (!email || !code || !newPassword) {
       return res.status(400).json({
-        message: 'Email, code and new password are required'
+        message: 'Email, code and new password required'
       });
     }
 
@@ -249,18 +290,16 @@ const resetPassword = async (req, res) => {
       });
     }
 
-    // Check code is correct
     if (user.resetCode !== code) {
       return res.status(400).json({
         message: 'Invalid reset code'
       });
     }
 
-    // Check code not expired
     if (!user.resetCodeExpiry ||
         user.resetCodeExpiry < new Date()) {
       return res.status(400).json({
-        message: 'Reset code has expired. Request a new one.'
+        message: 'Code expired. Request a new one.'
       });
     }
 
@@ -270,28 +309,37 @@ const resetPassword = async (req, res) => {
       });
     }
 
-    // Set new password — bcrypt happens in pre-save hook
-    user.password = newPassword;
-    user.resetCode = null;
-    user.resetCodeExpiry = null;
-    await user.save();
+    const salt = await bcrypt.genSalt(10);
+    const hashed = await bcrypt.hash(newPassword, salt);
 
-    res.json({
+    await User.updateOne(
+      { _id: user._id },
+      {
+        password: hashed,
+        resetCode: null,
+        resetCodeExpiry: null
+      }
+    );
+
+    return res.json({
       success: true,
       message: 'Password reset successfully! Please login.'
     });
 
   } catch (error) {
-    res.status(500).json({
-      message: 'Error resetting password',
+    return res.status(500).json({
+      message: 'Server error',
       error: error.message
     });
   }
 };
 
 module.exports = {
-  login, logout, getProfile,
-  createFirstAdmin, changePassword,
+  login,
+  logout,
+  getProfile,
+  createFirstAdmin,
+  changePassword,
   forgotPassword,
   resetPassword
 };
