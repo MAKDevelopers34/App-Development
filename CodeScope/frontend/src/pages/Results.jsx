@@ -21,6 +21,15 @@ export default function Results() {
     return typeof filename === 'string' && filename.trim() ? filename : fallback;
   };
 
+  const formatDisplayCode = (code) => {
+    if (typeof code !== 'string') return '';
+
+    return code
+      .replace(/\r\n/g, '\n')
+      .replace(/\t/g, '  ')
+      .trim();
+  };
+
   if (!result) {
     navigate('/analyze');
     return null;
@@ -66,7 +75,8 @@ export default function Results() {
     const language = r?.language || 'Unknown';
     const lines_of_code = r?.lines_of_code || 0;
     const issues = Array.isArray(r?.issues) ? r.issues : [];
-    const suggestions = Array.isArray(r?.suggestions) ? r.suggestions : [];
+    const concrete = r?.concrete_analysis;
+    //const suggestions = Array.isArray(r?.suggestions) ? r.suggestions : [];
     const safeFilename = filename || getSafeFilename(data);
 
     return (
@@ -134,6 +144,193 @@ export default function Results() {
           </div>
         </div>
 
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'minmax(0, 1fr)',
+          gap: '20px',
+          marginBottom: '20px'
+        }}>
+          {/* Concrete Input Analysis */}
+          {concrete && (
+            <div className="card" style={{ border: '1px solid var(--primary)', background: '#f8fbff' }}>
+              <h3 style={{ fontSize: '16px', fontWeight: '600', marginBottom: '14px' }}>
+                Concrete Input Result
+              </h3>
+              {concrete.available ? (
+                <>
+                  <div style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+                    gap: '12px',
+                    marginBottom: '12px'
+                  }}>
+                    {[
+                      ['Function', `${concrete.function}()`],
+                      ['Inputs', Object.entries(concrete.inputs || {}).map(([k, v]) => `${k}=${v}`).join(', ')],
+                      ['Return Value', concrete.return_value],
+                      ['Time', concrete.time],
+                      ['Space', concrete.space],
+                      ['Fixed Big-O', `${concrete.fixed_input_time_complexity} time, ${concrete.fixed_input_space_complexity} space`],
+                    ].map(([label, value]) => (
+                      <div key={label} style={{ background: 'white', border: '1px solid var(--border)', borderRadius: '8px', padding: '10px' }}>
+                        <div style={{ fontSize: '11px', color: 'var(--gray)', fontWeight: '700', textTransform: 'uppercase', marginBottom: '4px' }}>
+                          {label}
+                        </div>
+                        <div style={{ fontSize: '13px', color: 'var(--dark)', fontWeight: '600', fontFamily: 'var(--font-code)', overflowWrap: 'anywhere' }}>
+                          {String(value)}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <p style={{ fontSize: '13px', color: 'var(--gray)', lineHeight: '1.6', margin: 0 }}>
+                    {concrete.reason}. Symbolic growth remains {concrete.symbolic_time_complexity} when inputs are variable.
+                  </p>
+                </>
+              ) : (
+                <p style={{ fontSize: '13px', color: 'var(--dark)', lineHeight: '1.6', margin: 0 }}>
+                  {concrete.reason || 'Exact concrete analysis is unavailable for these inputs.'}
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* AI Explanation */}
+          {r.ai_explanation && (
+            <div
+              className="card"
+              style={{ background: 'linear-gradient(135deg, #e8f0fe, #f8f9fa)' }}
+            >
+              <h3 style={{ fontSize: '16px', fontWeight: '600', marginBottom: '16px' }}>
+                🤖 AI Explanation
+              </h3>
+              {r.ai_explanation.why_this_complexity && (
+                <div style={{ marginBottom: '14px' }}>
+                  <div style={{ fontSize: '12px', fontWeight: '700', color: 'var(--primary)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '4px' }}>
+                    Why this complexity?
+                  </div>
+                  <p style={{ fontSize: '14px', color: 'var(--dark)', lineHeight: '1.7' }}>
+                    {r.ai_explanation.why_this_complexity}
+                  </p>
+                </div>
+              )}
+              {r.ai_explanation.real_world_analogy && (
+                <div style={{ marginBottom: '14px', background: 'white', padding: '12px', borderRadius: '8px', border: '1px solid var(--border)' }}>
+                  <div style={{ fontSize: '12px', fontWeight: '700', color: 'var(--primary)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '4px' }}>
+                    💡 Real World Analogy
+                  </div>
+                  <p style={{ fontSize: '14px', color: 'var(--dark)', lineHeight: '1.7', margin: 0 }}>
+                    {r.ai_explanation.real_world_analogy}
+                  </p>
+                </div>
+              )}
+              {r.ai_explanation.performance_impact && (
+                <div style={{ marginBottom: '14px' }}>
+                  <div style={{ fontSize: '12px', fontWeight: '700', color: 'var(--primary)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '4px' }}>
+                    📈 Performance Impact
+                  </div>
+                  <p style={{ fontSize: '14px', color: 'var(--dark)', lineHeight: '1.7' }}>
+                    {r.ai_explanation.performance_impact}
+                  </p>
+                </div>
+              )}
+              {r.ai_explanation.top_optimization && (
+                <div style={{ background: '#e6f4ea', padding: '12px', borderRadius: '8px', border: '1px solid #b7dfbf' }}>
+                  <div style={{ fontSize: '12px', fontWeight: '700', color: 'var(--success)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '4px' }}>
+                    🎯 Top Optimization
+                  </div>
+                  <p style={{ fontSize: '14px', color: 'var(--dark)', lineHeight: '1.7', margin: 0 }}>
+                    {r.ai_explanation.top_optimization}
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Call Chain Report */}
+          {r.call_chain_report && r.call_chain_report.length > 0 && (
+            <div className="card">
+              <h3 style={{ fontSize: '16px', fontWeight: '600', marginBottom: '16px' }}>
+                🔗 Function Call Chain Analysis
+              </h3>
+              <p style={{ fontSize: '13px', color: 'var(--gray)', marginBottom: '14px' }}>
+                These functions have higher effective complexity due to the functions they call:
+              </p>
+              {r.call_chain_report.map((chain, i) => (
+                <div key={i} style={{
+                  background: '#fef7e0',
+                  border: '1px solid #fde68a',
+                  borderRadius: '10px',
+                  padding: '14px',
+                  marginBottom: '10px'
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px', flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: '13px', fontWeight: '700', fontFamily: 'var(--font-code)' }}>
+                      {chain.function}()
+                    </span>
+                    <span style={{ background: '#e6f4ea', color: 'var(--success)', padding: '2px 8px', borderRadius: '10px', fontSize: '11px', fontWeight: '600' }}>
+                      own: {chain.own_complexity}
+                    </span>
+                    <span style={{ fontSize: '12px', color: 'var(--gray)' }}>→ calls →</span>
+                    <span style={{ background: '#fce8e6', color: 'var(--danger)', padding: '2px 8px', borderRadius: '10px', fontSize: '11px', fontWeight: '600' }}>
+                      effective: {chain.effective_complexity}
+                    </span>
+                  </div>
+                  <p style={{ fontSize: '13px', color: 'var(--dark)', margin: 0, lineHeight: '1.6' }}>
+                    {chain.message}
+                  </p>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Per Function Explanations */}
+          {r.function_explanations && r.function_explanations.length > 0 && (
+            <div className="card">
+              <h3 style={{ fontSize: '16px', fontWeight: '600', marginBottom: '16px' }}>
+                🧩 Per-Function Complexity Breakdown
+              </h3>
+              {r.function_explanations.map((fn, i) => (
+                <div key={i} style={{
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  flexWrap: 'wrap',
+                  gap: '12px',
+                  padding: '12px 0',
+                  borderBottom: i < r.function_explanations.length - 1 ? '1px solid var(--border)' : 'none'
+                }}>
+                  <code style={{
+                    background: 'var(--primary-light)',
+                    color: 'var(--primary)',
+                    padding: '3px 10px',
+                    borderRadius: '6px',
+                    fontSize: '13px',
+                    fontWeight: '600',
+                    whiteSpace: 'nowrap',
+                    maxWidth: '100%',
+                    overflowWrap: 'anywhere'
+                  }}>
+                    {fn.function}()
+                  </code>
+                  <div style={{ flex: '1 1 220px', minWidth: 0 }}>
+                    <span style={{
+                      fontSize: '12px',
+                      fontWeight: '600',
+                      fontFamily: 'var(--font-code)',
+                      color: 'var(--dark)',
+                      marginRight: '8px'
+                    }}>
+                      {fn.complexity}
+                    </span>
+                    <span style={{ fontSize: '13px', color: 'var(--gray)', lineHeight: '1.6', overflowWrap: 'anywhere' }}>
+                      {fn.explanation}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
         {/* Issues */}
         {issues.length > 0 && (
           <div className="card" style={{ marginBottom: '20px' }}>
@@ -147,36 +344,100 @@ export default function Results() {
         )}
 
         {/* Suggestions */}
-        {suggestions.length > 0 && (
+        {/* Transformed Code */}
+        {r.transformed_code && r.transformed_code.available && (
+          <div className="card" style={{ marginBottom: '20px' }}>
+            <h3 style={{ fontSize: '16px', fontWeight: '600', marginBottom: '4px' }}>
+              🔄 Optimized Version of Your Code
+            </h3>
+            <p style={{ fontSize: '13px', color: 'var(--gray)', marginBottom: '12px' }}>
+              {r.transformed_code.description} —
+              <span style={{ color: 'var(--danger)', fontWeight: '600' }}>
+                {' '}
+                {r.transformed_code.complexity_before}
+              </span>
+              {' → '}
+              <span style={{ color: 'var(--success)', fontWeight: '600' }}>
+                {r.transformed_code.complexity_after}
+              </span>
+            </p>
+            <pre style={{
+              background: '#1e1e2e',
+              color: '#cdd6f4',
+              padding: '16px',
+              borderRadius: '10px',
+              fontSize: '13px',
+              overflowX: 'auto',
+              lineHeight: '1.6',
+              fontFamily: 'var(--font-code)',
+              whiteSpace: 'pre',
+              tabSize: 2,
+              margin: 0
+            }}>
+              {formatDisplayCode(r.transformed_code.code)}
+            </pre>
+          </div>
+        )}
+
+        {/* Optimizations */}
+        {r.optimizations && r.optimizations.length > 0 && (
           <div className="card" style={{ marginBottom: '20px' }}>
             <h3 style={{ fontSize: '16px', fontWeight: '600', marginBottom: '16px' }}>
               💡 Optimization Suggestions
             </h3>
-            {suggestions.map((suggestion, i) => (
+            {r.optimizations.map((opt, i) => (
               <div key={i} style={{
-                display: 'flex',
-                alignItems: 'flex-start',
-                gap: '12px',
-                padding: '12px 0',
-                borderBottom: i < suggestions.length - 1 ? '1px solid var(--border)' : 'none'
+                borderBottom: i < r.optimizations.length - 1 ? '1px solid var(--border)' : 'none',
+                paddingBottom: '20px',
+                marginBottom: '20px'
               }}>
-                <div style={{
-                  width: '24px', height: '24px',
-                  background: 'var(--primary-light)',
-                  borderRadius: '50%',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  fontSize: '12px',
-                  fontWeight: '700',
-                  color: 'var(--primary)',
-                  flexShrink: 0
-                }}>
-                  {i + 1}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
+                  <h4 style={{ fontSize: '14px', fontWeight: '600' }}>{opt.title}</h4>
                 </div>
-                <p style={{ fontSize: '14px', color: 'var(--dark)', lineHeight: '1.6', margin: 0 }}>
-                  {suggestion || 'No suggestion available'}
+                <div style={{ display: 'flex', gap: '8px', marginBottom: '10px' }}>
+                  <span style={{
+                    background: '#fce8e6',
+                    color: 'var(--danger)',
+                    padding: '3px 10px',
+                    borderRadius: '20px',
+                    fontSize: '12px',
+                    fontWeight: '600'
+                  }}>
+                    Before: {opt.complexity_before}
+                  </span>
+                  <span style={{ color: 'var(--gray)', fontSize: '12px', alignSelf: 'center' }}>→</span>
+                  <span style={{
+                    background: '#e6f4ea',
+                    color: 'var(--success)',
+                    padding: '3px 10px',
+                    borderRadius: '20px',
+                    fontSize: '12px',
+                    fontWeight: '600'
+                  }}>
+                    After: {opt.complexity_after}
+                  </span>
+                </div>
+                <p style={{ fontSize: '13px', color: 'var(--gray)', marginBottom: '10px' }}>
+                  <strong>Problem:</strong> {opt.problem}
                 </p>
+                <p style={{ fontSize: '13px', color: 'var(--gray)', marginBottom: '10px' }}>
+                  <strong>Solution:</strong> {opt.solution}
+                </p>
+                <pre style={{
+                  background: '#1e1e2e',
+                  color: '#cdd6f4',
+                  padding: '14px',
+                  borderRadius: '10px',
+                  fontSize: '12px',
+                  overflowX: 'auto',
+                  lineHeight: '1.6',
+                  fontFamily: 'var(--font-code)',
+                  whiteSpace: 'pre',
+                  tabSize: 2,
+                  margin: 0
+                }}>
+                  {formatDisplayCode(opt.example)}
+                </pre>
               </div>
             ))}
           </div>

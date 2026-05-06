@@ -8,8 +8,21 @@ const api = axios.create({
 });
 
 // ─── Analyze pasted code ────────────────────────────────────
-export const analyzeCode = async (code, filename = 'code.py') => {
-  const response = await api.post('/api/analyze/code', { code, filename });
+export const analyzeCode = async (code, filename = 'code.py', concreteInputs = '') => {
+  const payload = { code, filename };
+  if (concreteInputs) {
+    if (typeof concreteInputs === 'string') {
+      if (concreteInputs.trim()) payload.concrete_inputs = concreteInputs.trim();
+    } else {
+      payload.concrete_inputs = concreteInputs;
+    }
+  }
+  const response = await api.post('/api/analyze/code', payload);
+  return response.data;
+};
+
+export const inferInputs = async (code, filename = 'code.py') => {
+  const response = await api.post('/api/analyze/inputs', { code, filename });
   return response.data;
 };
 

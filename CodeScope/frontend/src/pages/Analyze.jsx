@@ -1,17 +1,145 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDropzone } from 'react-dropzone';
 import { analyzeCode, analyzeZip, analyzeGithub } from '../services/api';
+
+const splitParams = (raw = '') => {
+  const params = [];
+  let current = '';
+  let depth = 0;
+  const openers = new Set(['<', '[', '(', '{']);
+  const closers = new Set(['>', ']', ')', '}']);
+
+  for (const ch of raw) {
+    if (openers.has(ch)) depth += 1;
+    if (closers.has(ch) && depth > 0) depth -= 1;
+    if (ch === ',' && depth === 0) {
+      params.push(current.trim());
+      current = '';
+    } else {
+      current += ch;
+    }
+  }
+  if (current.trim()) params.push(current.trim());
+  return params;
+};
+
+const languageFromFilename = (filename = '') => {
+  const ext = filename.split('.').pop()?.toLowerCase();
+  if (['js', 'ts', 'jsx', 'tsx'].includes(ext)) return 'javascript';
+  if (ext === 'java') return 'java';
+  if (['cpp', 'cc', 'c'].includes(ext)) return 'cpp';
+  return 'python';
+};
+
+const inferKind = (name, declaredType = '') => {
+  const text = `${declaredType} ${name}`.toLowerCase();
+  if (/(bool|boolean|flag|is_|has_|can_)/.test(text)) return { kind: 'boolean', placeholder: 'true' };
+  if (/(list|array|vector|\[\]|tuple|set)/.test(text) || /^(arr|nums|numbers|items|values|visited|seen)$/i.test(name)) {
+    return { kind: 'array', placeholder: '[1, 2, 3]' };
+  }
+  if (/(dict|map|object|graph|adj)/.test(text)) return { kind: 'object', placeholder: '{"a": [1, 2]}' };
+  if (/(str|string|char)/.test(text) || /^(s|text|word|pattern)$/i.test(name)) return { kind: 'string', placeholder: 'hello' };
+  if (/(float|double|decimal)/.test(text)) return { kind: 'number', placeholder: '3.14' };
+  if (/(int|long|size_t|short)/.test(text) || /^(n|m|k|i|j|target|size|length|count|limit)$/i.test(name)) {
+    return { kind: 'integer', placeholder: '10' };
+  }
+  return { kind: 'string', placeholder: 'value' };
+};
+
+const parseParam = (raw, language) => {
+  const cleaned = raw.replace(/=.*/, '').trim();
+  if (!cleaned) return null;
+
+  if (language === 'python') {
+    const [namePart, declaredType = ''] = cleaned.split(':').map(part => part.trim());
+    const name = namePart.replace(/^\*+/, '');
+    if (!name || ['self', 'cls'].includes(name)) return null;
+    return { name, declaredType };
+  }
+
+  const arrayMatch = cleaned.match(/(\w+)\s*\[\s*\]$/);
+  if (arrayMatch) {
+    return {
+      name: arrayMatch[1],
+      declaredType: `${cleaned.slice(0, arrayMatch.index).trim()}[]`,
+    };
+  }
+
+  const tokens = cleaned.replace(/[&*]/g, ' ').trim().split(/\s+/);
+  const name = tokens[tokens.length - 1];
+  if (!name) return null;
+  return {
+    name,
+    declaredType: tokens.length > 1 ? cleaned.slice(0, cleaned.lastIndexOf(name)).trim() : '',
+  };
+};
+
+const inferInputSchema = (code, filename) => {
+  const language = languageFromFilename(filename);
+  const patterns = language === 'python'
+    ? [/def\s+(\w+)\s*\(([^)]*)\)/]
+    : language === 'javascript'
+      ? [
+          /function\s*\*?\s+(\w+)\s*\(([^)]*)\)/,
+          /(?:const|let|var)\s+(\w+)\s*=\s*\(([^)]*)\)\s*=>/,
+          /(?:const|let|var)\s+(\w+)\s*=\s*([A-Za-z_]\w*)\s*=>/,
+        ]
+      : [/(?:public|private|protected)?\s*(?:static\s+)?[\w:<>\[\], ?&*]+\s+(\w+)\s*\(([^)]*)\)/];
+
+  for (const pattern of patterns) {
+    const match = code.match(pattern);
+    if (!match) continue;
+    const params = splitParams(match[2])
+      .map(raw => parseParam(raw, language))
+      .filter(Boolean)
+      .map(param => ({ ...param, ...inferKind(param.name, param.declaredType) }));
+
+    if (params.length) {
+      return { available: true, function: match[1], language, parameters: params };
+    }
+  }
+  return { available: false, function: null, language, parameters: [] };
+};
+
+const parseInputValue = (value, kind) => {
+  const text = String(value ?? '').trim();
+  if (!text) return undefined;
+  if (kind === 'integer') return Number.parseInt(text, 10);
+  if (kind === 'number') return Number.parseFloat(text);
+  if (kind === 'boolean') return /^(true|1|yes)$/i.test(text);
+  if (kind === 'array' || kind === 'object') {
+    try { return JSON.parse(text); } catch { return text; }
+  }
+  return text;
+};
+
+const buildConcreteInputPayload = (schema, values, fallbackText) => {
+  if (schema?.available) {
+    const payload = {};
+    schema.parameters.forEach(param => {
+      const parsed = parseInputValue(values[param.name], param.kind);
+      if (parsed !== undefined && !(typeof parsed === 'number' && Number.isNaN(parsed))) {
+        payload[param.name] = parsed;
+      }
+    });
+    if (Object.keys(payload).length) return payload;
+  }
+  return fallbackText;
+};
 
 export default function Analyze() {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState('code');
   const [code, setCode] = useState('');
   const [filename, setFilename] = useState('code.py');
+  const [concreteInputs, setConcreteInputs] = useState('');
+  const [inputValues, setInputValues] = useState({});
   const [githubUrl, setGithubUrl] = useState('');
   const [zipFile, setZipFile] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const inputSchema = useMemo(() => inferInputSchema(code, filename), [code, filename]);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     accept: { 'application/zip': ['.zip'] },
@@ -35,7 +163,11 @@ export default function Analyze() {
           setLoading(false);
           return;
         }
-        result = await analyzeCode(code, filename);
+        result = await analyzeCode(
+          code,
+          filename,
+          buildConcreteInputPayload(inputSchema, inputValues, concreteInputs)
+        );
         navigate('/results', { state: { result, type: 'code' } });
 
       } else if (activeTab === 'zip') {
@@ -148,6 +280,54 @@ export default function Analyze() {
                   }}
                 />
               </div>
+              {inputSchema.available ? (
+                <div style={{ marginTop: '16px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', marginBottom: '8px', flexWrap: 'wrap' }}>
+                    <label style={{ fontSize: '13px', fontWeight: '600', color: 'var(--dark)' }}>
+                      Inputs for {inputSchema.function}()
+                    </label>
+                    <span style={{ fontSize: '12px', color: 'var(--gray)', fontFamily: 'var(--font-code)' }}>
+                      Detected from pasted code
+                    </span>
+                  </div>
+                  <div style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+                    gap: '12px'
+                  }}>
+                    {inputSchema.parameters.map(param => (
+                      <div key={param.name}>
+                        <label style={{ fontSize: '12px', fontWeight: '600', color: 'var(--dark)', display: 'block', marginBottom: '5px', fontFamily: 'var(--font-code)' }}>
+                          {param.name}
+                          <span style={{ color: 'var(--gray)', fontFamily: 'var(--font)', fontWeight: '500' }}>
+                            {' '}({param.kind})
+                          </span>
+                        </label>
+                        <input
+                          type={param.kind === 'integer' || param.kind === 'number' ? 'number' : 'text'}
+                          value={inputValues[param.name] || ''}
+                          onChange={e => setInputValues(prev => ({ ...prev, [param.name]: e.target.value }))}
+                          placeholder={param.placeholder}
+                          style={{ marginBottom: 0, fontFamily: 'var(--font-code)', fontSize: '13px' }}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div style={{ marginTop: '16px' }}>
+                  <label style={{ fontSize: '13px', fontWeight: '500', color: 'var(--dark)', display: 'block', marginBottom: '6px' }}>
+                    Input values (optional)
+                  </label>
+                  <input
+                    type="text"
+                    value={concreteInputs}
+                    onChange={e => setConcreteInputs(e.target.value)}
+                    placeholder="m=2, n=2 or functionName(2, 2)"
+                    style={{ marginBottom: '0', fontFamily: 'var(--font-code)', fontSize: '13px' }}
+                  />
+                </div>
+              )}
             </div>
           )}
 

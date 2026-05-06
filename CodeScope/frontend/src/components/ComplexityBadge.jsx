@@ -17,6 +17,7 @@ export default function ComplexityBadge({ complexity }) {
       'O(log n)': 'Great',
       'O(n)': 'Good',
       'O(n log n)': 'Fair',
+      'O((log n)!)': 'Critical',
       'O(n²)': 'Poor',
       'O(n³)': 'Critical'
     };
