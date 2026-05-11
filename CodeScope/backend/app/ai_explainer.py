@@ -79,6 +79,7 @@ def _build_ai_prompt(analysis_result, code, language):
     input_schema = analysis_result.get('input_schema') or {}
     provided_inputs = analysis_result.get('provided_inputs')
     concrete = analysis_result.get('concrete_analysis')
+    input_effect = analysis_result.get('input_effect_analysis')
     optimizations = analysis_result.get('optimizations') or []
     issues = analysis_result.get('issues') or []
 
@@ -98,6 +99,7 @@ ANALYSIS RESULTS:
 - Detected Input Schema: {json.dumps(input_schema, ensure_ascii=False)}
 - User Provided Inputs: {json.dumps(provided_inputs, ensure_ascii=False) if provided_inputs else 'None'}
 - Concrete Analysis: {json.dumps(concrete, ensure_ascii=False) if concrete else 'None'}
+- Input Effect Estimate: {json.dumps(input_effect, ensure_ascii=False) if input_effect else 'None'}
 - Top Optimization Data: {json.dumps(optimizations[:2], ensure_ascii=False)}
 
 Please provide:
@@ -108,10 +110,14 @@ Please provide:
 
 Rules:
 - Treat the analyzer's detected reason as primary evidence.
+- Treat Top Optimization Data as the only safe source for modified-code advice; do not invent replacement code.
 - If the reason is a special sum such as sum_i log(n/i), explain that tighter bound instead of saying nested loops always multiply.
 - If the user-provided values are fixed inputs, say fixed inputs are concrete examples; symbolic Big-O still describes variable input growth.
+- If Concrete Analysis is None, use Input Effect Estimate only as a rough workload estimate, not exact execution.
 - If recursion, explain the recursive call tree and do not describe it as a loop problem.
 - If sorting, graph traversal, DP, regex, or backtracking is the cause, name that pattern.
+- Do not recommend a hash map unless Top Optimization Data explicitly says Hash Map or the code is clearly a lookup, duplicate, complement, or pair-search problem.
+- If the best optimization says complexity_after is problem-dependent, say there is no universal safe rewrite and the strategy depends on the operation.
 - Do not invent runtime measurements or execute the code.
 - Keep each JSON value to 1-3 short beginner-friendly sentences.
 - Return valid JSON only.
@@ -268,6 +274,33 @@ def _build_clear_fallback_explanation(analysis_result, code, language):
             )
         }
 
+    fractional_poly = re.fullmatch(r'O\(n\^([0-9]+(?:\.[0-9]+)?)\)', norm_tc)
+    if fractional_poly:
+        exponent = float(fractional_poly.group(1))
+        return {
+            'why_this_complexity': (
+                f"This is {tc} because the recursive branches shrink by different factors. "
+                "For uneven divide-and-conquer, CodeScope solves the Akra-Bazzi equation instead of assuming every branch is n/2."
+            ),
+            'real_world_analogy': (
+                "It is like splitting work into two smaller piles where one pile is half-sized and the other is third-sized. "
+                "The total tree grows, but not as fast as a full linear number of nodes."
+            ),
+            'performance_impact': (
+                (
+                    f"The exponent {exponent:.3f} is below 1, so this grows sublinearly in the symbolic model. "
+                    "It is much better than O(n), while still slower than logarithmic recursion."
+                ) if exponent < 1 else (
+                    f"The exponent {exponent:.3f} is between common polynomial classes. "
+                    "It grows faster than linear time but remains better than quadratic time."
+                )
+            ),
+            'top_optimization': _first_optimization(
+                analysis_result,
+                "No generic rewrite is needed; this is already a tight divide-and-conquer bound for the detected recurrence."
+            )
+        }
+
     if norm_tc in ('O(n^2 log n)', 'O(n^3 log n)'):
         if 'recursive' in reason_lower or 'call-chain' in reason_lower:
             return {
@@ -381,6 +414,25 @@ def _build_clear_fallback_explanation(analysis_result, code, language):
                 "It grows faster than O(n), but it is still very manageable."
             ),
             'top_optimization': _first_optimization(analysis_result, optimization)
+        }
+
+    if norm_tc in ('O(log^2 n)', 'O(log^3 n)'):
+        return {
+            'why_this_complexity': (
+                f"This is {tc} because several logarithmic loops multiply together. "
+                "Each loop repeatedly doubles or halves a value, so each level contributes a log n factor."
+            ),
+            'real_world_analogy': (
+                "It is like repeatedly folding a paper stack, then doing another folding-style process inside each fold level."
+            ),
+            'performance_impact': (
+                "This is still very scalable: even huge n values have small logarithms. "
+                "It grows faster than one binary-search-style loop, but far slower than linear time."
+            ),
+            'top_optimization': _first_optimization(
+                analysis_result,
+                "No major asymptotic optimization is needed unless the repeated logarithmic passes can be merged."
+            )
         }
 
     if norm_tc == 'O(log n)':

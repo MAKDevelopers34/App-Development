@@ -76,6 +76,7 @@ export default function Results() {
     const lines_of_code = r?.lines_of_code || 0;
     const issues = Array.isArray(r?.issues) ? r.issues : [];
     const concrete = r?.concrete_analysis;
+    const inputEffect = r?.input_effect_analysis;
     //const suggestions = Array.isArray(r?.suggestions) ? r.suggestions : [];
     const safeFilename = filename || getSafeFilename(data);
 
@@ -189,6 +190,50 @@ export default function Results() {
               ) : (
                 <p style={{ fontSize: '13px', color: 'var(--dark)', lineHeight: '1.6', margin: 0 }}>
                   {concrete.reason || 'Exact concrete analysis is unavailable for these inputs.'}
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Broad Input Impact Estimate */}
+          {inputEffect && (
+            <div className="card" style={{ border: '1px solid var(--border)', background: '#fbfcff' }}>
+              <h3 style={{ fontSize: '16px', fontWeight: '600', marginBottom: '14px' }}>
+                Input Impact Estimate
+              </h3>
+              {inputEffect.available ? (
+                <>
+                  <div style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+                    gap: '12px',
+                    marginBottom: '12px'
+                  }}>
+                    {[
+                      ['Detected Sizes', Object.entries(inputEffect.input_sizes?.dimensions || {}).map(([k, v]) => `${k}=${v}`).join(', ') || 'N/A'],
+                      ['Graph Size', inputEffect.input_sizes?.graph && Object.keys(inputEffect.input_sizes.graph).length ? `V=${inputEffect.input_sizes.graph.V}, E=${inputEffect.input_sizes.graph.E}` : 'N/A'],
+                      ['Dominant Size', inputEffect.dominant_size],
+                      ['Estimated Time', inputEffect.estimated_time_units],
+                      ['Time Formula', inputEffect.time_formula],
+                      ['Estimated Space', inputEffect.estimated_space_units],
+                    ].map(([label, value]) => (
+                      <div key={label} style={{ background: 'white', border: '1px solid var(--border)', borderRadius: '8px', padding: '10px' }}>
+                        <div style={{ fontSize: '11px', color: 'var(--gray)', fontWeight: '700', textTransform: 'uppercase', marginBottom: '4px' }}>
+                          {label}
+                        </div>
+                        <div style={{ fontSize: '13px', color: 'var(--dark)', fontWeight: '600', fontFamily: 'var(--font-code)', overflowWrap: 'anywhere' }}>
+                          {String(value)}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <p style={{ fontSize: '13px', color: 'var(--gray)', lineHeight: '1.6', margin: 0 }}>
+                    {inputEffect.reason}
+                  </p>
+                </>
+              ) : (
+                <p style={{ fontSize: '13px', color: 'var(--dark)', lineHeight: '1.6', margin: 0 }}>
+                  {inputEffect.reason || 'Input impact estimate is unavailable for these values.'}
                 </p>
               )}
             </div>

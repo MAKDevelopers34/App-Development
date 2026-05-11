@@ -1,7 +1,12 @@
 import ast
 import re
+import math
 from collections import defaultdict, deque
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CALL GRAPH ANALYZER
+# ─────────────────────────────────────────────────────────────────────────────
 
 class CallGraphAnalyzer:
     """
@@ -14,27 +19,24 @@ class CallGraphAnalyzer:
         self.func_complexities = {}
 
     def build_call_graph(self, code, language):
-        """
-        Builds a map of function → set of functions it calls.
-        Example: {'main': {'helper', 'sort'}, 'helper': {'search'}}
-        """
         self.call_graph = defaultdict(set)
         lines = code.split('\n')
         current_func = None
 
         for line in lines:
             stripped = line.strip()
-
-            # Detect function definition
             func_def = re.match(
-                r'(?:def\s+|function\s*\*?\s+|(?:(?:public|private|protected)\s+)?(?:static\s+)?(?:void|int|long|double|float|boolean|bool|char|String|List[\w<>\[\], ?]*|ArrayList[\w<>\[\], ?]*|Map[\w<>\[\], ?]*|HashMap[\w<>\[\], ?]*|vector[\w<>\[\], ?&*]*|[A-Z]\w*(?:<[^)]*>)?)\s+)(\w+)\s*\(',
+                r'(?:def\s+|function\s*\*?\s+|(?:(?:public|private|protected)\s+)?(?:static\s+)?'
+                r'(?:void|int|long|double|float|boolean|bool|char|String|'
+                r'List[\w<>\[\], ?]*|ArrayList[\w<>\[\], ?]*|'
+                r'Map[\w<>\[\], ?]*|HashMap[\w<>\[\], ?]*|'
+                r'vector[\w<>\[\], ?&*]*|[A-Z]\w*(?:<[^)]*>)?)\s+)(\w+)\s*\(',
                 stripped
             )
             if func_def:
                 current_func = func_def.group(1)
-                self.call_graph[current_func]  # ensure it exists
+                self.call_graph[current_func]
 
-            # Detect function calls inside current function
             if current_func:
                 calls = re.findall(r'\b(\w+)\s*\(', stripped)
                 for call in calls:
@@ -50,59 +52,47 @@ class CallGraphAnalyzer:
         return self.call_graph
 
     def compute_chained_complexity(self, func_name, complexities, visited=None):
-        """
-        For a given function, finds the worst complexity
-        in its entire call chain.
-        """
         if visited is None:
             visited = set()
-
         if func_name in visited:
             return complexities.get(func_name, 'O(1)')
-
         visited.add(func_name)
-
         own = complexities.get(func_name, 'O(1)')
         worst = own
-
         for called_func in self.call_graph.get(func_name, set()):
             if called_func in complexities:
-                child = self.compute_chained_complexity(
-                    called_func, complexities, visited)
+                child = self.compute_chained_complexity(called_func, complexities, visited)
                 worst = self._worse_of(worst, child)
-
         return worst
 
     def _worse_of(self, a, b):
         rank = {
-            'O(1)': 0, 'O(log log n)': 0.5, 'O(log n)': 1, 'O(log² n)': 2,
-            'O(n)': 3, 'O(n log n)': 4, 'O(n log² n)': 5,
-            'O(n²)': 6, 'O(n² log n)': 7, 'O(n³)': 8,
-            'O((log n)!)': 8.5,
-            'O(2ⁿ)': 9, 'O(3ⁿ)': 10,
+            'O(1)': 0, 'O(α(n))': 0.05, 'O(log log n)': 0.5, 'O(log n)': 1,
+            'O(log² n)': 2, 'O(log³ n)': 2.2, 'O(√n)': 2.5,
+            'O(n)': 3, 'O(n log log n)': 3.5, 'O(n log n)': 4, 'O(n log² n)': 5,
+            'O(n^1.585)': 5.5,
+            'O(n²)': 6, 'O(n² log n)': 7, 'O(n^2.807)': 7.5, 'O(n³)': 8,
+            'O(n³ log n)': 8.2,
+            'O((log n)!)': 8.5, 'O(n^log n)': 8.7,
+            'O(φⁿ)': 8.9,
+            'O(2ⁿ)': 9, 'O(2^n)': 9, 'O(n * 2^n)': 9.2, 'O(3ⁿ)': 10, 'O(3^n)': 10,
+            'O(n!)': 11, 'O(n * n!)': 11.5,
+            'O(A(m, n))': 12,
             'O((V + E) log V)': 4, 'O(V + E)': 3,
-            'O(V × E)': 6, 'O(V³)': 8,
+            'O(V × E)': 6, 'O(V E²)': 7, 'O(V³)': 8,
         }
         return a if rank.get(a, 3) >= rank.get(b, 3) else b
 
     def get_call_chain_report(self, code, func_complexities, language):
-        """
-        Returns a report of which functions affect overall complexity
-        and through which call chain.
-        """
         self.build_call_graph(code, language)
         report = []
-
         for func, calls in self.call_graph.items():
             if not calls:
                 continue
             own = func_complexities.get(func, 'O(1)')
-            chained = self.compute_chained_complexity(
-                func, func_complexities)
-
+            chained = self.compute_chained_complexity(func, func_complexities)
             if chained != own:
-                chain_path = self._find_chain_path(
-                    func, func_complexities, chained)
+                chain_path = self._find_chain_path(func, func_complexities, chained)
                 report.append({
                     'function': func,
                     'own_complexity': own,
@@ -114,7 +104,6 @@ class CallGraphAnalyzer:
                         f"effective complexity is {chained}"
                     )
                 })
-
         return report
 
     def _find_chain_path(self, func, complexities, target_complexity):
@@ -133,10 +122,112 @@ class CallGraphAnalyzer:
         return func
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# MASTER THEOREM ENGINE
+# ─────────────────────────────────────────────────────────────────────────────
+
+class MasterTheoremEngine:
+    """
+    Proper 3-case Master Theorem + extended case for log-multiplied f(n).
+    T(n) = a*T(n/b) + f(n)
+    """
+
+    def solve(self, a, b, f_type, f_power=1):
+        """
+        a       = number of subproblems
+        b       = factor by which problem shrinks
+        f_type  = 'const'|'log'|'sqrt'|'n'|'n_log'|'n2_log'|'n3_log'
+        f_power = exponent on n for polynomial f(n)
+        Returns (complexity_string, theorem_case, reason)
+        """
+        if a <= 0 or b <= 1:
+            return 'O(f(n))', 0, 'degenerate recurrence'
+
+        log_b_a = math.log(a, b)
+        f_degree = self._f_degree(f_type, f_power)
+        eps = 0.001
+
+        # Case 1: f(n) = O(n^(log_b_a - ε))  →  T(n) = Θ(n^log_b_a)
+        if f_degree < log_b_a - eps:
+            return self._fmt_poly(log_b_a), 1, (
+                f'Master Theorem Case 1: log_{b}({a})≈{log_b_a:.4f}, '
+                f'f(n)=O(n^{f_degree:.3f}) is polynomially smaller → T(n)=Θ(n^{log_b_a:.4f})'
+            )
+
+        # Case 2 extended: f(n) = Θ(n^log_b_a * log^k n)
+        if abs(f_degree - log_b_a) <= eps:
+            if f_type in ('n_log', 'n2_log', 'n3_log', 'log'):
+                return self._fmt_poly_log2(log_b_a), 2, (
+                    f'Master Theorem Case 2 (extended): f(n)=Θ(n^{log_b_a:.3f} log n) → T(n)=Θ(n^{log_b_a:.3f} log² n)'
+                )
+            return self._fmt_poly_log(log_b_a), 2, (
+                f'Master Theorem Case 2: log_{b}({a})≈{log_b_a:.4f}, '
+                f'f(n)=Θ(n^{log_b_a:.4f}) → T(n)=Θ(n^{log_b_a:.4f} log n)'
+            )
+
+        # Case 3: f(n) = Ω(n^(log_b_a + ε))  →  T(n) = Θ(f(n))
+        if f_degree > log_b_a + eps:
+            return self._fmt_f(f_type, f_power), 3, (
+                f'Master Theorem Case 3: log_{b}({a})≈{log_b_a:.4f}, '
+                f'f(n)=Ω(n^{f_degree:.3f}) is polynomially larger → T(n)=Θ(f(n))'
+            )
+
+        return self._fmt_f(f_type, f_power), 0, 'borderline — no clean Master Theorem classification'
+
+    def _f_degree(self, f_type, f_power):
+        mapping = {
+            'const': 0, 'log': 0.001,
+            'sqrt': 0.5,
+            'n': float(f_power),
+            'n_log': float(f_power) + 0.0001,
+            'n2_log': 2.0001, 'n3_log': 3.0001,
+        }
+        return mapping.get(f_type, float(f_power))
+
+    def _fmt_poly(self, exp):
+        exp_r = round(exp, 4)
+        if abs(exp_r - round(exp_r)) < 0.001:
+            ei = round(exp_r)
+            if ei == 0: return 'O(1)'
+            if ei == 1: return 'O(n)'
+            if ei == 2: return 'O(n²)'
+            if ei == 3: return 'O(n³)'
+            return f'O(n^{ei})'
+        s = f'{exp_r:.3f}'.rstrip('0').rstrip('.')
+        return f'O(n^{s})'
+
+    def _fmt_poly_log(self, exp):
+        base = self._fmt_poly(exp)
+        if base == 'O(1)': return 'O(log n)'
+        if base == 'O(n)': return 'O(n log n)'
+        if base == 'O(n²)': return 'O(n² log n)'
+        if base == 'O(n³)': return 'O(n³ log n)'
+        return base.rstrip(')') + ' log n)'
+
+    def _fmt_poly_log2(self, exp):
+        base = self._fmt_poly(exp)
+        if base == 'O(1)': return 'O(log² n)'
+        if base == 'O(n)': return 'O(n log² n)'
+        return base.rstrip(')') + ' log² n)'
+
+    def _fmt_f(self, f_type, f_power):
+        mapping = {
+            'const': 'O(1)', 'log': 'O(log n)', 'sqrt': 'O(√n)',
+            'n': {1: 'O(n)', 2: 'O(n²)', 3: 'O(n³)'}.get(f_power, f'O(n^{f_power})'),
+            'n_log': 'O(n log n)', 'n2_log': 'O(n² log n)', 'n3_log': 'O(n³ log n)',
+        }
+        return mapping.get(f_type, f'O(n^{f_power})')
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MAIN CODE ANALYZER
+# ─────────────────────────────────────────────────────────────────────────────
+
 class CodeAnalyzer:
     def __init__(self):
         self.supported_languages = ['python', 'javascript', 'java', 'cpp', 'c']
         self.call_graph_analyzer = CallGraphAnalyzer()
+        self.master_theorem = MasterTheoremEngine()
         self.last_func_complexities = {}
 
     def _function_def_regex(self):
@@ -154,14 +245,9 @@ class CodeAnalyzer:
         if filename:
             ext = filename.split('.')[-1].lower()
             lang_map = {
-                'py': 'python',
-                'js': 'javascript',
-                'java': 'java',
-                'cpp': 'cpp',
-                'c': 'c',
-                'ts': 'javascript',
-                'jsx': 'javascript',
-                'tsx': 'javascript'
+                'py': 'python', 'js': 'javascript', 'java': 'java',
+                'cpp': 'cpp', 'c': 'c', 'ts': 'javascript',
+                'jsx': 'javascript', 'tsx': 'javascript'
             }
             return lang_map.get(ext, 'unknown')
         return 'unknown'
@@ -173,12 +259,8 @@ class CodeAnalyzer:
         time_result = self.detect_time_complexity(code, language)
         if self.last_func_complexities:
             function_worst = self._max_complexity(self.last_func_complexities.values())
-            current_rank = self._complexity_rank(
-                self._parse_complexity_string(time_result['complexity'])
-            )
-            function_rank = self._complexity_rank(
-                self._parse_complexity_string(function_worst)
-            )
+            current_rank = self._complexity_rank(self._parse_complexity_string(time_result['complexity']))
+            function_rank = self._complexity_rank(self._parse_complexity_string(function_worst))
             if function_rank > current_rank:
                 time_result = {
                     **time_result,
@@ -190,6 +272,11 @@ class CodeAnalyzer:
         optimizations = self.generate_optimizations(code, language, time_result)
         transformed = self.generate_transformed_code(code, language, time_result)
         concrete = self.detect_concrete_analysis(code, language, concrete_inputs)
+        input_effect = self.estimate_input_effect(
+            code, language, concrete_inputs, input_schema,
+            time_result['complexity'], space
+        )
+        amortized = self.explain_amortized_complexity(code, language)
 
         result = {
             'language': language,
@@ -206,24 +293,29 @@ class CodeAnalyzer:
         }
         if concrete_inputs:
             result['provided_inputs'] = concrete_inputs
+        if input_effect:
+            result['input_effect_analysis'] = input_effect
         if concrete:
             result['concrete_analysis'] = concrete
+        if amortized:
+            result['amortized_analysis'] = amortized
         result['suggestions'] = self.generate_suggestions(result)
         result['rating'] = self.calculate_rating(result)
         return result
+
+    # ─────────────────────────────────────────────
+    # INPUT SCHEMA INFERENCE
+    # ─────────────────────────────────────────────
 
     def infer_input_schema(self, code, language=None):
         language = language or self.detect_language(code)
         signature = self._primary_function_signature(code, language)
         if not signature:
             return {
-                'available': False,
-                'language': language,
-                'function': None,
-                'parameters': [],
+                'available': False, 'language': language,
+                'function': None, 'parameters': [],
                 'reason': 'No function parameters detected'
             }
-
         parameters = []
         for param in signature['params']:
             name = param.get('name', '')
@@ -237,7 +329,6 @@ class CodeAnalyzer:
                 'placeholder': inferred['placeholder'],
                 'example': inferred['example'],
             })
-
         return {
             'available': bool(parameters),
             'language': language,
@@ -259,7 +350,6 @@ class CodeAnalyzer:
                         }
             except SyntaxError:
                 pass
-
             match = re.search(r'def\s+(\w+)\s*\(([^)]*)\)', code)
             if match:
                 return {
@@ -277,18 +367,16 @@ class CodeAnalyzer:
             for pattern in patterns:
                 match = re.search(pattern, code)
                 if match:
-                    raw_params = match.group(2)
                     return {
                         'name': match.group(1),
-                        'params': self._parse_signature_params(raw_params, language)
+                        'params': self._parse_signature_params(match.group(2), language)
                     }
             return None
 
         match = re.search(
             r'(?:public|private|protected)?\s*(?:static\s+)?'
             r'(?:[\w:<>\[\], ?&*]+\s+)'
-            r'(\w+)\s*\(([^)]*)\)',
-            code
+            r'(\w+)\s*\(([^)]*)\)', code
         )
         if match:
             name = match.group(1)
@@ -318,14 +406,12 @@ class CodeAnalyzer:
             cleaned = re.sub(r'=.*$', '', original).strip()
             if not cleaned:
                 continue
-
             if language == 'python':
                 name_part = cleaned.split(':', 1)[0].strip()
                 declared = cleaned.split(':', 1)[1].strip() if ':' in cleaned else ''
                 name = re.sub(r'^[*]+', '', name_part).strip()
                 params.append({'name': name, 'declared_type': declared})
                 continue
-
             tokens = cleaned.replace('&', ' ').replace('*', ' ').split()
             if not tokens:
                 continue
@@ -362,7 +448,6 @@ class CodeAnalyzer:
         declared = (param.get('declared_type') or '').lower()
         lname = name.lower()
         combined = f'{declared} {lname}'
-
         if any(token in combined for token in ['bool', 'boolean', 'flag', 'is_', 'has_', 'can_']):
             return {'kind': 'boolean', 'placeholder': 'true', 'example': 'true'}
         if any(token in combined for token in ['list', 'array', 'vector', '[]', 'tuple', 'set']) or lname in {
@@ -382,11 +467,291 @@ class CodeAnalyzer:
             return {'kind': 'integer', 'placeholder': '10', 'example': '10'}
         return {'kind': 'string', 'placeholder': 'value', 'example': '"value"'}
 
+    # ─────────────────────────────────────────────
+    # INPUT EFFECT ESTIMATION
+    # ─────────────────────────────────────────────
+
+    def estimate_input_effect(self, code, language, concrete_inputs, input_schema, time_complexity, space_complexity):
+        if concrete_inputs in (None, '', {}, []):
+            return None
+        sizes = self._extract_input_sizes(concrete_inputs, input_schema)
+        if not sizes.get('dimensions') and not sizes.get('graph'):
+            return {
+                'available': False,
+                'kind': 'input_effect_estimate',
+                'reason': 'No usable size (n, array length, string length, V, or E) could be inferred.'
+            }
+        time_estimate = self._estimate_complexity_units(time_complexity, sizes)
+        space_estimate = self._estimate_complexity_units(space_complexity, sizes)
+        dominant_n = self._dominant_input_size(sizes)
+        return {
+            'available': bool(time_estimate.get('available')),
+            'kind': 'input_effect_estimate',
+            'input_sizes': sizes,
+            'dominant_size': dominant_n,
+            'time_complexity': time_complexity,
+            'space_complexity': space_complexity,
+            'estimated_time_units': time_estimate.get('display'),
+            'estimated_space_units': space_estimate.get('display'),
+            'time_formula': time_estimate.get('formula'),
+            'space_formula': space_estimate.get('formula'),
+            'fixed_input_time_complexity': 'O(1)',
+            'fixed_input_space_complexity': 'O(1)',
+            'reason': (
+                'Inputs used to estimate workload from detected Big-O. '
+                'For fixed values the run is finite/O(1).'
+            )
+        }
+
+    def _extract_input_sizes(self, concrete_inputs, input_schema=None):
+        dimensions = {}
+        value_inputs = {}
+        graph = {}
+
+        def add_dimension(name, value):
+            parsed = self._positive_number(value)
+            if parsed is not None:
+                dimensions[name] = parsed
+
+        def visit(name, value):
+            lname = str(name or 'input').lower()
+            if isinstance(value, dict):
+                graph_info = self._graph_size_from_value(value)
+                if graph_info and (lname in {'graph', 'adj', 'adjacency'} or self._looks_like_graph_value(value)):
+                    graph.update(graph_info)
+                    dimensions[name or 'graph'] = graph_info['V']
+                    return
+                dimensions[name or 'object'] = max(1, len(value))
+                for child_name, child_value in value.items():
+                    if isinstance(child_value, (list, tuple, set, dict, str)):
+                        visit(child_name, child_value)
+                return
+            if isinstance(value, (list, tuple, set)):
+                dimensions[name or 'array'] = len(value)
+                return
+            if isinstance(value, str):
+                stripped = value.strip()
+                number = self._positive_number(stripped)
+                if number is not None:
+                    if self._is_size_name(lname):
+                        add_dimension(name, number)
+                    else:
+                        value_inputs[name] = number
+                else:
+                    dimensions[name or 'string'] = len(value)
+                return
+            if self._is_size_name(lname):
+                add_dimension(name, value)
+            else:
+                parsed = self._positive_number(value)
+                if parsed is not None:
+                    value_inputs[name] = parsed
+
+        if isinstance(concrete_inputs, dict):
+            schema_func = (input_schema or {}).get('function')
+            data = concrete_inputs.get(schema_func) if schema_func and isinstance(concrete_inputs.get(schema_func), dict) else concrete_inputs
+            for key, value in data.items():
+                visit(key, value)
+        elif isinstance(concrete_inputs, (list, tuple)):
+            for index, value in enumerate(concrete_inputs):
+                visit(f'arg{index + 1}', value)
+        elif isinstance(concrete_inputs, str):
+            named = re.findall(r'\b([A-Za-z_]\w*)\s*[:=]\s*([^,]+)', concrete_inputs)
+            if named:
+                for key, raw in named:
+                    visit(key, raw.strip())
+            else:
+                numbers = re.findall(r'-?\d+(?:\.\d+)?', concrete_inputs)
+                for index, value in enumerate(numbers):
+                    visit('n' if index == 0 else f'arg{index + 1}', value)
+
+        if not dimensions and value_inputs:
+            best_name, best_value = max(value_inputs.items(), key=lambda item: item[1])
+            dimensions[best_name] = best_value
+
+        return {'dimensions': dimensions, 'value_inputs': value_inputs, 'graph': graph}
+
+    def _is_size_name(self, name):
+        return str(name or '').lower() in {
+            'n', 'm', 'k', 'v', 'e', 'q', 'rows', 'cols', 'row', 'col',
+            'size', 'length', 'len', 'limit', 'capacity', 'vertices', 'edges',
+            'height', 'width', 'depth'
+        }
+
+    def _positive_number(self, value):
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return None
+        if parsed < 0:
+            return None
+        if parsed.is_integer():
+            return int(parsed)
+        return parsed
+
+    def _looks_like_graph_value(self, value):
+        if not isinstance(value, dict) or not value:
+            return False
+        return all(isinstance(v, (list, tuple, set)) for v in value.values())
+
+    def _graph_size_from_value(self, value):
+        if isinstance(value, dict) and self._looks_like_graph_value(value):
+            return {'V': len(value), 'E': sum(len(neighbors) for neighbors in value.values())}
+        if isinstance(value, list) and all(isinstance(v, (list, tuple, set)) for v in value):
+            return {'V': len(value), 'E': sum(len(neighbors) for neighbors in value)}
+        return None
+
+    def _dominant_input_size(self, sizes):
+        graph = sizes.get('graph') or {}
+        if graph:
+            return max(1, graph.get('V', 1), graph.get('E', 1))
+        dims = sizes.get('dimensions') or {}
+        if not dims:
+            return 1
+        return max(max(dims.values()), 1)
+
+    def _named_or_ranked_size(self, sizes, names, rank):
+        dims = sizes.get('dimensions') or {}
+        for name in names:
+            if name in dims:
+                return max(1, dims[name])
+        ordered = sorted(dims.values(), reverse=True)
+        if len(ordered) > rank:
+            return max(1, ordered[rank])
+        return self._dominant_input_size(sizes)
+
+    def _estimate_complexity_units(self, complexity, sizes):
+        text = self._normalized_complexity_text(complexity)
+        graph = sizes.get('graph') or {}
+        n = max(1, self._dominant_input_size(sizes))
+        m = max(1, self._named_or_ranked_size(sizes, {'m', 'cols', 'width'}, 1))
+        log_n = max(1, math.log2(max(2, n)))
+        log_log_n = max(1, math.log2(max(2, log_n)))
+
+        if graph:
+            v = max(1, graph.get('V', n))
+            e = max(0, graph.get('E', 0))
+            log_v = max(1, math.log2(max(2, v)))
+            if text == 'O(V + E)':
+                return self._estimate_payload(v + e, f'V + E = {v} + {e}')
+            if text == 'O((V + E) log V)':
+                return self._estimate_payload((v + e) * log_v, f'(V+E)logV = ({v}+{e})*log2({v})')
+            if text == 'O(V x E)':
+                return self._estimate_payload(v * e, f'V*E = {v}*{e}')
+            if text == 'O(V^3)':
+                return self._estimate_payload(v ** 3, f'V^3 = {v}^3')
+            if text == 'O(V E^2)':
+                return self._estimate_payload(v * (e ** 2), f'V*E^2 = {v}*{e}^2')
+
+        if 'n^2.807' in text or '2.807' in text:
+            return self._estimate_payload(n ** 2.807, f'n^2.807 ≈ {n}^2.807')
+        fractional = re.fullmatch(r'O\(n\^([0-9]+(?:\.[0-9]+)?)\)', text)
+        if fractional:
+            exponent = float(fractional.group(1))
+            return self._estimate_payload(n ** exponent, f'{n}^{exponent:g}')
+
+        formulas = [
+            ('O(1)', 1, '1'),
+            ('O(alpha(n))', 1, 'α(n) ≈ 1 (inverse Ackermann)'),
+            ('O(log log n)', log_log_n, f'log2(log2({n}))'),
+            ('O(log n)', log_n, f'log2({n})'),
+            ('O(log^2 n)', log_n ** 2, f'log2({n})^2'),
+            ('O(log^3 n)', log_n ** 3, f'log2({n})^3'),
+            ('O(log^4 n)', log_n ** 4, f'log2({n})^4'),
+            ('O(sqrt(n))', math.sqrt(n), f'sqrt({n})'),
+            ('O(n)', n, f'n = {n}'),
+            ('O(n log log n)', n * log_log_n, f'{n}*log2(log2({n}))'),
+            ('O(n log n)', n * log_n, f'{n}*log2({n})'),
+            ('O(n log^2 n)', n * (log_n ** 2), f'{n}*log2({n})^2'),
+            ('O(n^2)', n ** 2, f'{n}^2'),
+            ('O(n x m)', n * m, f'{n}*{m}'),
+            ('O(n^2 log n)', (n ** 2) * log_n, f'{n}^2*log2({n})'),
+            ('O(n^3)', n ** 3, f'{n}^3'),
+            ('O(n^3 log n)', (n ** 3) * log_n, f'{n}^3*log2({n})'),
+        ]
+        for expected, value, formula in formulas:
+            if text == expected:
+                return self._estimate_payload(value, formula)
+
+        if text == 'O(2^n)':
+            return self._estimate_payload(self._safe_power(2, n), f'2^{n}')
+        if text == 'O(n * 2^n)':
+            return self._estimate_payload(self._safe_scaled_power(n, 2, n), f'{n}*2^{n}')
+        if text == 'O(3^n)':
+            return self._estimate_payload(self._safe_power(3, n), f'3^{n}')
+        if text == 'O(n!)':
+            return self._estimate_payload(self._safe_factorial(n), f'{n}!')
+        if text == 'O(n * n!)':
+            return self._estimate_payload(self._safe_scaled_factorial(n), f'{n}*{n}!')
+        if text == 'O(A(m, n))':
+            return {'available': False, 'display': 'Ackermann grows too fast for a broad estimate', 'formula': 'A(m, n)'}
+        if 'phi' in text or 'φ' in text:
+            phi = (1 + math.sqrt(5)) / 2
+            return self._estimate_payload(self._safe_power_float(phi, n), f'φ^{n} ≈ 1.618^{n}')
+
+        return {'available': False, 'display': 'No broad estimator for this complexity yet', 'formula': text}
+
+    def _normalized_complexity_text(self, complexity):
+        return (
+            str(complexity or '')
+            .replace('²', '^2').replace('³', '^3')
+            .replace('ⁿ', '^n').replace('×', 'x')
+            .replace('√n', 'sqrt(n)').replace('log²', 'log^2')
+            .replace('log³', 'log^3')
+            .replace('α(n)', 'alpha(n)')
+        )
+
+    def _safe_power(self, base, exponent, cap=60):
+        exponent = int(exponent)
+        if exponent > cap:
+            return f'>{base}^{cap}'
+        return base ** exponent
+
+    def _safe_power_float(self, base, exponent, cap=60):
+        exponent = int(exponent)
+        if exponent > cap:
+            return f'>{base:.3f}^{cap}'
+        return base ** exponent
+
+    def _safe_scaled_power(self, multiplier, base, exponent, cap=60):
+        exponent = int(exponent)
+        if exponent > cap:
+            return f'>{self._format_estimate_number(multiplier)}*{base}^{cap}'
+        return multiplier * (base ** exponent)
+
+    def _safe_factorial(self, n, cap=25):
+        n = int(n)
+        if n > cap:
+            return f'>{cap}!'
+        return math.factorial(n)
+
+    def _safe_scaled_factorial(self, n, cap=25):
+        n = int(n)
+        if n > cap:
+            return f'>{self._format_estimate_number(n)}*{cap}!'
+        return n * math.factorial(n)
+
+    def _estimate_payload(self, value, formula):
+        if isinstance(value, str):
+            return {'available': True, 'display': value, 'formula': formula}
+        return {'available': True, 'display': self._format_estimate_number(value), 'formula': formula}
+
+    def _format_estimate_number(self, value):
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            return str(value)
+        if numeric < 1000:
+            return str(int(numeric)) if float(numeric).is_integer() else f'{numeric:.2f}'
+        if numeric < 1_000_000:
+            return f'{numeric:,.0f}'
+        return f'{numeric:.2e}'
+
+    # ─────────────────────────────────────────────
+    # PER-FUNCTION COMPLEXITY EXTRACTION
+    # ─────────────────────────────────────────────
 
     def _extract_all_function_complexities(self, code, language):
-        """
-        Extracts complexity for every individual function in the code.
-        """
         complexities = {}
         func_pattern = self._function_def_regex()
         func_names = re.findall(func_pattern, code)
@@ -394,8 +759,7 @@ class CodeAnalyzer:
         for name in func_names:
             body = self._extract_function_body(code, name, language)
             if body:
-                recursion_result = self._detect_body_recursion_complexity(
-                    name, body)
+                recursion_result = self._detect_body_recursion_complexity(name, body)
                 if recursion_result:
                     complexities[name] = recursion_result['complexity']
                 else:
@@ -408,12 +772,10 @@ class CodeAnalyzer:
                 body = self._extract_function_body(code, name, language)
                 if not body:
                     continue
-                call_complexities = self._called_function_complexities(
-                    body, complexities, current_func=name)
+                call_complexities = self._called_function_complexities(body, complexities, current_func=name)
                 if not call_complexities:
                     continue
-                combined = self._max_complexity(
-                    [complexities.get(name, 'O(1)')] + call_complexities)
+                combined = self._max_complexity([complexities.get(name, 'O(1)')] + call_complexities)
                 if combined != complexities.get(name):
                     complexities[name] = combined
                     changed = True
@@ -422,124 +784,332 @@ class CodeAnalyzer:
 
         return complexities
 
+    # ─────────────────────────────────────────────
+    # RECURSION COMPLEXITY DETECTION
+    # ─────────────────────────────────────────────
+
     def _detect_body_recursion_complexity(self, func_name, body):
-        call_count = len(re.findall(rf'\b{func_name}\s*\(', body))
+        direct_calls = len(re.findall(rf'\b{func_name}\s*\(', body))
+        yield_calls = len(re.findall(rf'yield\s*\*\s*{func_name}\s*\(', body))
+        call_count = direct_calls + yield_calls
         if call_count == 0:
             return None
 
         is_generator = bool(re.search(r'yield\s*\*', body))
         has_memo = bool(re.search(
-            r'memo|cache|@lru_cache|@cache|memoize|dp\s*=\s*\{|dp\s*=\s*\[',
-            body,
-            re.IGNORECASE
+            r'memo|cache|@lru_cache|@cache|memoize|functools\.cache|'
+            r'dp\s*=\s*\{|dp\s*=\s*\[',
+            body, re.IGNORECASE
         ))
         has_halving = bool(re.search(
-            r'\/\s*2|>>\s*1|mid\s*=|Math\.floor\s*\(\s*\w+\s*\/\s*2',
-            body
+            r'\/\s*2|>>\s*1|mid\s*=|Math\.floor\s*\(\s*\w+\s*\/\s*2', body
         ))
+        has_thirding = bool(re.search(r'\/\s*3\b|\/\s*3\.0\b', body))
         has_ackermann = self._has_ackermann_recursion(func_name, body)
         has_decrement = self._has_recursive_decrement_call(func_name, body)
+        has_halving_call = bool(re.search(
+            rf'\b{func_name}\s*\([^)]*(?:\/\s*2|Math\.floor|>>\s*1)', body
+        ))
         has_balanced_partition = self._has_balanced_partition_recursion(func_name, body)
         has_shrinking_substring = self._has_recursive_shrinking_substring_calls(func_name, body)
-        loop_complexity = self.compute_loop_complexity(
-            self.extract_loop_tree(body, 'unknown'))
-        recursive_multiplier = self._recursive_call_multiplier(func_name, body)
+        loop_complexity = self.compute_loop_complexity(self.extract_loop_tree(body, 'unknown'))
         body_work = loop_complexity or 'O(1)'
+        is_tail = self._is_tail_recursive(func_name, body)
+
+        if self._looks_like_strassen_recursion(func_name, body, call_count):
+            return {
+                'complexity': 'O(n^2.807)',
+                'reason': "Strassen recurrence T(n)=7T(n/2)+O(n^2) -> O(n^log2 7) ~= O(n^2.807)"
+            }
 
         if has_memo:
-            return {
-                'complexity': 'O(n)',
-                'reason': 'Memoized recursion inside function body'
-            }
+            if has_halving:
+                return {'complexity': 'O(log n)', 'reason': 'Memoized recursion with halving — O(log n) unique states'}
+            return {'complexity': 'O(n)', 'reason': 'Memoized recursion — O(n) unique subproblems'}
+
         if has_ackermann:
+            return {'complexity': 'O(A(m, n))', 'reason': 'Ackermann-style nested recursion'}
+
+        uneven = self._analyze_uneven_divide_recursion(func_name, body, call_count, body_work)
+        if uneven:
+            return uneven
+
+        # T(n) = T(n-1) + O(body_work) with non-trivial body
+        if call_count == 1 and has_decrement and body_work not in ('O(1)', 'O(log n)'):
+            result = self._multiply_and_format('O(n)', body_work)
             return {
-                'complexity': 'O(A(m, n))',
-                'reason': 'Ackermann-style nested recursion f(m - 1, f(m, n - 1))'
+                'complexity': result,
+                'reason': f'Linear recursion T(n)=T(n-1)+{body_work} → {result}'
             }
+
+        # T(n) = T(n/3) → O(log n) base 3
+        if call_count == 1 and has_thirding and not has_halving and body_work == 'O(1)':
+            return {'complexity': 'O(log n)', 'reason': 'Single recursive call with /3 shrinking — O(log₃ n)=O(log n)'}
+
+        # T(n) = T(n/2) + O(n) → O(n) [Master Case 3]
+        if call_count == 1 and has_halving and body_work == 'O(n)':
+            return {'complexity': 'O(n)', 'reason': 'T(n)=T(n/2)+O(n) — Master Theorem Case 3 → O(n)'}
+
+        # T(n) = 2T(n/2) + O(n) → O(n log n) [Merge Sort]
+        if call_count == 2 and has_halving and body_work == 'O(n)':
+            mt, _, reason = self.master_theorem.solve(2, 2, 'n', 1)
+            return {'complexity': mt, 'reason': f'Merge-sort recurrence: {reason}'}
+
+        # T(n) = 2T(n/2) + O(1) → O(n) [Master Case 1]
+        if call_count == 2 and has_halving and body_work == 'O(1)':
+            mt, _, reason = self.master_theorem.solve(2, 2, 'const', 0)
+            return {'complexity': mt, 'reason': f'Binary divide-and-conquer: {reason}'}
+
+        # T(n) = 4T(n/2) + O(n) → O(n²) [Master Case 1]
+        if call_count == 4 and has_halving and body_work == 'O(n)':
+            mt, _, reason = self.master_theorem.solve(4, 2, 'n', 1)
+            return {'complexity': mt, 'reason': f'4-way D&C: {reason}'}
+
+        recursive_multiplier = self._recursive_call_multiplier(func_name, body)
+
         if recursive_multiplier == 'O(log n)' and has_halving:
             complexity = body_work if body_work != 'O(1)' else 'O(log² n)'
             return {
                 'complexity': complexity,
-                'reason': (
-                    f'Log-loop of T(n/2) calls: T(n)=log(n)*T(n/2)+{body_work}. '
-                    'The geometric series is dominated by the body work.'
-                )
+                'reason': f'Log-loop of T(n/2) calls: converges — dominated by body work {body_work}'
             }
-        if recursive_multiplier == 'O(n)' and has_halving:
+
+        if call_count >= 2 and has_decrement and has_halving_call:
             return {
                 'complexity': 'O(2^n)',
-                'reason': 'Linear number of recursive half-size calls per level'
+                'reason': 'Mixed recurrence T(n)=T(n-1)+T(n/2): T(n-1) branch dominates → O(2^n)'
             }
-        if call_count >= 2 and has_balanced_partition:
-            complexity = self._divide_and_conquer_complexity(call_count, body_work)
-            return {
-                'complexity': complexity,
-                'reason': f'Balanced partition recursion: T(n)={call_count}T(n/2)+{body_work}'
-            }
-        if call_count >= 2 and has_decrement and has_halving:
-            return {
-                'complexity': 'O(2^n)',
-                'reason': (
-                    'Mixed recurrence T(n)=T(n-1)+T(n/2): the T(n-1) branch '
-                    'dominates and spawns exponentially many recursive calls'
-                )
-            }
-        if is_generator and call_count == 2 and has_decrement and has_halving:
+
+        if is_generator and call_count == 2 and has_decrement and has_halving_call:
             return {
                 'complexity': 'O(2^n)',
                 'reason': 'Generator recursion T(n)=T(n-1)+T(n/2) is exponential'
             }
-        if call_count >= 2 and has_shrinking_substring:
+
+        if has_shrinking_substring and call_count >= 2:
             return {
                 'complexity': 'O(n * 2^n)',
-                'reason': 'Branching recursion on length n-1 substrings gives T(n) = 2T(n-1) + O(n)'
+                'reason': 'Branching on length-(n-1) substrings: T(n)=2T(n-1)+O(n)'
             }
+
+        if call_count >= 2 and has_balanced_partition:
+            ft, fp = self._body_work_to_ft_fp(body_work)
+            mt, _, reason = self.master_theorem.solve(call_count, 2, ft, fp)
+            return {'complexity': mt, 'reason': f'Balanced partition: {reason}'}
+
         if call_count == 1 and has_halving:
             complexity = self._max_complexity(['O(log n)', loop_complexity])
+            return {'complexity': complexity, 'reason': 'Single recursive call with halving + body work'}
+
+        if call_count == 1 and is_tail:
             return {
-                'complexity': complexity,
-                'reason': 'Single recursive call with halving plus body work'
+                'complexity': self._max_complexity(['O(n)', body_work]),
+                'reason': 'Tail-recursive: O(n) calls, body work per call'
             }
+
         if call_count == 1:
             complexity = self._max_complexity(['O(n)', loop_complexity])
+            return {'complexity': complexity, 'reason': 'Single recursive call per level + body work'}
+
+        # Fibonacci: T(n) = T(n-1) + T(n-2)
+        if call_count == 2 and has_decrement and not has_halving:
+            fib_like = bool(re.search(
+                rf'\b{func_name}\s*\(\s*\w+\s*-\s*1\s*\).*\b{func_name}\s*\(\s*\w+\s*-\s*2\s*\)',
+                body, re.DOTALL
+            )) or bool(re.search(
+                rf'\b{func_name}\s*\(\s*\w+\s*-\s*2\s*\).*\b{func_name}\s*\(\s*\w+\s*-\s*1\s*\)',
+                body, re.DOTALL
+            ))
+            if fib_like:
+                return {
+                    'complexity': 'O(φⁿ)',
+                    'reason': 'Fibonacci recurrence T(n)=T(n-1)+T(n-2) → O(φⁿ)≈O(1.618ⁿ), bounded by O(2^n)'
+                }
             return {
-                'complexity': complexity,
-                'reason': 'Single recursive call per level plus body work'
+                'complexity': 'O(2^n)',
+                'reason': f'Two recursive calls with linear decrement: T(n)=2T(n-1)+{body_work} → O(2^n)'
             }
-        if call_count == 2 and has_halving:
-            complexity = self._divide_and_conquer_complexity(call_count, body_work)
-            return {
-                'complexity': complexity,
-                'reason': f'Divide-and-conquer recurrence T(n) = 2T(n/2) + {body_work}'
-            }
-        if call_count > 2 and has_halving:
-            complexity = self._divide_and_conquer_complexity(call_count, body_work)
-            return {
-                'complexity': complexity,
-                'reason': f'Divide-and-conquer recurrence T(n) = {call_count}T(n/2) + {body_work}'
-            }
+
+        if call_count == 3 and has_decrement and not has_halving:
+            return {'complexity': 'O(3^n)', 'reason': 'Three recursive calls with linear decrement → O(3^n)'}
+
+        if call_count >= 2 and has_halving:
+            ft, fp = self._body_work_to_ft_fp(body_work)
+            # Strassen: 7T(n/2)+O(n²)
+            if call_count == 7 and body_work in ('O(n²)', 'O(n^2)'):
+                return {'complexity': 'O(n^2.807)', 'reason': "Strassen's 7T(n/2)+O(n²) → O(n^log₂7) ≈ O(n^2.807)"}
+            # Karatsuba: 3T(n/2)+O(n)
+            if call_count == 3 and body_work == 'O(n)':
+                return {'complexity': 'O(n^1.585)', 'reason': 'Karatsuba 3T(n/2)+O(n) → O(n^log₂3)≈O(n^1.585)'}
+            mt, _, reason = self.master_theorem.solve(call_count, 2, ft, fp)
+            return {'complexity': mt, 'reason': f'T(n)={call_count}T(n/2)+{body_work} → {mt} ({reason})'}
+
         return {
             'complexity': f'O({call_count}^n)',
-            'reason': f'{call_count} recursive calls per level'
+            'reason': f'{call_count} recursive calls per level without halving or memoisation'
         }
 
+    def _analyze_uneven_divide_recursion(self, func_name, body, call_count, body_work):
+        factors = self._recursive_division_factors(func_name, body)
+        if len(factors) < 2 or len(factors) != call_count:
+            return None
+        if len(set(round(f, 6) for f in factors)) == 1:
+            return None
+
+        p = self._solve_akra_bazzi_exponent(factors)
+        f_type, f_power = self._body_work_to_ft_fp(body_work)
+        body_degree = self._body_work_degree(f_type, f_power)
+        eps = 0.01
+
+        if body_degree > p + eps:
+            complexity = self._tuple_to_string((f_type, f_power))
+        elif abs(body_degree - p) <= eps:
+            complexity = self._format_fractional_power(p).replace(')', ' log n)')
+        else:
+            complexity = self._format_fractional_power(p)
+
+        factor_text = ', '.join(self._format_number(f) for f in factors)
+        return {
+            'complexity': complexity,
+            'reason': (
+                f'Uneven divide-and-conquer solved by Akra-Bazzi: '
+                f'T(n) = ' + ' + '.join(f'T(n/{self._format_number(f)})' for f in factors) +
+                f' + {body_work}. Solve sum(1/b^p)=1 for b=[{factor_text}], p≈{p:.4f} → {complexity}'
+            )
+        }
+
+    def _recursive_division_factors(self, func_name, body):
+        factors = []
+        for args in re.findall(rf'\b{func_name}\s*\(([^()]*)\)', body):
+            first_arg = args.split(',', 1)[0].strip()
+            factor = self._division_factor_from_expr(first_arg)
+            if factor:
+                factors.append(factor)
+        return factors
+
+    def _division_factor_from_expr(self, expr):
+        shift = re.search(r'>>\s*(\d+)', expr)
+        if shift:
+            return float(2 ** int(shift.group(1)))
+
+        div = re.search(r'(?://|/)\s*(\d+(?:\.\d+)?)', expr)
+        if div:
+            value = float(div.group(1))
+            return value if value > 1 else None
+
+        floor_div = re.search(r'Math\.floor\s*\([^)]*/\s*(\d+(?:\.\d+)?)\s*\)', expr)
+        if floor_div:
+            value = float(floor_div.group(1))
+            return value if value > 1 else None
+
+        return None
+
+    def _solve_akra_bazzi_exponent(self, factors):
+        low, high = 0.0, 10.0
+        for _ in range(80):
+            mid = (low + high) / 2
+            total = sum(f ** (-mid) for f in factors)
+            if total > 1:
+                low = mid
+            else:
+                high = mid
+        return (low + high) / 2
+
+    def _body_work_degree(self, f_type, f_power):
+        return {
+            'const': 0.0, 'log': 0.001, 'log2': 0.002, 'log3': 0.003,
+            'sqrt': 0.5, 'n': float(f_power),
+            'n_log': 1.001, 'n_log2': 1.002,
+            'n2_log': 2.001, 'n3_log': 3.001,
+        }.get(f_type, float(f_power) if isinstance(f_power, (int, float)) else 1.0)
+
+    def _format_fractional_power(self, exponent):
+        rounded = round(exponent, 3)
+        if abs(rounded - 1) < 0.001:
+            return 'O(n)'
+        if abs(rounded - 2) < 0.001:
+            return 'O(n²)'
+        if abs(rounded - 3) < 0.001:
+            return 'O(n³)'
+        return f'O(n^{rounded:.3f})'
+
+    def _format_number(self, value):
+        return str(int(value)) if float(value).is_integer() else f'{value:g}'
+
+    def _looks_like_strassen_recursion(self, func_name, body, call_count):
+        if call_count != 7:
+            return False
+        m_assigns = len(re.findall(r'\bM[1-7]\s*=', body))
+        matrix_combine = bool(re.search(r'vstack|hstack|concatenate|C11|C12|C21|C22', body))
+        split_quadrants = bool(re.search(r'\bsplit\s*\(|A11|A12|A21|A22|B11|B12|B21|B22', body))
+        return 'strassen' in func_name.lower() or (m_assigns >= 7 and matrix_combine and split_quadrants)
+
+    def _body_work_to_ft_fp(self, body_work):
+        mapping = {
+            'O(1)': ('const', 0), 'O(log n)': ('log', 1),
+            'O(n)': ('n', 1), 'O(n log n)': ('n_log', 1),
+            'O(n²)': ('n', 2), 'O(n^2)': ('n', 2),
+            'O(n² log n)': ('n2_log', 1), 'O(n³)': ('n', 3),
+        }
+        return mapping.get(body_work, ('n', 1))
+
+    def _is_tail_recursive(self, func_name, body):
+        for line in body.split('\n'):
+            stripped = line.strip()
+            if re.search(rf'\breturn\s+{func_name}\s*\(', stripped):
+                return True
+        return False
+
+    def _multiply_and_format(self, a, b):
+        return self._tuple_to_string(self._multiply_complexity(
+            self._parse_complexity_string(a),
+            self._parse_complexity_string(b)
+        ))
+
     def _has_ackermann_recursion(self, func_name, body):
-        nested_call = re.search(
-            rf'\b{func_name}\s*\([^;\n]*\b{func_name}\s*\(',
-            body
-        )
+        nested_call = re.search(rf'\b{func_name}\s*\([^;\n]*\b{func_name}\s*\(', body)
         if not nested_call:
             return False
+        has_first = bool(re.search(rf'\b{func_name}\s*\(\s*\w+\s*-\s*1\s*,', body))
+        has_second = bool(re.search(rf'\b{func_name}\s*\(\s*\w+\s*,\s*\w+\s*-\s*1\s*\)', body))
+        return has_first and has_second
 
-        has_first_param_decrement = bool(re.search(
-            rf'\b{func_name}\s*\(\s*\w+\s*-\s*1\s*,',
-            body
+    def _has_recursive_decrement_call(self, func_name, body):
+        calls = re.findall(rf'\b{func_name}\s*\(([^)]*)\)', body)
+        for args in calls:
+            if re.search(r'\b\w+\s*-\s*[12]\b|\b\w+\s*--|--\s*\w+', args):
+                return True
+        return False
+
+    def _has_balanced_partition_recursion(self, func_name, body):
+        calls = re.findall(rf'\b{func_name}\s*\(([^)]*)\)', body)
+        if len(calls) < 2:
+            return False
+        has_mid = bool(re.search(
+            r'\bmid\s*=\s*\(?\s*\w+\s*\+\s*\w+\s*\)?\s*(?://|/|>>)\s*2|'
+            r'\bmid\s*=\s*\w+\s*\+\s*\(?\s*\w+\s*-\s*\w+\s*\)?\s*(?://|/)\s*2|'
+            r'\bmid\s*=\s*Math\.floor\s*\(', body
         ))
-        has_second_param_decrement = bool(re.search(
-            rf'\b{func_name}\s*\(\s*\w+\s*,\s*\w+\s*-\s*1\s*\)',
-            body
+        uses_left = any(re.search(r'\bmid\s*-\s*1\b|,\s*mid\s*[),]', c) for c in calls)
+        uses_right = any(re.search(r'\bmid\s*\+\s*1\b|\bmid\s*,', c) for c in calls)
+        direct_halves = sum(1 for c in calls if re.search(r'//\s*2|/\s*2|>>\s*1|Math\.floor', c))
+        return (has_mid and uses_left and uses_right) or direct_halves >= 2
+
+    def _has_recursive_shrinking_substring_calls(self, func_name, body):
+        calls = re.findall(rf'\b{func_name}\s*\(', body)
+        if len(calls) < 2:
+            return False
+        substring_shrink = bool(re.search(
+            r'\.substring\s*\([^;\n]*(?:length\s*\(\)\s*-\s*1|,\s*[^)]*length\s*\(\s*\))', body
         ))
-        return has_first_param_decrement and has_second_param_decrement
+        slicing_shrink = bool(re.search(
+            r'\[[^:\]]*(?::\s*-1|1\s*:|:\s*len\s*\([^)]*\)\s*-\s*1)', body
+        ))
+        return substring_shrink or slicing_shrink
+
+    # ─────────────────────────────────────────────
+    # CONCRETE ANALYSIS
+    # ─────────────────────────────────────────────
 
     def detect_concrete_analysis(self, code, language, concrete_inputs=None):
         dfs = self._find_dfs_function(code, language)
@@ -550,11 +1120,7 @@ class CodeAnalyzer:
 
         bit_clear = self._find_bit_clear_function(code, language)
         if bit_clear:
-            value = self._parse_single_concrete_input(
-                concrete_inputs,
-                bit_clear['name'],
-                bit_clear['param']
-            )
+            value = self._parse_single_concrete_input(concrete_inputs, bit_clear['name'], bit_clear['param'])
             if value is None:
                 value = self._find_literal_single_call_value(code, bit_clear['name'])
             if value is not None:
@@ -563,32 +1129,23 @@ class CodeAnalyzer:
         ackermann = self._find_ackermann_function(code, language)
         if not ackermann:
             return None
-
-        values = self._parse_concrete_input_values(
-            concrete_inputs,
-            ackermann['name'],
-            ackermann['params']
-        )
+        values = self._parse_concrete_input_values(concrete_inputs, ackermann['name'], ackermann['params'])
         if values is None:
             values = self._find_literal_call_values(code, ackermann['name'])
         if values is None:
             return None
-
         m, n = values
         exact = self._simulate_ackermann(m, n)
         if not exact['available']:
             return exact
-
         param_a = ackermann['params'][0] if len(ackermann['params']) > 0 else 'm'
         param_b = ackermann['params'][1] if len(ackermann['params']) > 1 else 'n'
         return {
-            'available': True,
-            'kind': 'ackermann_exact',
+            'available': True, 'kind': 'ackermann_exact',
             'function': ackermann['name'],
             'inputs': {param_a: m, param_b: n},
             'return_value': exact['return_value'],
-            'calls': exact['calls'],
-            'max_stack_depth': exact['max_stack_depth'],
+            'calls': exact['calls'], 'max_stack_depth': exact['max_stack_depth'],
             'time': f"{exact['calls']} function calls",
             'space': f"{exact['max_stack_depth']} stack frames",
             'fixed_input_time_complexity': 'O(1)',
@@ -603,62 +1160,48 @@ class CodeAnalyzer:
             body = self._extract_function_body(code, name, language)
             if not body:
                 continue
-
-            adjacency_loop = re.search(
-                r'for\s+(\w+)\s+in\s+(\w+)\s*\[\s*(\w+)\s*\]',
-                body
-            )
+            adjacency_loop = re.search(r'for\s+(\w+)\s+in\s+(\w+)\s*\[\s*(\w+)\s*\]', body)
             visited_add = re.search(r'(\w+)\.add\s*\(\s*(\w+)\s*\)', body)
             recursive_neighbor_call = bool(re.search(
-                rf'\b{name}\s*\([^)]*\b{adjacency_loop.group(1)}\b[^)]*\)',
-                body
+                rf'\b{name}\s*\([^)]*\b{adjacency_loop.group(1)}\b[^)]*\)', body
             )) if adjacency_loop else False
             visited_guard = bool(re.search(
-                r'if\s+\w+\s+not\s+in\s+\w+|if\s*\(\s*!\s*\w+\.has\s*\(',
-                body
+                r'if\s+\w+\s+not\s+in\s+\w+|if\s*\(\s*!\s*\w+\.has\s*\(', body
             ))
-
             if adjacency_loop and visited_add and recursive_neighbor_call and visited_guard:
-                params = self._function_param_names(code, name)
                 return {
                     'name': name,
                     'graph_param': adjacency_loop.group(2),
                     'node_param': visited_add.group(2),
                     'visited_param': visited_add.group(1),
                     'neighbor_var': adjacency_loop.group(1),
-                    'params': params,
+                    'params': self._function_param_names(code, name),
                 }
         return None
 
     def _parse_graph_concrete_inputs(self, concrete_inputs, dfs):
         if concrete_inputs is None:
             return None
-
         data = concrete_inputs
         if isinstance(data, dict) and dfs['name'] in data and isinstance(data[dfs['name']], dict):
             data = data[dfs['name']]
-
         if not isinstance(data, dict):
             return None
-
         graph = data.get(dfs['graph_param']) or data.get('graph') or data.get('adj')
         node = data.get(dfs['node_param'])
         if node is None:
             node = data.get('node') or data.get('start') or data.get('source')
         visited = data.get(dfs['visited_param'], data.get('visited', []))
-
         if graph is None or node is None:
             return None
         if not isinstance(graph, (dict, list)):
             return None
-
         if visited is None:
             visited = []
         if isinstance(visited, (str, int, float, bool)):
             visited = [visited]
         if not isinstance(visited, (list, tuple, set)):
             visited = []
-
         return {'graph': graph, 'node': node, 'visited': visited}
 
     def _concrete_dfs_analysis(self, dfs, graph_inputs, limit=100_000):
@@ -676,13 +1219,11 @@ class CodeAnalyzer:
                 candidates.append(int(key))
             except (TypeError, ValueError):
                 pass
-
             if isinstance(g, dict):
                 for candidate in candidates:
                     if candidate in g:
                         return g[candidate] or []
                 return []
-
             idx = None
             for candidate in candidates:
                 if isinstance(candidate, int):
@@ -709,15 +1250,12 @@ class CodeAnalyzer:
             dfs_visit(start, 1)
         except RuntimeError:
             return {
-                'available': False,
-                'kind': 'dfs_exact',
+                'available': False, 'kind': 'dfs_exact',
                 'function': dfs['name'],
                 'reason': f'Concrete DFS exceeds safe simulation limit of {limit} steps'
             }
-
         return {
-            'available': True,
-            'kind': 'dfs_exact',
+            'available': True, 'kind': 'dfs_exact',
             'function': dfs['name'],
             'inputs': {
                 dfs['node_param']: start,
@@ -725,8 +1263,7 @@ class CodeAnalyzer:
                 'graph_vertices': len(graph),
             },
             'return_value': None,
-            'calls': calls,
-            'max_stack_depth': max_depth,
+            'calls': calls, 'max_stack_depth': max_depth,
             'reachable_vertices': len(visited - initial_visited),
             'edge_scans': edge_scans,
             'time': f"{calls} node visits, {edge_scans} adjacency checks",
@@ -747,8 +1284,7 @@ class CodeAnalyzer:
                 r'while\s*\(?\s*(\w+)\s*>\s*0\s*\)?:?'
                 r'(?:(?!\n\s*(?:def|function|public|private|protected)\b).)*?'
                 r'(?:\b\1\s*=\s*\1\s*&\s*\(?\s*\1\s*-\s*1\s*\)?|\b\1\s*&=\s*\(?\s*\1\s*-\s*1\s*\)?)',
-                body,
-                re.IGNORECASE | re.DOTALL
+                body, re.IGNORECASE | re.DOTALL
             )
             if match:
                 return {'name': name, 'param': match.group(1)}
@@ -757,10 +1293,8 @@ class CodeAnalyzer:
     def _parse_single_concrete_input(self, concrete_inputs, func_name, param):
         if concrete_inputs is None:
             return None
-
         if isinstance(concrete_inputs, (list, tuple)) and concrete_inputs:
             return self._one_int(concrete_inputs[0])
-
         if isinstance(concrete_inputs, dict):
             scoped = concrete_inputs.get(func_name)
             if scoped is not None:
@@ -774,28 +1308,21 @@ class CodeAnalyzer:
             values = list(concrete_inputs.values())
             if values:
                 return self._one_int(values[0])
-
         if isinstance(concrete_inputs, str):
             call_match = re.search(rf'\b{func_name}\s*\(\s*(-?\d+)\s*\)', concrete_inputs)
             if call_match:
                 return self._one_int(call_match.group(1))
-
             named = dict(re.findall(r'\b([A-Za-z_]\w*)\s*[:=]\s*(-?\d+)', concrete_inputs))
             if param in named:
                 return self._one_int(named[param])
-            if 'n' in named:
-                return self._one_int(named['n'])
             numbers = re.findall(r'-?\d+', concrete_inputs)
             if numbers:
                 return self._one_int(numbers[0])
-
         return None
 
     def _find_literal_single_call_value(self, code, func_name):
         match = re.search(rf'\b{func_name}\s*\(\s*(-?\d+)\s*\)', code)
-        if not match:
-            return None
-        return self._one_int(match.group(1))
+        return self._one_int(match.group(1)) if match else None
 
     def _one_int(self, value):
         try:
@@ -804,39 +1331,33 @@ class CodeAnalyzer:
             return None
 
     def _concrete_bit_clear_analysis(self, bit_clear, value):
-        iterations = value.bit_count() if value > 0 else 0
+        iterations = bin(value).count('1') if value > 0 else 0
         return {
-            'available': True,
-            'kind': 'bit_clear_exact',
+            'available': True, 'kind': 'bit_clear_exact',
             'function': bit_clear['name'],
             'inputs': {bit_clear['param']: value},
             'return_value': iterations,
-            'calls': iterations,
-            'max_stack_depth': 1,
+            'calls': iterations, 'max_stack_depth': 1,
             'time': f"{iterations} loop iterations",
             'space': '1 counter/input variable',
             'fixed_input_time_complexity': 'O(1)',
             'fixed_input_space_complexity': 'O(1)',
             'symbolic_time_complexity': 'O(popcount(n)), worst-case O(log n)',
             'symbolic_space_complexity': 'O(1)',
-            'reason': 'Exact simulation for n = n & (n - 1), which removes one set bit per loop'
+            'reason': 'Exact simulation for n = n & (n-1), which removes one set bit per loop'
         }
 
     def _find_ackermann_function(self, code, language):
         for name in re.findall(self._function_def_regex(), code):
             body = self._extract_function_body(code, name, language)
             if body and self._has_ackermann_recursion(name, body):
-                return {
-                    'name': name,
-                    'params': self._function_param_names(code, name)
-                }
+                return {'name': name, 'params': self._function_param_names(code, name)}
         return None
 
     def _function_param_names(self, code, func_name):
         signature = re.search(rf'\b{func_name}\s*\(([^)]*)\)', code)
         if not signature:
             return []
-
         params = []
         for raw in signature.group(1).split(','):
             raw = raw.strip()
@@ -850,35 +1371,25 @@ class CodeAnalyzer:
     def _parse_concrete_input_values(self, concrete_inputs, func_name, params):
         if concrete_inputs is None:
             return None
-
         if isinstance(concrete_inputs, (list, tuple)) and len(concrete_inputs) >= 2:
             return self._two_ints(concrete_inputs[0], concrete_inputs[1])
-
         if isinstance(concrete_inputs, dict):
             scoped = concrete_inputs.get(func_name)
             if scoped is not None:
                 parsed = self._parse_concrete_input_values(scoped, func_name, params)
                 if parsed:
                     return parsed
-
             if len(params) >= 2 and params[0] in concrete_inputs and params[1] in concrete_inputs:
                 return self._two_ints(concrete_inputs[params[0]], concrete_inputs[params[1]])
-
             if 'm' in concrete_inputs and 'n' in concrete_inputs:
                 return self._two_ints(concrete_inputs['m'], concrete_inputs['n'])
-
             values = list(concrete_inputs.values())
             if len(values) >= 2:
                 return self._two_ints(values[0], values[1])
-
         if isinstance(concrete_inputs, str):
-            call_match = re.search(
-                rf'\b{func_name}\s*\(\s*(-?\d+)\s*,\s*(-?\d+)\s*\)',
-                concrete_inputs
-            )
+            call_match = re.search(rf'\b{func_name}\s*\(\s*(-?\d+)\s*,\s*(-?\d+)\s*\)', concrete_inputs)
             if call_match:
                 return self._two_ints(call_match.group(1), call_match.group(2))
-
             named = {}
             for key, value in re.findall(r'\b([A-Za-z_]\w*)\s*[:=]\s*(-?\d+)', concrete_inputs):
                 named[key] = value
@@ -886,18 +1397,14 @@ class CodeAnalyzer:
                 return self._two_ints(named[params[0]], named[params[1]])
             if 'm' in named and 'n' in named:
                 return self._two_ints(named['m'], named['n'])
-
             numbers = re.findall(r'-?\d+', concrete_inputs)
             if len(numbers) >= 2:
                 return self._two_ints(numbers[0], numbers[1])
-
         return None
 
     def _find_literal_call_values(self, code, func_name):
         match = re.search(rf'\b{func_name}\s*\(\s*(-?\d+)\s*,\s*(-?\d+)\s*\)', code)
-        if not match:
-            return None
-        return self._two_ints(match.group(1), match.group(2))
+        return self._two_ints(match.group(1), match.group(2)) if match else None
 
     def _two_ints(self, first, second):
         try:
@@ -907,11 +1414,7 @@ class CodeAnalyzer:
 
     def _simulate_ackermann(self, m, n, call_limit=100000):
         if m < 0 or n < 0:
-            return {
-                'available': False,
-                'reason': 'Ackermann exact simulation requires non-negative integer inputs'
-            }
-
+            return {'available': False, 'reason': 'Ackermann requires non-negative integer inputs'}
         calls = 0
         max_depth = 0
 
@@ -932,205 +1435,234 @@ class CodeAnalyzer:
             value = ack(m, n, 1)
         except (RecursionError, RuntimeError):
             return {
-                'available': False,
-                'kind': 'ackermann_exact',
+                'available': False, 'kind': 'ackermann_exact',
                 'inputs': {'m': m, 'n': n},
-                'reason': f'Concrete Ackermann input exceeds the safe simulation limit of {call_limit} calls'
+                'reason': f'Exceeds safe simulation limit of {call_limit} calls'
             }
+        return {'available': True, 'return_value': value, 'calls': calls, 'max_stack_depth': max_depth}
 
-        return {
-            'available': True,
-            'return_value': value,
-            'calls': calls,
-            'max_stack_depth': max_depth
-        }
-
-    def _has_recursive_decrement_call(self, func_name, body):
-        calls = re.findall(rf'\b{func_name}\s*\(([^)]*)\)', body)
-        for args in calls:
-            if re.search(r'\b\w+\s*-\s*1\b|\b\w+\s*--|--\s*\w+', args):
-                return True
-        return False
-
-    def _has_balanced_partition_recursion(self, func_name, body):
-        calls = re.findall(rf'\b{func_name}\s*\(([^)]*)\)', body)
-        if len(calls) < 2:
-            return False
-
-        has_mid_definition = bool(re.search(
-            r'\bmid\s*=\s*\(?\s*\w+\s*\+\s*\w+\s*\)?\s*(?://|/|>>)\s*2|'
-            r'\bmid\s*=\s*\w+\s*\+\s*\(?\s*\w+\s*-\s*\w+\s*\)?\s*(?://|/)\s*2|'
-            r'\bmid\s*=\s*Math\.floor\s*\(',
-            body
-        ))
-        uses_left_half = any(re.search(r'\bmid\s*-\s*1\b|,\s*mid\s*[),]', call) for call in calls)
-        uses_right_half = any(re.search(r'\bmid\s*\+\s*1\b|\bmid\s*,', call) for call in calls)
-        direct_half_calls = sum(
-            1 for call in calls
-            if re.search(r'//\s*2|/\s*2|>>\s*1|Math\.floor', call)
-        )
-
-        return (has_mid_definition and uses_left_half and uses_right_half) or direct_half_calls >= 2
-
-    def _has_recursive_shrinking_substring_calls(self, func_name, body):
-        calls = re.findall(rf'\b{func_name}\s*\(', body)
-        if len(calls) < 2:
-            return False
-
-        substring_shrink = bool(re.search(
-            r'\.substring\s*\([^;\n]*(?:length\s*\(\)\s*-\s*1|,\s*[^)]*length\s*\(\s*\))',
-            body
-        ))
-        slicing_shrink = bool(re.search(
-            r'\[[^:\]]*(?::\s*-1|1\s*:|:\s*len\s*\([^)]*\)\s*-\s*1)',
-            body
-        ))
-        return substring_shrink or slicing_shrink
-
-    def _divide_and_conquer_complexity(self, branches, body_work):
-        """
-        Master Theorem approximation for T(n) = aT(n/2) + f(n).
-        """
-        import math
-
-        body = self._parse_complexity_string(body_work)
-        body_type, body_power = body
-        critical_degree = math.log2(branches)
-
-        body_degree = {
-            'const': 0,
-            'log': 0.5,
-            'log2': 0.7,
-            'n': body_power,
-            'n_log': body_power + 0.5,
-            'n_log2': body_power + 0.7,
-            'n2_log': 2.5,
-            'n3_log': 3.5,
-        }.get(body_type, 1)
-
-        if branches == 1:
-            if body_type == 'const':
-                return 'O(log n)'
-            return body_work
-
-        epsilon = 0.01
-        if body_degree < critical_degree - epsilon:
-            return self._tuple_to_string(('n', round(critical_degree)))
-        if abs(body_degree - critical_degree) <= epsilon:
-            base = self._tuple_to_string(('n', round(critical_degree)))
-            return base.replace(')', ' log n)')
-        return body_work
     # ─────────────────────────────────────────────
     # GRAPH ALGORITHM DETECTION
     # ─────────────────────────────────────────────
 
     def detect_graph_algorithm(self, code):
-        """
-        Detects known graph algorithms and returns their complexity.
-        """
-        code_lower = code.lower()
-
+        # Bidirectional BFS
+        if re.search(r'bidirectional.?bfs|bi.?bfs|meet.?in.?middle.*bfs|bfs.*meet.?in.?middle', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Bidirectional BFS',
+                'complexity': 'O(b^(d/2))', 'space': 'O(b^(d/2))',
+                'reason': 'Two simultaneous BFS from source and target meet in middle',
+                'can_optimize': False,
+                'note': 'Optimal for unweighted shortest path when source and target are both known.'
+            }
+        # Johnson's Algorithm
+        if re.search(r"johnson.?algorithm|johnson.?shortest|reweight.*johnson", code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': "Johnson's Algorithm",
+                'complexity': 'O(V² log V + VE)', 'space': 'O(V + E)',
+                'reason': 'Bellman-Ford once O(VE) + Dijkstra from each vertex O(V(V+E)log V)',
+                'can_optimize': False,
+                'note': 'Best all-pairs shortest paths for sparse graphs with negative weights.'
+            }
+        # Euler path / circuit
+        if re.search(r'euler.?path|euler.?circuit|euler.?tour|hierholzer|fleury', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': "Eulerian Path/Circuit (Hierholzer's)",
+                'complexity': 'O(V + E)', 'space': 'O(V + E)',
+                'reason': "Hierholzer's visits every edge exactly once in O(E)",
+                'can_optimize': False,
+                'note': 'Already optimal.'
+            }
+        # Articulation points / bridges
+        if re.search(r'articulation.?point|bridge.?find|cut.?vertex|biconnect', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': "Articulation Points / Bridges (Tarjan's)",
+                'complexity': 'O(V + E)', 'space': 'O(V)',
+                'reason': 'Single DFS with low-link values detects all bridges and cut vertices',
+                'can_optimize': False, 'note': 'Already optimal — linear DFS-based detection.'
+            }
+        # Bipartite check
+        if re.search(r'bipartite|two.?color|is.?bipartite|bfs.*color.*graph|color.*bfs.*graph', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Bipartite Check (2-Coloring BFS/DFS)',
+                'complexity': 'O(V + E)', 'space': 'O(V)',
+                'reason': 'BFS/DFS with 2-coloring visits each vertex and edge once',
+                'can_optimize': False, 'note': 'Already optimal.'
+            }
+        # Hopcroft-Karp
+        if re.search(r'hopcroft.?karp|bipartite.*matching|maximum.*matching.*bipartite', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Hopcroft-Karp Bipartite Matching',
+                'complexity': 'O(E√V)', 'space': 'O(V + E)',
+                'reason': 'BFS finds augmenting paths in O(E) × O(√V) phases',
+                'can_optimize': False, 'note': 'Already optimal for bipartite matching.'
+            }
+        # Hungarian
+        if re.search(r'hungarian|assignment.?problem|kuhn.*munkres|munkres', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Hungarian Algorithm (Assignment Problem)',
+                'complexity': 'O(n³)', 'space': 'O(n²)',
+                'reason': 'O(n) phases, each finding augmenting path in O(n²) over n×n cost matrix',
+                'can_optimize': False,
+                'note': 'Already optimal for dense assignment. Use Jonker-Volgenant for sparse cases.'
+            }
+        # Dinic's max flow
+        if re.search(r"dinic|dinics|dinic.?algorithm|level.?graph.*flow|blocking.?flow", code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': "Dinic's Max-Flow",
+                'complexity': 'O(V²E)', 'space': 'O(V + E)',
+                'reason': 'O(V) BFS phases × O(VE) blocking flow per phase → O(V²E)',
+                'can_optimize': False,
+                'note': 'O(E√V) on unit-capacity graphs. Faster than Edmonds-Karp in practice.'
+            }
+        # 2-SAT
+        if re.search(r'\b2.?sat\b|two.?sat|implication.*graph.*scc|scc.*2sat', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': '2-SAT (Implication Graph + SCC)',
+                'complexity': 'O(V + E)', 'space': 'O(V + E)',
+                'reason': 'Build implication graph O(V+E), run SCC O(V+E), check satisfiability O(V)',
+                'can_optimize': False,
+                'note': 'Already optimal. 3-SAT is NP-complete; 2-SAT is solvable in linear time.'
+            }
+        # LCA
+        if re.search(r'\blca\b|lowest.?common.?ancestor|sparse.?table.*lca|binary.?lifting.*lca', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Lowest Common Ancestor (Binary Lifting)',
+                'complexity': 'O(n log n) preprocess, O(log n) query', 'space': 'O(n log n)',
+                'reason': 'Binary lifting precomputes 2^k ancestors for each node in O(n log n)',
+                'can_optimize': True, 'optimized_to': 'O(n) preprocess, O(1) query',
+                'note': 'Farach-Colton & Bender achieves O(n) preprocess, O(1) query via Euler tour + RMQ.'
+            }
+        # Heavy-Light Decomposition
+        if re.search(r'heavy.?light|hld|heavy.?path.?decomp', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Heavy-Light Decomposition',
+                'complexity': 'O(n log n) build, O(log² n) query', 'space': 'O(n)',
+                'reason': 'O(log n) heavy chains × O(log n) segment tree query per chain',
+                'can_optimize': True, 'optimized_to': 'O(log n) query with Fenwick tree',
+                'note': 'Using Fenwick tree instead of segment tree reduces query to O(log n).'
+            }
+        # Centroid Decomposition
+        if re.search(r'centroid.?decomp|centroid.*tree', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Centroid Decomposition',
+                'complexity': 'O(n log n)', 'space': 'O(n log n)',
+                'reason': 'O(log n) levels of decomposition × O(n) work per level',
+                'can_optimize': False, 'note': 'Already optimal for distance queries on trees.'
+            }
+        # Sparse table / RMQ
+        if re.search(r'sparse.?table|rmq|range.?minimum.?query|range.?max.*query.*sparse', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Sparse Table (RMQ)',
+                'complexity': 'O(n log n) build, O(1) query', 'space': 'O(n log n)',
+                'reason': 'Precompute all 2^k range minima in O(n log n); queries O(1) via overlap',
+                'can_optimize': False,
+                'note': 'Already optimal for static RMQ. Use segment tree for dynamic updates.'
+            }
         # Dijkstra
         if re.search(r'dijkstra|priorityqueue|priority_queue', code, re.IGNORECASE):
             if re.search(r'dist|distance', code, re.IGNORECASE):
                 return {
-                    'detected': True,
-                    'algorithm': 'Dijkstra\'s Shortest Path',
-                    'complexity': 'O((V + E) log V)',
-                    'space': 'O(V + E)',
+                    'detected': True, 'algorithm': "Dijkstra's Shortest Path",
+                    'complexity': 'O((V + E) log V)', 'space': 'O(V + E)',
                     'reason': 'Priority queue based graph traversal — O((V+E) log V)',
                     'can_optimize': False,
-                    'note': 'This is already optimal for sparse graphs. For dense graphs, use Floyd-Warshall O(V³) only if V is small.'
+                    'note': 'Already optimal for non-negative weights and sparse graphs.'
                 }
-
         # Bellman-Ford
         if re.search(r'bellman.?ford|relax', code, re.IGNORECASE):
             return {
-                'detected': True,
-                'algorithm': 'Bellman-Ford',
-                'complexity': 'O(V × E)',
-                'space': 'O(V)',
+                'detected': True, 'algorithm': 'Bellman-Ford',
+                'complexity': 'O(V × E)', 'space': 'O(V)',
                 'reason': 'V-1 relaxation passes over all E edges',
-                'can_optimize': True,
-                'optimized_to': 'O((V + E) log V)',
-                'note': 'If graph has no negative weights, replace with Dijkstra for O((V+E) log V).'
+                'can_optimize': True, 'optimized_to': 'O((V + E) log V)',
+                'note': 'If no negative weights, replace with Dijkstra for O((V+E) log V).'
             }
-
         # Floyd-Warshall
         if re.search(r'floyd|warshall|all.?pairs', code, re.IGNORECASE):
             return {
-                'detected': True,
-                'algorithm': 'Floyd-Warshall',
-                'complexity': 'O(V³)',
-                'space': 'O(V²)',
+                'detected': True, 'algorithm': 'Floyd-Warshall',
+                'complexity': 'O(V³)', 'space': 'O(V²)',
                 'reason': 'Triple nested loop over all vertex pairs',
-                'can_optimize': True,
-                'optimized_to': 'O((V + E) log V)',
+                'can_optimize': True, 'optimized_to': 'O((V + E) log V) per source',
                 'note': 'For sparse graphs, run Dijkstra from each vertex for better performance.'
             }
-
+        # A*
+        if re.search(r'\ba\s*\*\s*search\b|a_star|astar|heuristic.*path|path.*heuristic', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'A* Search',
+                'complexity': 'O(E log V)', 'space': 'O(V)',
+                'reason': 'Heuristic-guided priority-queue search',
+                'can_optimize': False,
+                'note': 'Complexity depends on heuristic quality. Optimal with admissible heuristic.'
+            }
+        # SCC
+        if re.search(r'strongly.?connected|tarjan|kosaraju|scc', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'SCC (Tarjan/Kosaraju)',
+                'complexity': 'O(V + E)', 'space': 'O(V)',
+                'reason': 'Linear DFS-based SCC detection',
+                'can_optimize': False, 'note': 'Already optimal.'
+            }
+        # Max-flow
+        if re.search(r'max.?flow|ford.?fulkerson|edmonds.?karp|bfs.*flow|flow.*bfs', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Max-Flow (Edmonds-Karp)',
+                'complexity': 'O(V E²)', 'space': 'O(V + E)',
+                'reason': 'BFS augmenting paths × E iterations',
+                'can_optimize': True, 'optimized_to': "O(V²E) with Dinic's",
+                'note': "Dinic's algorithm gives O(V²E) which is better on unit-capacity graphs."
+            }
         # BFS
         if re.search(r'\bqueue\b|deque|bfs|breadth.?first', code, re.IGNORECASE):
             if re.search(r'visited|seen|graph|adj', code, re.IGNORECASE):
                 return {
-                    'detected': True,
-                    'algorithm': 'Breadth-First Search (BFS)',
-                    'complexity': 'O(V + E)',
-                    'space': 'O(V)',
+                    'detected': True, 'algorithm': 'Breadth-First Search (BFS)',
+                    'complexity': 'O(V + E)', 'space': 'O(V)',
                     'reason': 'Each vertex and edge visited once',
-                    'can_optimize': False,
-                    'note': 'BFS is already optimal for unweighted shortest paths.'
+                    'can_optimize': False, 'note': 'BFS is already optimal for unweighted shortest paths.'
                 }
-
         # DFS
         if re.search(r'\bdfs\b|depth.?first|visited\s*=', code, re.IGNORECASE):
             if re.search(r'graph|adj|neighbor', code, re.IGNORECASE):
                 return {
-                    'detected': True,
-                    'algorithm': 'Depth-First Search (DFS)',
-                    'complexity': 'O(V + E)',
-                    'space': 'O(V)',
+                    'detected': True, 'algorithm': 'Depth-First Search (DFS)',
+                    'complexity': 'O(V + E)', 'space': 'O(V)',
                     'reason': 'Each vertex and edge visited once',
-                    'can_optimize': False,
-                    'note': 'DFS is already optimal for graph traversal.'
+                    'can_optimize': False, 'note': 'DFS is already optimal for graph traversal.'
                 }
-
-        # Kruskal MST
+        # Kruskal
         if re.search(r'kruskal|union.?find|disjoint', code, re.IGNORECASE):
             return {
-                'detected': True,
-                'algorithm': "Kruskal's MST",
-                'complexity': 'O(E log E)',
-                'space': 'O(V)',
+                'detected': True, 'algorithm': "Kruskal's MST",
+                'complexity': 'O(E log E)', 'space': 'O(V)',
                 'reason': 'Sorting edges O(E log E) + Union-Find operations',
                 'can_optimize': False,
-                'note': 'Already optimal. Prim\'s algorithm is better for dense graphs: O(V²).'
+                'note': "Already optimal. Prim's with priority queue is better for dense graphs."
             }
-
-        # Prim MST
+        # Prim
         if re.search(r'prim|minimum.?spanning', code, re.IGNORECASE):
             return {
-                'detected': True,
-                'algorithm': "Prim's MST",
-                'complexity': 'O((V + E) log V)',
-                'space': 'O(V)',
+                'detected': True, 'algorithm': "Prim's MST",
+                'complexity': 'O((V + E) log V)', 'space': 'O(V)',
                 'reason': 'Priority queue based MST construction',
-                'can_optimize': False,
-                'note': 'Already optimal for sparse graphs.'
+                'can_optimize': False, 'note': 'Already optimal for sparse graphs.'
             }
-
         # Topological sort
-        if re.search(r'topological|topo.?sort|in.?degree', code, re.IGNORECASE):
+        if re.search(r'topological|topo.?sort|in.?degree|kahn', code, re.IGNORECASE):
+            if re.search(r'in.?degree|indegree|queue.*topo|topo.*queue', code, re.IGNORECASE):
+                return {
+                    'detected': True, 'algorithm': "Topological Sort (Kahn's BFS)",
+                    'complexity': 'O(V + E)', 'space': 'O(V)',
+                    'reason': "Kahn's: O(V) queue operations + O(E) edge relaxations",
+                    'can_optimize': False, 'note': 'Already optimal for DAG ordering.'
+                }
             return {
-                'detected': True,
-                'algorithm': 'Topological Sort',
-                'complexity': 'O(V + E)',
-                'space': 'O(V)',
-                'reason': 'Each vertex and edge processed once',
-                'can_optimize': False,
-                'note': 'Already optimal for DAG ordering.'
+                'detected': True, 'algorithm': 'Topological Sort (DFS)',
+                'complexity': 'O(V + E)', 'space': 'O(V)',
+                'reason': 'Each vertex and edge processed once in DFS post-order',
+                'can_optimize': False, 'note': 'Already optimal.'
             }
-
         return {'detected': False}
 
     # ─────────────────────────────────────────────
@@ -1138,341 +1670,1003 @@ class CodeAnalyzer:
     # ─────────────────────────────────────────────
 
     def detect_known_algorithm(self, code):
-        """
-        Detects well-known algorithms beyond graphs.
-        """
-        # Generator T(n)=T(n-1)+T(n/2) must be checked before generic patterns.
+        # Generator T(n)=T(n-1)+T(n/2)
         if re.search(r'yield\s*\*', code, re.IGNORECASE):
             for name in re.findall(r'function\s*\*\s*(\w+)', code):
                 body = self._extract_function_body(code, name, 'javascript')
                 if not body:
                     continue
-                has_decrement = bool(re.search(rf'yield\s*\*\s*{name}\s*\([^)]*-\s*1', body))
+                has_dec = bool(re.search(rf'yield\s*\*\s*{name}\s*\([^)]*-\s*1', body))
                 has_half = bool(re.search(rf'yield\s*\*\s*{name}\s*\([^)]*(?:Math\.floor|/\s*2)', body))
-                if has_decrement and has_half:
+                if has_dec and has_half:
                     return {
                         'detected': True,
                         'algorithm': 'Generator recursion T(n)=T(n-1)+T(n/2)',
-                        'complexity': 'O(2^n)',
-                        'space': 'O(2^n)',
+                        'complexity': 'O(2^n)', 'space': 'O(2^n)',
                         'reason': 'T(n-1) dominates and creates exponentially many generator frames',
-                        'can_optimize': True,
-                        'optimized_to': 'O(n)',
+                        'can_optimize': True, 'optimized_to': 'O(n)',
                         'note': 'Replace the generator with a memoized plain function.'
                     }
 
-        # Backtracking permutations / factorial search
+        # Fibonacci (named or explicit)
+        if re.search(r'fibonacci|fib\s*\(|fib\s*\[', code, re.IGNORECASE):
+            has_memo = bool(re.search(r'memo|cache|@lru_cache|@cache|dp\s*=', code, re.IGNORECASE))
+            has_matrix = bool(re.search(r'matrix.*fib|fib.*matrix|matrix.*exp', code, re.IGNORECASE))
+            if has_matrix:
+                return {
+                    'detected': True, 'algorithm': 'Fibonacci via Matrix Exponentiation',
+                    'complexity': 'O(log n)', 'space': 'O(log n)',
+                    'reason': '[[1,1],[1,0]]^n gives nth Fibonacci in O(log n) matrix multiplications',
+                    'can_optimize': False,
+                    'note': 'Already optimal. Binet formula gives O(1) but has floating-point precision issues.'
+                }
+            if has_memo:
+                return {
+                    'detected': True, 'algorithm': 'Fibonacci (Memoized/DP)',
+                    'complexity': 'O(n)', 'space': 'O(n)',
+                    'reason': 'Memoization ensures each subproblem computed once',
+                    'can_optimize': True, 'optimized_to': 'O(log n)',
+                    'note': 'Can be further optimized to O(log n) using matrix exponentiation.'
+                }
+
+        # Meet in the middle
+        if re.search(r'meet.?in.?middle|meet.?in.?the.?middle|half.*subset.*sum|split.*half.*search', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Meet in the Middle',
+                'complexity': 'O(2^(n/2))', 'space': 'O(2^(n/2))',
+                'reason': 'Split into halves: 2^(n/2)+2^(n/2) subproblems joined via sorting/hashing',
+                'can_optimize': False,
+                'note': 'Optimal for exponential problems that can be split. Square root of brute force O(2^n).'
+            }
+
+        # DSU / Union-Find
+        if re.search(r'union.?find|dsu|disjoint.?set|path.?compress|union.?by.?rank|find_parent|find_root', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Disjoint Set Union (Union-Find)',
+                'complexity': 'O(α(n))', 'space': 'O(n)',
+                'reason': 'Path compression + union by rank gives amortized O(α(n)) ≈ O(1) per operation',
+                'can_optimize': False,
+                'note': 'Already optimal — inverse Ackermann α(n) ≤ 4 for all practical n.'
+            }
+
+        # Matrix exponentiation
+        if re.search(r'matrix.?exp|matpow|mat_pow|matrix.*power|fast.?matrix.?mul', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Matrix Exponentiation',
+                'complexity': 'O(k³ log n)', 'space': 'O(k²)',
+                'reason': 'Binary exponentiation on k×k matrices: O(log n) multiplications each O(k³)',
+                'can_optimize': False,
+                'note': 'Used for linear recurrences in O(k³ log n). Essential for fast Fibonacci, tiling DPs.'
+            }
+
+        # Suffix array
+        if re.search(r'suffix.?array|suffix_array|sa.?is|dc3.?algorithm|skew.?algorithm', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Suffix Array',
+                'complexity': 'O(n log n)', 'space': 'O(n)',
+                'reason': 'Comparison-based construction with O(n log n) radix sort on doubled suffixes',
+                'can_optimize': True, 'optimized_to': 'O(n)',
+                'note': 'DC3/Skew algorithm achieves O(n) construction. Combine with LCP array for O(1) LCP queries.'
+            }
+
+        # Suffix automaton / DAWG
+        if re.search(r'suffix.?automat|sam\b|dawg\b|suffix.*state.*last', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Suffix Automaton (SAM / DAWG)',
+                'complexity': 'O(n)', 'space': 'O(n)',
+                'reason': 'Online linear-time construction — at most 2n-1 states and 3n-4 transitions',
+                'can_optimize': False,
+                'note': 'Already optimal. Represents all substrings in O(n) space.'
+            }
+
+        # Aho-Corasick
+        if re.search(r'aho.?corasick|aho_corasick|trie.*failure|failure.*link.*trie', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Aho-Corasick Multi-Pattern Search',
+                'complexity': 'O(n + m + z)', 'space': 'O(m × σ)',
+                'reason': 'Build trie O(m), failure links O(m), search text O(n+z) where z=occurrences',
+                'can_optimize': False, 'note': 'Already optimal for multiple-pattern search.'
+            }
+
+        # Manacher's algorithm
+        if re.search(r"manacher|manachers|palindrome.*o.?n|longest.*palindrome.*linear", code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': "Manacher's Algorithm",
+                'complexity': 'O(n)', 'space': 'O(n)',
+                'reason': 'Linear-time longest palindromic substring via center expansion with reuse',
+                'can_optimize': False, 'note': 'Already optimal for palindrome detection.'
+            }
+
+        # LIS
+        if re.search(r'\blis\b|longest.?increasing.?subseq|patience.?sort.*lis|bisect.*lis', code, re.IGNORECASE):
+            has_nlogn = bool(re.search(r'bisect|binary.?search.*lis|tails\s*=', code, re.IGNORECASE))
+            if has_nlogn:
+                return {
+                    'detected': True, 'algorithm': 'LIS (Patience Sorting / Binary Search)',
+                    'complexity': 'O(n log n)', 'space': 'O(n)',
+                    'reason': 'Binary search on tails array — O(n) elements × O(log n) lookup',
+                    'can_optimize': False, 'note': 'Already optimal.'
+                }
+            return {
+                'detected': True, 'algorithm': 'LIS (DP)',
+                'complexity': 'O(n²)', 'space': 'O(n)',
+                'reason': 'For each element, check all previous — O(n) per element',
+                'can_optimize': True, 'optimized_to': 'O(n log n)',
+                'note': 'Use patience sorting with binary search (bisect) for O(n log n).'
+            }
+
+        # Coin change / Unbounded knapsack
+        if re.search(r'coin.?change|unbounded.?knapsack|min.?coins|fewest.?coins', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Coin Change / Unbounded Knapsack (DP)',
+                'complexity': 'O(n × W)', 'space': 'O(W)',
+                'reason': 'DP table: n coin denominations × W target amount',
+                'can_optimize': False, 'note': 'Already optimal as pseudo-polynomial.'
+            }
+
+        # 0/1 Knapsack
+        if re.search(r'0.?1.?knapsack|zero.?one.?knapsack|01.?knap', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': '0/1 Knapsack (DP)',
+                'complexity': 'O(n × W)', 'space': 'O(n × W)',
+                'reason': 'DP table: n items × W capacity',
+                'can_optimize': True, 'optimized_to': 'O(n × W) with O(W) space',
+                'note': 'Space can be reduced to O(W) by iterating capacity in reverse (1D DP).'
+            }
+
+        # Word break
+        if re.search(r'word.?break|wordbreak|word_break', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Word Break (DP)',
+                'complexity': 'O(n² × m)', 'space': 'O(n)',
+                'reason': 'O(n²) substrings × O(m) dictionary lookup per substring',
+                'can_optimize': True, 'optimized_to': 'O(n × L × m)',
+                'note': 'Use trie for O(L) word lookup instead of O(m).'
+            }
+
+        # Regex / wildcard matching DP
+        if re.search(r'regex.?match|regexp.?dp|isMatch.*\.\*|dp.*regex|wildcard.?match', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Regex / Wildcard Matching (DP)',
+                'complexity': 'O(n × m)', 'space': 'O(n × m)',
+                'reason': 'DP over all n×m pairs of text position and pattern position',
+                'can_optimize': True, 'optimized_to': 'O(n × m) with O(m) space',
+                'note': 'Space reducible to O(m) with rolling DP rows.'
+            }
+
+        # Bitmask DP
+        if re.search(r'bitmask.?dp|dp.*1\s*<<|1\s*<<.*dp\[|visited.*bitmask|bitmask.*visited', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Bitmask DP',
+                'complexity': 'O(n² × 2^n)', 'space': 'O(n × 2^n)',
+                'reason': '2^n subset states × n ending positions × O(n) transition',
+                'can_optimize': False, 'note': 'Standard approach for TSP and subset covering. Practical up to n≈20.'
+            }
+
+        # Convex hull trick / CHT
+        if re.search(r'convex.?hull.?trick|cht\b|li.?chao|line.*container|slope.?trick', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Convex Hull Trick / Li Chao Tree DP Optimization',
+                'complexity': 'O(n log n)', 'space': 'O(n)',
+                'reason': 'CHT reduces O(n²) DP transition to O(n log n) via convex hull of lines',
+                'can_optimize': False, 'note': 'Already optimal. O(n) if queries are monotone.'
+            }
+
+        # Miller-Rabin
+        if re.search(r'miller.?rabin|miller_rabin|primality.*probabilistic|strong.*witness', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Miller-Rabin Primality Test',
+                'complexity': 'O(k log² n)', 'space': 'O(1)',
+                'reason': 'k witnesses × O(log n) modular exponentiations × O(log n) per multiplication',
+                'can_optimize': False, 'note': 'k=7 witnesses gives deterministic result for n < 3.3×10²⁴.'
+            }
+
+        # Extended GCD
+        if re.search(r'extended.?gcd|ext.?gcd|bezout|extended_euclidean', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Extended Euclidean Algorithm',
+                'complexity': 'O(log min(a,b))', 'space': 'O(log min(a,b))',
+                'reason': 'Same as GCD — each step reduces min(a,b) by Fibonacci ratio',
+                'can_optimize': False, 'note': 'Already optimal. Used for modular inverse.'
+            }
+
+        # CRT
+        if re.search(r'chinese.?remainder|crt\b|crt_combine|garner', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Chinese Remainder Theorem',
+                'complexity': 'O(k log M)', 'space': 'O(k)',
+                'reason': 'k modular equations × O(log M) extended GCD per equation',
+                'can_optimize': False, 'note': "Already optimal. Garner's algorithm avoids big-integer arithmetic."
+            }
+
+        # Pollard's rho
+        if re.search(r'pollard.?rho|pollard_rho|rho.*factor', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': "Pollard's Rho Factorization",
+                'complexity': 'O(n^(1/4))', 'space': 'O(1)',
+                'reason': 'Expected O(n^(1/4)) iterations by birthday paradox on pseudorandom cycle',
+                'can_optimize': False,
+                'note': 'Best practical algorithm for semi-primes. Combine with Miller-Rabin for robust factorization.'
+            }
+
+        # Strassen
+        if re.search(r'strassen', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': "Strassen's Matrix Multiplication",
+                'complexity': 'O(n^2.807)', 'space': 'O(n²)',
+                'reason': '7T(n/2)+O(n²) → T(n)=O(n^log₂7) ≈ O(n^2.807)',
+                'can_optimize': False,
+                'note': 'Better than naive O(n³). Coppersmith-Winograd O(n^2.376) exists but is impractical.'
+            }
+
+        # Karatsuba
+        if re.search(r'karatsuba|karatsuba_multiply|karatsuba_mult', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Karatsuba Multiplication',
+                'complexity': 'O(n^1.585)', 'space': 'O(n log n)',
+                'reason': '3T(n/2)+O(n) → O(n^log₂3) ≈ O(n^1.585)',
+                'can_optimize': False,
+                'note': 'Already faster than O(n²). For very large integers, use FFT-based multiplication O(n log n).'
+            }
+
+        # FFT
+        if re.search(r'\bfft\b|fast_fourier|fastfourier|cooley.?tukey|butterfly.*fft|fft.*butterfly', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Fast Fourier Transform (FFT)',
+                'complexity': 'O(n log n)', 'space': 'O(n)',
+                'reason': 'Cooley-Tukey: 2T(n/2)+O(n) → O(n log n)',
+                'can_optimize': False,
+                'note': 'Already optimal for DFT. Ensure input size is power of 2 for maximum efficiency.'
+            }
+
+        # NTT
+        if re.search(r'\bntt\b|number.?theoretic.?transform|modular.*fft', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Number Theoretic Transform (NTT)',
+                'complexity': 'O(n log n)', 'space': 'O(n)',
+                'reason': 'FFT over modular arithmetic — same divide-and-conquer structure as FFT',
+                'can_optimize': False,
+                'note': 'Use for exact polynomial multiplication modulo a prime. Avoids FFT floating-point errors.'
+            }
+
+        # Huffman
+        if re.search(r'huffman|huffman_code|huffman_tree|huffman_encode', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Huffman Coding',
+                'complexity': 'O(n log n)', 'space': 'O(n)',
+                'reason': 'Build min-heap O(n), extract-insert n times each O(log n) → O(n log n)',
+                'can_optimize': False, 'note': 'Already optimal for greedy prefix-free encoding.'
+            }
+
+        # Activity Selection
+        if re.search(r'activity.?select|interval.?schedul|job.?schedul|greedy.*interval|finish.?time.*sort', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Activity Selection / Interval Scheduling',
+                'complexity': 'O(n log n)', 'space': 'O(1)',
+                'reason': 'Dominant cost is sorting activities by finish time: O(n log n)',
+                'can_optimize': False, 'note': 'Already optimal. If pre-sorted, reduce to O(n).'
+            }
+
+        # Sudoku Solver
+        if re.search(r'sudoku|solve_sudoku|solveSudoku|is_valid.*board|board.*backtrack', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Sudoku Solver (Backtracking)',
+                'complexity': 'O(9^m)', 'space': 'O(m)',
+                'reason': 'Up to 9 choices for each of m empty cells — exponential backtracking tree',
+                'can_optimize': True, 'optimized_to': 'Pruned exponential (constraint propagation)',
+                'note': 'Add constraint propagation (arc consistency / naked singles) to dramatically prune the search space.'
+            }
+
+        # Randomized QuickSort
+        if re.search(r'randomized.?quick|random.*pivot|rand.*partition|shuffle.*sort', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Randomized QuickSort',
+                'complexity': 'O(n log n)', 'space': 'O(log n)',
+                'reason': 'Random pivot gives expected O(n log n) — eliminates adversarial O(n²) worst case',
+                'can_optimize': False, 'note': 'No worst-case guarantee; use Introsort for guaranteed O(n log n).'
+            }
+
+        # Monte Carlo
+        if re.search(r'monte.?carlo|montecarlo|random.*sample.*estimate|pi.*random|estimate.*pi', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Monte Carlo Algorithm',
+                'complexity': 'O(n)', 'space': 'O(1)',
+                'reason': 'Linear in number of random samples; probabilistic correctness',
+                'can_optimize': False, 'note': 'Error decreases as O(1/√n). Increase sample count to improve accuracy.'
+            }
+
+        # Las Vegas
+        if re.search(r'las.?vegas|lasvegas|always.?correct.*random|random.*always.?correct', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Las Vegas Algorithm',
+                'complexity': 'O(expected)', 'space': 'O(1)',
+                'reason': 'Always produces correct result; runtime is random with finite expected value',
+                'can_optimize': False,
+                'note': 'Correctness is guaranteed. Expected runtime depends on probability of success per trial.'
+            }
+
+        # AVL Tree
+        if re.search(r'\bavl\b|avl.?tree|avl_tree|left.?rotate.*right.?rotate|balance.?factor.*avl', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'AVL Tree',
+                'complexity': 'O(log n)', 'space': 'O(n)',
+                'reason': 'Height-balanced BST guarantees O(log n) insert, delete, search via rotations',
+                'can_optimize': False,
+                'note': 'Already optimal. Red-Black Trees have fewer rotations but same asymptotic complexity.'
+            }
+
+        # Red-Black Tree
+        if re.search(r'red.?black|redblack|rb.?tree|rbtree|color.*red.*black|black.*height', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Red-Black Tree',
+                'complexity': 'O(log n)', 'space': 'O(n)',
+                'reason': 'Self-balancing BST — O(log n) ops with at most 2 rotations per insert',
+                'can_optimize': False, 'note': 'Already optimal. Preferred over AVL when insertions/deletions dominate.'
+            }
+
+        # Splay Tree
+        if re.search(r'splay.?tree|splay\s*\(|splay_tree', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Splay Tree',
+                'complexity': 'O(log n) amortized', 'space': 'O(n)',
+                'reason': 'Splay operation brings accessed node to root — O(log n) amortized',
+                'can_optimize': False,
+                'note': 'O(log n) amortized, O(n) worst-case per op. Excellent cache locality for non-uniform access.'
+            }
+
+        # Treap
+        if re.search(r'\btreap\b|treap.?node|tree.*heap.*bst|bst.*heap.*rand', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Treap (Randomized BST)',
+                'complexity': 'O(log n) expected', 'space': 'O(n)',
+                'reason': 'Random priorities maintain expected O(log n) height with high probability',
+                'can_optimize': False,
+                'note': 'Split and merge in O(log n). Simpler than Red-Black Trees with same expected bounds.'
+            }
+
+        # Skip List
+        if re.search(r'skip.?list|skiplist|skip_list', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Skip List',
+                'complexity': 'O(log n) expected', 'space': 'O(n log n) expected',
+                'reason': 'Randomized multi-level linked list — O(log n) expected levels traversed per op',
+                'can_optimize': False, 'note': 'O(log n) expected for search/insert/delete.'
+            }
+
+        # B-Tree / B+-Tree
+        if re.search(r'\bb.?tree\b|btree|b_tree|b\+tree|b\+.?tree|bplus', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'B-Tree / B+-Tree',
+                'complexity': 'O(log_t n)', 'space': 'O(n)',
+                'reason': 'Height O(log_t n) where t is minimum degree — each node has 2t-1 keys',
+                'can_optimize': False,
+                'note': 'Optimal for disk-based storage with large t reducing I/O. Used in databases and file systems.'
+            }
+
+        # Bloom Filter
+        if re.search(r'bloom.?filter|bloomfilter', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Bloom Filter',
+                'complexity': 'O(k)', 'space': 'O(m)',
+                'reason': 'k hash functions applied per insert/query — O(k) time, O(m) bits space',
+                'can_optimize': False, 'note': 'No false negatives. Optimal k = (m/n) ln 2.'
+            }
+
+        # Van Emde Boas tree
+        if re.search(r'van.?emde.?boas|veb.?tree|veb\b', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Van Emde Boas Tree',
+                'complexity': 'O(log log U)', 'space': 'O(U)',
+                'reason': 'Recursive structure on universe U: T(U)=T(√U)+O(1) → O(log log U)',
+                'can_optimize': False,
+                'note': 'Fastest for integer keys in [0, U). Impractical for large U due to O(U) space.'
+            }
+
+        # Fibonacci Heap
+        if re.search(r'fibonacci.?heap|fib.?heap|fibheap|decrease.?key.*fibonacci', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Fibonacci Heap',
+                'complexity': 'O(log n)', 'space': 'O(n)',
+                'reason': 'Amortized O(1) insert/decrease-key, O(log n) amortized delete-min via lazy consolidation',
+                'can_optimize': False,
+                'note': 'Theoretically optimal for Dijkstra but high constant factors make binary heaps faster in practice.'
+            }
+
+        # Hash Table
+        if re.search(r'hash.?table|hashtable|open.?addressing|linear.?probing|chaining.*hash|separate.?chaining|load.?factor', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Hash Table',
+                'complexity': 'O(1) average, O(n) worst', 'space': 'O(n)',
+                'reason': 'Average O(1) with good hash and low load factor; worst-case O(n) on collisions',
+                'can_optimize': True, 'optimized_to': 'O(1) average with good hash function',
+                'note': 'Keep load factor below 0.7. Use a universal hash function to minimize collision probability.'
+            }
+
+        # Boyer-Moore
+        if re.search(r'boyer.?moore|boyermoore|bad.?character|good.?suffix', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Boyer-Moore String Search',
+                'complexity': 'O(n/m) best, O(nm) worst', 'space': 'O(m + σ)',
+                'reason': 'Bad-character and good-suffix heuristics enable sublinear average-case scanning',
+                'can_optimize': False,
+                'note': 'Fastest practical string search on large alphabets. Use KMP for adversarial input.'
+            }
+
+        # Trie
+        if re.search(r'\btrie\b|prefix.?tree|trie.?node|trienode|trie.?insert|trie.?search', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Trie (Prefix Tree)',
+                'complexity': 'O(m)', 'space': 'O(n × m × σ)',
+                'reason': 'Insert/search/delete each traverse at most m nodes (key length m)',
+                'can_optimize': False,
+                'note': 'O(m) is optimal for prefix operations. Use compressed tries for space reduction.'
+            }
+
+        # Convex Hull
+        if re.search(r'convex.?hull|graham.?scan|jarvis|chan.*convex|cross.?product.*hull', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Convex Hull (Graham Scan / Jarvis March)',
+                'complexity': 'O(n log n)', 'space': 'O(n)',
+                'reason': 'Sort points O(n log n) + linear scan O(n) → O(n log n)',
+                'can_optimize': False,
+                'note': "Chan's algorithm achieves O(n log h) where h = hull size."
+            }
+
+        # Closest Pair
+        if re.search(r'closest.?pair|nearest.?pair|closest_pair|min.?distance.*points|strip.*closest', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Closest Pair of Points',
+                'complexity': 'O(n log n)', 'space': 'O(n)',
+                'reason': 'Divide and conquer: T(n)=2T(n/2)+O(n log n) → O(n log n) with presorted y',
+                'can_optimize': False,
+                'note': 'Ensure y-coordinates are presorted before recursion to avoid O(n log² n).'
+            }
+
+        # Line Segment Intersection
+        if re.search(r'line.?intersection|sweep.?line|segment.?intersect|bentley.?ottmann|event.?queue.*segment', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Line Segment Intersection (Sweep Line)',
+                'complexity': 'O(n log n)', 'space': 'O(n)',
+                'reason': 'Bentley-Ottmann sweep: O((n+k) log n) where k=intersections',
+                'can_optimize': False,
+                'note': 'For all k intersections: O((n+k) log n). Use balanced BST for active segment order.'
+            }
+
+        # Newton's Method
+        if re.search(r'newton.?method|newtons_method|newton_raphson|raphson|f_prime.*newton|derivative.*iterate', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': "Newton's Method (Newton-Raphson)",
+                'complexity': 'O(log n)', 'space': 'O(1)',
+                'reason': 'Quadratic convergence: each iteration doubles correct digits → O(log n) iterations',
+                'can_optimize': False,
+                'note': 'Converges quadratically near root. Diverges if starting far from root or at an inflection point.'
+            }
+
+        # Gaussian Elimination
+        if re.search(r'gaussian.?elim|gauss.?elim|row.?echelon|back.?substitution|pivot.*matrix.*solve', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Gaussian Elimination',
+                'complexity': 'O(n³)', 'space': 'O(n²)',
+                'reason': 'Three nested loops over n×n matrix — O(n³) floating-point operations',
+                'can_optimize': True, 'optimized_to': 'O(n^2.376) theoretical',
+                'note': 'Use LU decomposition for multiple RHS vectors. Strassen-based methods give O(n^2.807) but impractical.'
+            }
+
+        # LU Decomposition
+        if re.search(r'\blu\b.*decomp|lu_decomp|ludecomp|lower.?upper.*decomp|l.*u.*factori', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'LU Decomposition',
+                'complexity': 'O(n³)', 'space': 'O(n²)',
+                'reason': 'Factorizes n×n matrix into L and U — same operation count as Gaussian elimination',
+                'can_optimize': False,
+                'note': 'Preferred over Gaussian when solving Ax=b for multiple b vectors.'
+            }
+
+        # Fast Exponentiation
+        if re.search(r'fast.?exp|binary.?exp|power.*mod|modpow|mod_pow|exponentiation.?by.?squaring|square.*multiply', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Fast Exponentiation (Binary Exponentiation)',
+                'complexity': 'O(log n)', 'space': 'O(1)',
+                'reason': 'Halves exponent on each step via repeated squaring → O(log n) multiplications',
+                'can_optimize': False, 'note': 'Already optimal. Essential for modular arithmetic in cryptography.'
+            }
+
+        # RSA
+        if re.search(r'\brsa\b|rsa_encrypt|rsa_decrypt|rsa_keygen|phi.*euler.*rsa|public.?key.*private.?key', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'RSA Cryptography',
+                'complexity': 'O(k³)', 'space': 'O(k)',
+                'reason': 'Key generation: O(k²) modular exponentiation × primality tests; encryption O(k²) with k-bit keys',
+                'can_optimize': False,
+                'note': 'Use k ≥ 2048 bits for modern security. Use optimized libraries (OpenSSL) in production.'
+            }
+
+        # Diffie-Hellman
+        if re.search(r'diffie.?hellman|dh.?key.?exchange|discrete.?log.*dh|dh_shared', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Diffie-Hellman Key Exchange',
+                'complexity': 'O(log p)', 'space': 'O(1)',
+                'reason': 'Dominant operation: modular exponentiation g^a mod p — O(log p) multiplications',
+                'can_optimize': False,
+                'note': 'Use prime p ≥ 2048 bits. Prefer ECDH for same security with smaller keys.'
+            }
+
+        # AES
+        if re.search(r'\baes\b|aes_encrypt|aes_decrypt|sub.?bytes|mix.?columns|shift.?rows|add.?round.?key', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'AES (Advanced Encryption Standard)',
+                'complexity': 'O(n)', 'space': 'O(1)',
+                'reason': 'Each block processed in fixed rounds (10/12/14) — linear in message length n',
+                'can_optimize': False,
+                'note': 'Use hardware AES-NI instructions. Never implement from scratch in production.'
+            }
+
+        # SHA
+        if re.search(r'\bsha\b|sha256|sha512|sha_hash|message.?digest|sha.?1|sha.?2|sha.?3', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'SHA Hash Function',
+                'complexity': 'O(n)', 'space': 'O(1)',
+                'reason': 'Processes message in fixed-size chunks — linear in input length n',
+                'can_optimize': False, 'note': 'Use SHA-256 or SHA-3. MD5/SHA-1 are cryptographically broken.'
+            }
+
+        # Gradient Descent / SGD
+        if re.search(r'gradient.?descent|grad_descent|learning.?rate.*gradient|sgd|stochastic.?gradient|adam.?optim|rmsprop', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Gradient Descent / SGD',
+                'complexity': 'O(iterations × n)', 'space': 'O(n)',
+                'reason': 'Each iteration computes gradient over n parameters/data points',
+                'can_optimize': True, 'optimized_to': 'O(iterations × batch_size)',
+                'note': 'Use mini-batch SGD to reduce per-iteration cost. Adam/RMSProp often converge in fewer iterations.'
+            }
+
+        # Simulated Annealing
+        if re.search(r'simulated.?anneal|annealing|temperature.*cool|cooling.?schedule|metropolis.*accept', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Simulated Annealing',
+                'complexity': 'O(iterations)', 'space': 'O(1)',
+                'reason': 'Probabilistic metaheuristic — runtime proportional to cooling schedule iterations',
+                'can_optimize': False, 'note': 'Tune initial temperature and cooling rate. No optimality guarantee.'
+            }
+
+        # Genetic Algorithm
+        if re.search(r'genetic.?algorithm|genetic_algo|population.*fitness|crossover.*mutate|evolve.*generation|chromosome.*fitness', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Genetic Algorithm',
+                'complexity': 'O(generations × population × fitness_cost)', 'space': 'O(population)',
+                'reason': 'Each generation evaluates entire population',
+                'can_optimize': False,
+                'note': 'No convergence guarantee to global optimum. Population size controls exploration/exploitation.'
+            }
+
+        # Linear Regression
+        if re.search(r'linear.?regression|least.?squares|ols\b|normal.?equation.*regression|fit.*slope.*intercept', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Linear Regression (OLS)',
+                'complexity': 'O(n × d²)', 'space': 'O(d²)',
+                'reason': 'Normal equations require O(nd²) for XᵀX and O(d³) for inversion',
+                'can_optimize': True, 'optimized_to': 'O(n × d) with iterative gradient descent',
+                'note': 'For large d, use gradient descent O(nd) per iteration.'
+            }
+
+        # Decision Tree
+        if re.search(r'decision.?tree|gini.?impurity|information.?gain.*split|entropy.*split|best.?split.*feature', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Decision Tree',
+                'complexity': 'O(n log n × d)', 'space': 'O(n)',
+                'reason': 'At O(log n) depth levels, evaluate d features across n samples',
+                'can_optimize': False, 'note': 'Pre-sort features once O(nd log n). Limit max_depth to prevent overfitting.'
+            }
+
+        # Random Forest
+        if re.search(r'random.?forest|random_forest|bagging.*trees|bootstrap.*aggregate|n_estimators', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Random Forest',
+                'complexity': 'O(k × n log n × d)', 'space': 'O(k × n)',
+                'reason': 'k trees each trained in O(n log n × d) with random feature subset',
+                'can_optimize': True, 'optimized_to': 'O(k × n log n × √d)',
+                'note': 'Parallelise tree training. Use √d features per split — improves accuracy too.'
+            }
+
+        # Neural Network
+        if re.search(r'neural.?network|backprop|back.?propag|forward.?pass|activation.*relu|sigmoid.*layer|dense.*layer|weight.*bias.*learn', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Neural Network (Backpropagation)',
+                'complexity': 'O(epochs × n × L × w)', 'space': 'O(L × w)',
+                'reason': 'Each epoch: forward + backward pass over n samples × L layers × w weights',
+                'can_optimize': True, 'optimized_to': 'O(epochs × batch × L × w) with mini-batch SGD',
+                'note': 'Use GPU parallelism. Mini-batch training dramatically reduces per-step cost.'
+            }
+
+        # Branch and Bound — TSP
+        if re.search(r'branch.?and.?bound|branch_bound|bnb.?tsp|tsp.*exact.*bound|bound.*prune.*tsp', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Branch and Bound (TSP Exact)',
+                'complexity': 'O(n!)', 'space': 'O(n²)',
+                'reason': 'Exponential search space — worst case explores all permutations, pruned by lower bound',
+                'can_optimize': True, 'optimized_to': 'O(n² × 2^n) with bitmask DP (Held-Karp)',
+                'note': 'Replace with Held-Karp DP for exact TSP: O(n² × 2^n) far better than O(n!) in practice.'
+            }
+
+        # Lazy Propagation
+        if re.search(r'lazy.?prop|lazy_prop|lazy.*segment|segment.*lazy|pending.*update.*tree|push.?down.*lazy', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Segment Tree with Lazy Propagation',
+                'complexity': 'O(log n)', 'space': 'O(n)',
+                'reason': 'Lazy tags defer range updates — each range update/query O(log n) amortized',
+                'can_optimize': False, 'note': 'Already optimal for range-update range-query problems.'
+            }
+
+        # Dynamic Array (Amortized)
+        if re.search(r'dynamic.?array|amortized|array.*double.*capacity|capacity.*double.*append|vector.*push_back.*realloc|amortised', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Dynamic Array (Amortized Append)',
+                'complexity': 'O(1) amortized', 'space': 'O(n)',
+                'reason': 'Doubling strategy: total copy work = O(n), amortized O(1) per append',
+                'can_optimize': False, 'note': 'Already optimal. Pre-reserve capacity if final size is known.'
+            }
+
+        # Bitwise Algorithms
+        if re.search(r'bit.?manipul|bitwise.?trick|popcount|bit.?count|lowest.?set.?bit|highest.?set.?bit|hamming.?weight|bit.?reversal', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Bitwise Algorithm',
+                'complexity': 'O(log n) to O(1)', 'space': 'O(1)',
+                'reason': 'Bit-level operations on w-bit words run in O(1) per word; loop variants O(popcount) or O(log n)',
+                'can_optimize': False,
+                'note': 'Hardware popcount makes popcount(n) O(1). Use n & (n-1) to clear lowest set bit.'
+            }
+
+        # Two Pointers
+        if self._looks_like_two_pointers(code):
+            return {
+                'detected': True, 'algorithm': 'Two Pointers',
+                'complexity': 'O(n)', 'space': 'O(1)',
+                'reason': 'Two pointers traverse array at most once each — total O(n) movements',
+                'can_optimize': False, 'note': 'Already optimal for sorted-array pair/partition problems.'
+            }
+
+        # Sliding Window
+        if self._looks_like_sliding_window(code):
+            return {
+                'detected': True, 'algorithm': 'Sliding Window',
+                'complexity': 'O(n)', 'space': 'O(1)',
+                'reason': 'Window expands and contracts — each element added and removed at most once → O(n)',
+                'can_optimize': False, 'note': 'Already optimal for contiguous subarray/substring problems.'
+            }
+
+        # Prefix Sum
+        if re.search(r'prefix.?sum|prefix_sum|cumulative.?sum|running.?sum|presum|prefix.*array', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Prefix Sum',
+                'complexity': 'O(n) build, O(1) query', 'space': 'O(n)',
+                'reason': 'Single pass to build O(n), range sum queries in O(1) via subtraction',
+                'can_optimize': False,
+                'note': 'Already optimal. Extend to 2D prefix sums for matrix range queries in O(1).'
+            }
+
+        # Monotonic Stack
+        if self._looks_like_monotonic_stack(code):
+            return {
+                'detected': True, 'algorithm': 'Monotonic Stack',
+                'complexity': 'O(n)', 'space': 'O(n)',
+                'reason': 'Each element pushed and popped at most once — O(n) total operations amortized',
+                'can_optimize': False,
+                'note': 'Already optimal for next-greater-element, histogram area, and similar span problems.'
+            }
+
+        # Permutation backtracking
         if self._looks_like_permutation_backtracking(code):
             return {
-                'detected': True,
-                'algorithm': 'Permutation Backtracking',
-                'complexity': 'O(n * n!)',
-                'space': 'O(n * n!)',
-                'reason': 'Backtracking generates n! permutations and copies/builds each length-n result',
+                'detected': True, 'algorithm': 'Permutation Backtracking',
+                'complexity': 'O(n * n!)', 'space': 'O(n * n!)',
+                'reason': 'Backtracking generates n! permutations, each of length n',
                 'can_optimize': False,
-                'note': 'If all permutations are required, factorial time is unavoidable. Stream results to reduce output memory.'
+                'note': 'Unavoidable if all permutations are required. Stream results to reduce output memory.'
             }
 
+        # Subset / Power Set Generation
         if self._looks_like_subset_generation(code):
             return {
-                'detected': True,
-                'algorithm': 'Subset / Power Set Generation',
-                'complexity': 'O(n * 2^n)',
-                'space': 'O(n * 2^n)',
-                'reason': 'Generates all 2^n subsets and copies/builds subsets whose total size is n*2^(n-1)',
+                'detected': True, 'algorithm': 'Subset / Power Set Generation',
+                'complexity': 'O(n * 2^n)', 'space': 'O(n * 2^n)',
+                'reason': 'Generates all 2^n subsets; total size of all subsets is n·2^(n-1)',
                 'can_optimize': False,
-                'note': 'Unavoidable if every subset must be returned. Stream subsets to reduce peak output memory.'
+                'note': 'Unavoidable if every subset must be returned. Stream subsets to reduce peak memory.'
             }
 
+        # Subset backtracking
         if self._looks_like_subset_backtracking(code):
             return {
-                'detected': True,
-                'algorithm': 'Subset Backtracking',
-                'complexity': 'O(2^n)',
-                'space': 'O(n)',
+                'detected': True, 'algorithm': 'Subset Backtracking',
+                'complexity': 'O(2^n)', 'space': 'O(n)',
                 'reason': 'Backtracking explores every subset',
-                'can_optimize': True,
-                'optimized_to': 'O(n × target) with DP',
+                'can_optimize': True, 'optimized_to': 'O(n × target) with DP',
                 'note': 'Use memoization or tabulation when the target/state space is bounded.'
             }
 
+        # Segmented Sieve
+        if re.search(r'segmented.?sieve|sieve.*segment', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Segmented Sieve',
+                'complexity': 'O(n log log n)', 'space': 'O(√n)',
+                'reason': 'Same as Eratosthenes but processes in √n-sized blocks — O(√n) space',
+                'can_optimize': False,
+                'note': 'Preferred over plain sieve when n is large and memory is limited.'
+            }
+
+        # Sieve of Eratosthenes
         if re.search(r'sieve|eratosthenes|is_prime\s*=\s*\[', code, re.IGNORECASE):
             return {
-                'detected': True,
-                'algorithm': 'Sieve of Eratosthenes',
-                'complexity': 'O(n log log n)',
-                'space': 'O(n)',
-                'reason': 'The prime harmonic series gives n/2+n/3+n/5+... = O(n log log n)',
-                'can_optimize': False,
-                'note': 'Already optimal for finding all primes up to n.'
+                'detected': True, 'algorithm': 'Sieve of Eratosthenes',
+                'complexity': 'O(n log log n)', 'space': 'O(n)',
+                'reason': 'Prime harmonic series: n/2 + n/3 + n/5 + ... = O(n log log n)',
+                'can_optimize': False, 'note': 'Already optimal for finding all primes up to n.'
             }
 
         # Binary search
         if re.search(r'binary.?search|bisect|binarySearch', code, re.IGNORECASE):
             return {
-                'detected': True,
-                'algorithm': 'Binary Search',
-                'complexity': 'O(log n)',
-                'space': 'O(1)',
-                'reason': 'Input halved on each step',
-                'can_optimize': False
+                'detected': True, 'algorithm': 'Binary Search',
+                'complexity': 'O(log n)', 'space': 'O(1)',
+                'reason': 'Input halved on each step', 'can_optimize': False
             }
 
         # Merge sort
         if re.search(r'merge.?sort|mergeSort', code, re.IGNORECASE):
             return {
-                'detected': True,
-                'algorithm': 'Merge Sort',
-                'complexity': 'O(n log n)',
-                'space': 'O(n)',
-                'reason': 'Divide and conquer with linear merge step',
+                'detected': True, 'algorithm': 'Merge Sort',
+                'complexity': 'O(n log n)', 'space': 'O(n)',
+                'reason': 'T(n)=2T(n/2)+O(n) — Master Theorem Case 2 → O(n log n)',
                 'can_optimize': False
             }
 
         # Quick sort
         if re.search(r'quick.?sort|quickSort|partition', code, re.IGNORECASE):
             return {
-                'detected': True,
-                'algorithm': 'Quick Sort',
-                'complexity': 'O(n log n) average, O(n²) worst',
-                'space': 'O(log n)',
+                'detected': True, 'algorithm': 'Quick Sort',
+                'complexity': 'O(n log n) average, O(n²) worst', 'space': 'O(log n)',
                 'reason': 'Partition-based divide and conquer',
-                'can_optimize': True,
-                'optimized_to': 'O(n log n) guaranteed',
-                'note': 'Use randomized pivot or switch to Merge Sort/Tim Sort for O(n log n) guaranteed.'
+                'can_optimize': True, 'optimized_to': 'O(n log n) guaranteed',
+                'note': 'Use randomized pivot or Merge Sort/Tim Sort for O(n log n) guaranteed.'
+            }
+
+        # Tim Sort
+        if re.search(r'timsort|tim.?sort', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Tim Sort',
+                'complexity': 'O(n log n) worst, O(n) best', 'space': 'O(n)',
+                'reason': 'Hybrid merge/insertion sort — O(n) on nearly-sorted data, O(n log n) worst case',
+                'can_optimize': False,
+                'note': 'Used by Python sorted() and Java Arrays.sort(Object[]). Already optimal.'
+            }
+
+        # Heap sort
+        if re.search(r'heap.?sort|heapSort|heapify', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Heap Sort',
+                'complexity': 'O(n log n)', 'space': 'O(1)',
+                'reason': 'Build heap O(n), extract n times O(log n)',
+                'can_optimize': False
             }
 
         # Bubble sort
         if re.search(r'bubble.?sort|bubbleSort', code, re.IGNORECASE):
             return {
-                'detected': True,
-                'algorithm': 'Bubble Sort',
-                'complexity': 'O(n²)',
-                'space': 'O(1)',
+                'detected': True, 'algorithm': 'Bubble Sort',
+                'complexity': 'O(n²)', 'space': 'O(1)',
                 'reason': 'Nested comparison passes over array',
-                'can_optimize': True,
-                'optimized_to': 'O(n log n)',
+                'can_optimize': True, 'optimized_to': 'O(n log n)',
                 'note': 'Replace with built-in sort() or Merge Sort for O(n log n).'
             }
 
+        # Counting / Radix sort
         if re.search(r'counting.?sort|countingSort|radix.?sort|radixSort', code, re.IGNORECASE):
             return {
-                'detected': True,
-                'algorithm': 'Counting/Radix Sort',
-                'complexity': 'O(n + k)',
-                'space': 'O(n + k)',
+                'detected': True, 'algorithm': 'Counting/Radix Sort',
+                'complexity': 'O(n + k)', 'space': 'O(n + k)',
                 'reason': 'Linear-time sorting for bounded integer keys',
                 'can_optimize': False
             }
 
+        # KMP
         if re.search(r'kmp|knuth.?morris|failure.?function|lps\s*=', code, re.IGNORECASE):
             return {
-                'detected': True,
-                'algorithm': 'KMP String Search',
-                'complexity': 'O(n + m)',
-                'space': 'O(m)',
-                'reason': 'Linear preprocessing plus linear scan',
+                'detected': True, 'algorithm': 'KMP String Search',
+                'complexity': 'O(n + m)', 'space': 'O(m)',
+                'reason': 'Linear preprocessing of pattern + linear scan of text',
                 'can_optimize': False
             }
 
+        # Rabin-Karp
         if re.search(r'rabin.?karp|rolling.?hash', code, re.IGNORECASE):
             return {
-                'detected': True,
-                'algorithm': 'Rabin-Karp',
-                'complexity': 'O(n + m) average',
-                'space': 'O(1)',
-                'reason': 'Rolling hash comparison',
+                'detected': True, 'algorithm': 'Rabin-Karp',
+                'complexity': 'O(n + m) average', 'space': 'O(1)',
+                'reason': 'Rolling hash comparison — O(n+m) expected, O(nm) worst case',
                 'can_optimize': False
             }
 
+        # Z-Algorithm
         if re.search(r'\bz.?array\b|z.?function|z\s*\[', code, re.IGNORECASE):
             return {
-                'detected': True,
-                'algorithm': 'Z-Algorithm',
-                'complexity': 'O(n)',
-                'space': 'O(n)',
+                'detected': True, 'algorithm': 'Z-Algorithm',
+                'complexity': 'O(n)', 'space': 'O(n)',
                 'reason': 'Linear Z-array construction',
                 'can_optimize': False
             }
 
+        # LCS / Edit Distance
         if re.search(r'\blcs\b|longest.?common.?sub|edit.?distance|levenshtein', code, re.IGNORECASE):
             return {
-                'detected': True,
-                'algorithm': 'LCS / Edit Distance (DP)',
-                'complexity': 'O(n × m)',
-                'space': 'O(n × m)',
-                'reason': 'DP table over two strings',
-                'can_optimize': False,
-                'note': 'Space can often be reduced to O(min(n,m)) with rolling rows.'
+                'detected': True, 'algorithm': 'LCS / Edit Distance (DP)',
+                'complexity': 'O(n × m)', 'space': 'O(n × m)',
+                'reason': 'DP table over two strings of lengths n and m',
+                'can_optimize': False, 'note': 'Space can be reduced to O(min(n,m)) with rolling rows.'
             }
 
+        # Matrix Chain Multiplication
         if re.search(r'matrix.?chain|matrixChain|mcm', code, re.IGNORECASE):
             return {
-                'detected': True,
-                'algorithm': 'Matrix Chain Multiplication',
-                'complexity': 'O(n³)',
-                'space': 'O(n²)',
-                'reason': 'DP over all subchains, O(n²) cells with O(n) split choices',
+                'detected': True, 'algorithm': 'Matrix Chain Multiplication',
+                'complexity': 'O(n³)', 'space': 'O(n²)',
+                'reason': 'DP over all subchains: O(n²) cells × O(n) split choices',
                 'can_optimize': False
             }
 
+        # Travelling Salesman
         if re.search(r'\btsp\b|travelling.?salesman|traveling.?salesman', code, re.IGNORECASE):
             return {
-                'detected': True,
-                'algorithm': 'Travelling Salesman (DP/Bitmask)',
-                'complexity': 'O(n² × 2^n)',
-                'space': 'O(n × 2^n)',
-                'reason': 'Bitmask DP over all subsets and ending cities',
+                'detected': True, 'algorithm': 'Travelling Salesman (DP/Bitmask)',
+                'complexity': 'O(n² × 2^n)', 'space': 'O(n × 2^n)',
+                'reason': 'Bitmask DP over all subsets × n ending cities',
                 'can_optimize': False,
-                'note': 'NP-hard; heuristics trade exactness for speed.'
+                'note': 'NP-hard; heuristics (nearest-neighbour, 2-opt) give O(n²) approximations.'
             }
 
+        # N-Queens
         if re.search(r'\bnqueens\b|n.?queens|queen.?place', code, re.IGNORECASE):
             return {
-                'detected': True,
-                'algorithm': 'N-Queens Backtracking',
-                'complexity': 'O(n!)',
-                'space': 'O(n)',
-                'reason': 'Permutation search with pruning',
+                'detected': True, 'algorithm': 'N-Queens Backtracking',
+                'complexity': 'O(n!)', 'space': 'O(n)',
+                'reason': 'Permutation search with constraint pruning',
                 'can_optimize': False
             }
 
+        # Sqrt Decomposition / Mo's Algorithm
         if re.search(r'sqrt.?decomp|mos.?algo|block.?size.*sqrt|math\.sqrt.*block', code, re.IGNORECASE):
             return {
-                'detected': True,
-                'algorithm': "Sqrt Decomposition / Mo's Algorithm",
-                'complexity': 'O((n + q) √n)',
-                'space': 'O(√n)',
-                'reason': 'Queries grouped by square-root sized blocks',
+                'detected': True, 'algorithm': "Sqrt Decomposition / Mo's Algorithm",
+                'complexity': 'O((n + q) √n)', 'space': 'O(√n)',
+                'reason': 'Queries sorted by √n-sized blocks',
                 'can_optimize': False
             }
 
+        # Segment Tree
         if re.search(r'segment.?tree|segTree|seg_tree|build.*seg|query.*seg', code, re.IGNORECASE):
             return {
-                'detected': True,
-                'algorithm': 'Segment Tree',
-                'complexity': 'O(n) build, O(log n) query/update',
-                'space': 'O(n)',
+                'detected': True, 'algorithm': 'Segment Tree',
+                'complexity': 'O(n) build, O(log n) query/update', 'space': 'O(n)',
                 'reason': 'Binary tree over range segments',
                 'can_optimize': False
             }
 
+        # Fenwick Tree / BIT
         if re.search(r'fenwick|bit\s*\[|binary.?indexed', code, re.IGNORECASE):
             return {
-                'detected': True,
-                'algorithm': 'Fenwick Tree (BIT)',
-                'complexity': 'O(log n) query/update',
-                'space': 'O(n)',
-                'reason': 'Low-bit jumps update/query logarithmically',
+                'detected': True, 'algorithm': 'Fenwick Tree (BIT)',
+                'complexity': 'O(log n) query/update', 'space': 'O(n)',
+                'reason': 'Low-bit jumps update/query in O(log n)',
                 'can_optimize': False
             }
 
         # Selection sort
         if re.search(r'selection.?sort|selectionSort', code, re.IGNORECASE):
             return {
-                'detected': True,
-                'algorithm': 'Selection Sort',
-                'complexity': 'O(n²)',
-                'space': 'O(1)',
+                'detected': True, 'algorithm': 'Selection Sort',
+                'complexity': 'O(n²)', 'space': 'O(1)',
                 'reason': 'Finds minimum n times over shrinking array',
-                'can_optimize': True,
-                'optimized_to': 'O(n log n)',
+                'can_optimize': True, 'optimized_to': 'O(n log n)',
                 'note': 'Replace with built-in sort() or Heap Sort for O(n log n).'
             }
 
         # Insertion sort
         if re.search(r'insertion.?sort|insertionSort', code, re.IGNORECASE):
             return {
-                'detected': True,
-                'algorithm': 'Insertion Sort',
-                'complexity': 'O(n²)',
-                'space': 'O(1)',
+                'detected': True, 'algorithm': 'Insertion Sort',
+                'complexity': 'O(n²)', 'space': 'O(1)',
                 'reason': 'Each element shifted into correct position',
-                'can_optimize': True,
-                'optimized_to': 'O(n log n)',
+                'can_optimize': True, 'optimized_to': 'O(n log n)',
                 'note': 'Good for small/nearly-sorted arrays. Use Merge Sort for large inputs.'
             }
 
         # Dynamic programming
         if re.search(r'dp\s*=\s*\[|memo\s*=\s*\{|@lru_cache|knapsack', code, re.IGNORECASE):
             return {
-                'detected': True,
-                'algorithm': 'Dynamic Programming',
-                'complexity': 'O(n) to O(n²) depending on subproblems',
-                'space': 'O(n)',
+                'detected': True, 'algorithm': 'Dynamic Programming',
+                'complexity': 'O(n) to O(n²) depending on subproblems', 'space': 'O(n)',
                 'reason': 'Memoized subproblem solutions',
                 'can_optimize': False,
                 'note': 'DP is already optimized. Space can sometimes be reduced using rolling arrays.'
             }
 
+        # Data-Dependent Loop
+        if re.search(r'while.*\binput\b|while.*\bread\b|for.*\binput\b|loop.*until.*eof|while.*not.*done.*input', code, re.IGNORECASE):
+            return {
+                'detected': True, 'algorithm': 'Data-Dependent / Input-Driven Loop',
+                'complexity': 'O(input size)', 'space': 'O(1)',
+                'reason': 'Loop iterations depend on runtime input — complexity proportional to input data size',
+                'can_optimize': False,
+                'note': 'Profile with realistic data; avoid buffering entire input if streaming is possible.'
+            }
+
         return {'detected': False}
+
+    # ─────────────────────────────────────────────
+    # PATTERN DETECTORS
+    # ─────────────────────────────────────────────
+
+    def _looks_like_two_pointers(self, code):
+        has_two_pointer_names = bool(re.search(
+            r'\b(?:left|lo|low|i)\s*=\s*0.*\b(?:right|hi|high|j)\s*=\s*(?:len|n|arr\.length|size)',
+            code, re.IGNORECASE | re.DOTALL
+        ))
+        has_while_convergence = bool(re.search(
+            r'while\s*\(?\s*(?:left|lo)\s*<\s*(?:right|hi)\s*\)?', code, re.IGNORECASE
+        ))
+        has_both_moves = (
+            bool(re.search(r'(?:left|lo)\s*\+\+|(?:left|lo)\s*\+=\s*1', code, re.IGNORECASE)) and
+            bool(re.search(r'(?:right|hi)\s*--|(?:right|hi)\s*-=\s*1', code, re.IGNORECASE))
+        )
+        return (has_two_pointer_names and has_while_convergence) or has_both_moves
+
+    def _looks_like_sliding_window(self, code):
+        has_window_name = bool(re.search(r'sliding.?window|window_size|max_window|min_window', code, re.IGNORECASE))
+        has_window_vars = bool(re.search(r'\b(?:window|left|start|begin)\b.*\b(?:right|end|j)\b', code, re.IGNORECASE))
+        has_expand_shrink = bool(re.search(r'(?:while|if)\s*.*\b(?:window|left|start)\b.*(?:\+\+|-=|\+=)', code, re.IGNORECASE))
+        has_classic_shape = bool(re.search(
+            r'for\s+.*\n(?:.*\n)*?\s*while\s+.*(?:left|start|lo)\s*(?:<|<=)\s*(?:right|end|i)',
+            code, re.IGNORECASE | re.DOTALL
+        ))
+        return has_window_name or (has_window_vars and has_expand_shrink) or has_classic_shape
+
+    def _looks_like_monotonic_stack(self, code):
+        has_stack_ops = bool(re.search(r'stack\s*=\s*\[\]|\.append\s*\(|\.pop\s*\(', code))
+        has_mono_comparison = (
+            bool(re.search(r'while\s+stack\s+and\s+(?:stack\[-1\]|stack\.peek)', code, re.IGNORECASE)) or
+            bool(re.search(r'while\s*\(?\s*!?\s*(?:stack|mono)\s*\.isEmpty\s*\(\)', code, re.IGNORECASE))
+        )
+        has_mono_name = bool(re.search(
+            r'monoton|next.?greater|prev.?greater|next.?smaller|histogram|largest.?rectangle', code, re.IGNORECASE
+        ))
+        return has_mono_name or (has_stack_ops and has_mono_comparison)
 
     def _looks_like_permutation_backtracking(self, code):
         code_lower = code.lower()
-        has_permutation_name = bool(re.search(
-            r'\b(permute|permutation|permutations|backtrack)\b',
-            code_lower
-        ))
-        has_used_flags = bool(re.search(
-            r'boolean\s*\[\]\s*used|used\s*=\s*\[|visited\s*=\s*\[|used\[.*?\]\s*=',
-            code,
-            re.IGNORECASE
-        ))
-        has_result_copy = bool(re.search(
-            r'new\s+ArrayList\s*<|result\.add|results\.append|res\.append|\[\.\.\.current\]',
-            code,
-            re.IGNORECASE
-        ))
+        has_permutation_name = bool(re.search(r'\b(permute|permutation|permutations|backtrack)\b', code_lower))
+        has_used_flags = bool(re.search(r'boolean\s*\[\]\s*used|used\s*=\s*\[|visited\s*=\s*\[|used\[.*?\]\s*=', code, re.IGNORECASE))
+        has_result_copy = bool(re.search(r'new\s+ArrayList\s*<|result\.add|results\.append|res\.append|\[\.\.\.current\]', code, re.IGNORECASE))
         has_backtrack_call = len(re.findall(r'\bbacktrack\s*\(', code, re.IGNORECASE)) >= 2
         has_full_length_base = bool(re.search(
-            r'current\.size\s*\(\)\s*==\s*\w+\.length|len\s*\(\s*current\s*\)\s*==\s*len\s*\(',
-            code,
-            re.IGNORECASE
+            r'current\.size\s*\(\)\s*==\s*\w+\.length|len\s*\(\s*current\s*\)\s*==\s*len\s*\(', code, re.IGNORECASE
         ))
-
-        return (
-            has_permutation_name and
-            has_used_flags and
-            has_result_copy and
-            (has_backtrack_call or has_full_length_base)
-        )
+        return has_permutation_name and has_used_flags and has_result_copy and (has_backtrack_call or has_full_length_base)
 
     def _looks_like_subset_generation(self, code):
-        has_subset_name = bool(re.search(
-            r'\b(subset|subsets|power.?set|powerset|combination|combinations)\b',
-            code,
-            re.IGNORECASE
-        ))
+        has_subset_name = bool(re.search(r'\b(subset|subsets|power.?set|powerset|combination|combinations)\b', code, re.IGNORECASE))
         returns_list_of_lists = bool(re.search(
             r'return\s+\[\s*\[\s*\]\s*\]|return\s+new\s+ArrayList\s*<|return\s+result|return\s+res|return\s+ans',
-            code,
-            re.IGNORECASE
+            code, re.IGNORECASE
         ))
-        recursive_step = bool(re.search(
-            r'\b\w+\s*=\s*(\w+)\s*\([^)]*(?:\+\s*1|-\s*1)[^)]*\)',
-            code
+        recursive_step = bool(re.search(r'\b\w+\s*=\s*(\w+)\s*\([^)]*(?:\+\s*1|-\s*1)[^)]*\)', code))
+        iterates_previous = bool(re.search(
+            r'for\s+\w+\s+in\s+\w+|for\s*\([^;]*:[^)]*\)|for\s*\([^;]*of\s+\w+', code, re.IGNORECASE
         ))
-        iterates_previous_results = bool(re.search(
-            r'for\s+\w+\s+in\s+\w+|for\s*\([^;]*:[^)]*\)|for\s*\([^;]*of\s+\w+',
-            code,
-            re.IGNORECASE
+        duplicates = bool(re.search(
+            r'\.append\s*\(\s*\[|\.append\s*\(\s*\w+\s*\)|\.add\s*\(\s*new\s+ArrayList|'
+            r'\.push\s*\(\s*\[|\[\s*\.\.\.\w+|concat\s*\(',
+            code, re.IGNORECASE
         ))
-        duplicates_or_prepends = bool(re.search(
-            r'\.append\s*\(\s*\[|\.append\s*\(\s*\w+\s*\)|\.append\s*\([^)]*\+\s*\w+\)|'
-            r'\[\s*\w+\[[^]]+\]\s*\]\s*\+\s*\w+|'
-            r'\.add\s*\(\s*new\s+ArrayList|\.push\s*\(\s*\[|'
-            r'\[\s*\.\.\.\w+|concat\s*\(',
-            code,
-            re.IGNORECASE
-        ))
-
-        return (
-            has_subset_name and
-            returns_list_of_lists and
-            recursive_step and
-            iterates_previous_results and
-            duplicates_or_prepends
-        )
+        return has_subset_name and returns_list_of_lists and recursive_step and iterates_previous and duplicates
 
     def _looks_like_subset_backtracking(self, code):
         return (
@@ -1500,25 +2694,24 @@ class CodeAnalyzer:
             call_count = len(re.findall(rf'\b{name}\s*\(', body))
             complexity = recursion_result['complexity']
             rec_type = 'recursive'
-            if complexity == 'O(n)':
-                rec_type = 'linear'
-            elif complexity == 'O(log n)':
+            if complexity in ('O(1)', 'O(log n)'):
                 rec_type = 'divide_conquer_single'
+            elif complexity == 'O(n)':
+                rec_type = 'linear'
             elif complexity == 'O(n log n)':
                 rec_type = 'divide_conquer'
             elif complexity in ('O((log n)!)', 'O(n^log n)'):
                 rec_type = 'quasi_polynomial'
             elif complexity == 'O(A(m, n))':
                 rec_type = 'ackermann'
-            elif '^n)' in complexity:
+            elif 'φⁿ' in complexity:
+                rec_type = 'fibonacci_exponential'
+            elif '^n)' in complexity or 'ⁿ)' in complexity or '2^n' in complexity or '3^n' in complexity:
                 rec_type = 'exponential'
             return {
-                'is_recursive': True,
-                'type': rec_type,
-                'branches': call_count,
-                'func_name': name,
-                'complexity': complexity,
-                'reason': recursion_result['reason']
+                'is_recursive': True, 'type': rec_type,
+                'branches': call_count, 'func_name': name,
+                'complexity': complexity, 'reason': recursion_result['reason']
             }
 
         return {'is_recursive': False}
@@ -1526,50 +2719,33 @@ class CodeAnalyzer:
     def detect_mutual_recursion(self, code, language):
         func_pattern = self._function_def_regex()
         func_names = re.findall(func_pattern, code)
-        bodies = {
-            name: self._extract_function_body(code, name, language)
-            for name in func_names
-        }
+        bodies = {name: self._extract_function_body(code, name, language) for name in func_names}
 
         for caller in func_names:
             caller_body = bodies.get(caller, '')
             if not caller_body:
                 continue
-
             for callee in func_names:
                 if caller == callee:
                     continue
                 if not re.search(rf'\b{callee}\s*\(', caller_body):
                     continue
-
                 callee_body = bodies.get(callee, '')
                 if not re.search(rf'\b{caller}\s*\(', callee_body):
                     continue
-
                 cycle_text = f'{caller_body}\n{callee_body}'
                 if self._mutual_cycle_has_sqrt_shrink(caller, callee, caller_body, callee_body):
                     return {
-                        'detected': True,
-                        'complexity': 'O(log log n)',
-                        'space': 'O(log log n)',
+                        'detected': True, 'complexity': 'O(log log n)', 'space': 'O(log log n)',
                         'functions': [caller, callee],
-                        'reason': (
-                            f"Mutual recursion cycle {caller} -> {callee} -> {caller} "
-                            "shrinks by square root, giving O(log log n) depth"
-                        )
+                        'reason': f'Mutual recursion {caller}↔{callee} shrinks by √n → O(log log n) depth'
                     }
                 if re.search(r'\b\w+\s*-\s*1\b', cycle_text):
                     return {
-                        'detected': True,
-                        'complexity': 'O(n)',
-                        'space': 'O(n)',
+                        'detected': True, 'complexity': 'O(n)', 'space': 'O(n)',
                         'functions': [caller, callee],
-                        'reason': (
-                            f"Mutual recursion cycle {caller} <-> {callee} decreases "
-                            "the input linearly"
-                        )
+                        'reason': f'Mutual recursion {caller}↔{callee} decrements linearly → O(n)'
                     }
-
         return {'detected': False}
 
     def _mutual_cycle_has_sqrt_shrink(self, caller, callee, caller_body, callee_body):
@@ -1577,9 +2753,8 @@ class CodeAnalyzer:
             rf'\b{callee}\s*\([^)]*(?:sqrt|Math\.sqrt)[^)]*\)',
             rf'\b{caller}\s*\([^)]*(?:sqrt|Math\.sqrt)[^)]*\)',
         ]
-        if any(re.search(pattern, caller_body) or re.search(pattern, callee_body) for pattern in call_patterns):
+        if any(re.search(p, caller_body) or re.search(p, callee_body) for p in call_patterns):
             return True
-
         return bool(re.search(r'(?:sqrt|Math\.sqrt)\s*\(', f'{caller_body}\n{callee_body}'))
 
     def _recursive_call_multiplier(self, func_name, body):
@@ -1592,7 +2767,6 @@ class CodeAnalyzer:
         target_names = set(func_complexities.keys())
         if current_func:
             target_names.discard(current_func)
-
         results = []
         for func_name, multiplier in self._call_loop_contexts(body, target_names, current_func):
             callee = func_complexities.get(func_name)
@@ -1611,15 +2785,12 @@ class CodeAnalyzer:
         contexts = []
         loop_stack = []
         lines = body.split('\n')
-
         for index, line in enumerate(lines):
             stripped = line.strip()
             if not stripped:
                 continue
-
             indent = self._get_indent(line)
             loop_stack = [item for item in loop_stack if item['indent'] < indent]
-
             for name in target_names:
                 if name == current_func:
                     continue
@@ -1628,11 +2799,7 @@ class CodeAnalyzer:
                     for loop in loop_stack:
                         multiplier = self._multiply_complexity(multiplier, loop['complexity'])
                     contexts.append((name, self._tuple_to_string(multiplier)))
-
-            is_loop = (
-                re.match(r'for\s*[\(\s]', stripped) or
-                re.match(r'while\s*[\(\s]', stripped)
-            )
+            is_loop = re.match(r'for\s*[\(\s]', stripped) or re.match(r'while\s*[\(\s]', stripped)
             if is_loop:
                 body_after_header = lines[index + 1:]
                 loop_type = (
@@ -1644,13 +2811,19 @@ class CodeAnalyzer:
                     'indent': indent,
                     'complexity': ('log', 1) if loop_type == 'logarithmic' else ('n', 1)
                 })
-
         return contexts
+
+    # ─────────────────────────────────────────────
+    # FUNCTION BODY EXTRACTION
+    # ─────────────────────────────────────────────
 
     def _extract_function_body(self, code, func_name, language):
         if language in ('java', 'cpp', 'c', 'javascript'):
             signature = re.search(
-                rf'(?:def\s+|function\s*\*?\s+|(?:(?:public|private|protected)\s+)?(?:static\s+)?(?:void|int|long|double|float|boolean|bool|char|String|List[\w<>\[\], ?]*|ArrayList[\w<>\[\], ?]*|Map[\w<>\[\], ?]*|HashMap[\w<>\[\], ?]*|vector[\w<>\[\], ?&*]*|[A-Z]\w*(?:<[^)]*>)?)\s+){func_name}\s*\([^)]*\)',
+                rf'(?:def\s+|function\s*\*?\s+|(?:(?:public|private|protected)\s+)?(?:static\s+)?'
+                rf'(?:void|int|long|double|float|boolean|bool|char|String|List[\w<>\[\], ?]*|'
+                rf'ArrayList[\w<>\[\], ?]*|Map[\w<>\[\], ?]*|HashMap[\w<>\[\], ?]*|'
+                rf'vector[\w<>\[\], ?&*]*|[A-Z]\w*(?:<[^)]*>)?)\s+){func_name}\s*\([^)]*\)',
                 code
             )
             if signature:
@@ -1669,10 +2842,15 @@ class CodeAnalyzer:
         in_func = False
         body_lines = []
         base_indent = None
-
         for line in lines:
             stripped = line.strip()
-            if re.match(rf'(?:def\s+|function\s*\*?\s+|(?:(?:public|private|protected)\s+)?(?:static\s+)?(?:void|int|long|double|float|boolean|bool|char|String|List[\w<>\[\], ?]*|ArrayList[\w<>\[\], ?]*|Map[\w<>\[\], ?]*|HashMap[\w<>\[\], ?]*|vector[\w<>\[\], ?&*]*|[A-Z]\w*(?:<[^)]*>)?)\s+){func_name}\s*\(', stripped):
+            if re.match(
+                rf'(?:def\s+|function\s*\*?\s+|(?:(?:public|private|protected)\s+)?(?:static\s+)?'
+                rf'(?:void|int|long|double|float|boolean|bool|char|String|List[\w<>\[\], ?]*|'
+                rf'ArrayList[\w<>\[\], ?]*|Map[\w<>\[\], ?]*|HashMap[\w<>\[\], ?]*|'
+                rf'vector[\w<>\[\], ?&*]*|[A-Z]\w*(?:<[^)]*>)?)\s+){func_name}\s*\(',
+                stripped
+            ):
                 in_func = True
                 base_indent = len(line) - len(line.lstrip())
                 continue
@@ -1684,7 +2862,6 @@ class CodeAnalyzer:
                 if curr_indent <= base_indent and stripped:
                     break
                 body_lines.append(line)
-
         return '\n'.join(body_lines)
 
     def _brace_code_to_indented_lines(self, code):
@@ -1701,25 +2878,19 @@ class CodeAnalyzer:
 
         for char in code:
             if char == '(':
-                paren_depth += 1
-                current.append(char)
+                paren_depth += 1; current.append(char)
             elif char == ')':
-                paren_depth = max(0, paren_depth - 1)
-                current.append(char)
+                paren_depth = max(0, paren_depth - 1); current.append(char)
             elif char == '{':
-                flush()
-                indent += 1
+                flush(); indent += 1
             elif char == '}':
-                flush()
-                indent = max(0, indent - 1)
+                flush(); indent = max(0, indent - 1)
             elif char == ';' and paren_depth == 0:
-                current.append(char)
-                flush()
+                current.append(char); flush()
             elif char == '\n':
                 flush()
             else:
                 current.append(char)
-
         flush()
         return '\n'.join(lines)
 
@@ -1728,217 +2899,141 @@ class CodeAnalyzer:
     # ─────────────────────────────────────────────
 
     def detect_special_loop_patterns(self, code, language):
-        """
-        Handles loop families where plain nesting over/under-estimates:
-        geometric prefix sums and harmonic step loops.
-        """
         compact = re.sub(r'\s+', ' ', code)
+
+        # Two-pointer → O(n)
+        if self._looks_like_two_pointers(code):
+            return {'detected': True, 'complexity': 'O(n)', 'reason': 'Two-pointer: each pointer moves at most n steps total'}
+
+        # Sliding window → O(n)
+        if self._looks_like_sliding_window(code):
+            return {'detected': True, 'complexity': 'O(n)', 'reason': 'Sliding window: each element added and removed at most once'}
+
+        # Monotonic stack → O(n)
+        if self._looks_like_monotonic_stack(code):
+            return {'detected': True, 'complexity': 'O(n)', 'reason': 'Monotonic stack: each element pushed/popped at most once (amortized O(n))'}
+
+        # i*i < n → O(√n) loop
+        sqrt_loop = (
+            bool(re.search(
+                r'for\s*\(?\s*(?:let|var|const|int|long)?\s*(\w+)\s*=\s*[012]\s*;'
+                r'\s*\1\s*\*\s*\1\s*(?:<|<=)\s*\w+', compact, re.IGNORECASE
+            )) or
+            bool(re.search(r'while\s*\(?\s*(\w+)\s*\*\s*\1\s*(?:<|<=)\s*\w+', compact, re.IGNORECASE)) or
+            bool(re.search(r'for\s+\w+\s+in\s+range\s*\(\s*int\s*\(\s*(?:math\.)?sqrt', compact, re.IGNORECASE))
+        )
+        if sqrt_loop:
+            return {'detected': True, 'complexity': 'O(√n)', 'reason': 'Loop condition i*i < n or i < √n — iterates O(√n) times'}
 
         shifted_log_sum = bool(re.search(
             r'while\s+(\w+)\s*<\s*(\w+).*?\b(\w+)\s*=\s*\1\s+'
             r'while\s+\3\s*<\s*\2.*?'
             r'(?:\3\s*\*=\s*2|\3\s*=\s*\3\s*\*\s*2|\3\s*<<=\s*1).*?'
             r'(?:\1\s*\+=\s*1|\1\s*=\s*\1\s*\+\s*1|\1\+\+|\+\+\1)',
-            compact,
-            re.IGNORECASE
+            compact, re.IGNORECASE
         ))
-        shifted_log_for_sum = bool(re.search(
-            r'for\s+(\w+)\s+in\s+range\s*\(\s*(?:1\s*,\s*)?(\w+)\s*\).*?'
-            r'\b(\w+)\s*=\s*\1\s+while\s+\3\s*<\s*\2.*?'
-            r'(?:\3\s*\*=\s*2|\3\s*=\s*\3\s*\*\s*2|\3\s*<<=\s*1)',
-            compact,
-            re.IGNORECASE
-        ))
-        shifted_log_js_sum = bool(re.search(
-            r'for\s*\([^;]*(\w+)\s*=\s*1\s*;\s*\1\s*<\s*(\w+)[^;]*;[^)]*\).*?'
-            r'(?:let|var|const)?\s*(\w+)\s*=\s*\1\s*;.*?'
-            r'while\s*\(?\s*\3\s*<\s*\2\s*\)?.*?'
-            r'(?:\3\s*\*=\s*2|\3\s*=\s*\3\s*\*\s*2|\3\s*<<=\s*1)',
-            compact,
-            re.IGNORECASE
-        ))
-        if shifted_log_sum or shifted_log_for_sum or shifted_log_js_sum:
-            return {
-                'detected': True,
-                'complexity': 'O(n)',
-                'reason': 'Shifted logarithmic inner loop: sum_i log(n/i) = O(n)'
-            }
+        if shifted_log_sum:
+            return {'detected': True, 'complexity': 'O(n)', 'reason': 'Shifted logarithmic inner loop: sum_i log(n/i) = O(n)'}
 
         harmonic_while_python = bool(re.search(
             r'for\s+(\w+)\s+in\s+range\s*\(\s*1\s*,\s*(\w+)(?:\s*\+\s*1)?\s*\).*?'
-            r'\b(\w+)\s*=\s*(?:0|1)\s+while\s+\3\s*(?:<|<=)\s*\2\s*:?.*?'
-            r'\b\3\s*\+=\s*\1\b',
-            compact,
-            re.IGNORECASE
+            r'\b(\w+)\s*=\s*(?:0|1)\s+while\s+\3\s*(?:<|<=)\s*\2\s*:?.*?\b\3\s*\+=\s*\1\b',
+            compact, re.IGNORECASE
         ))
         harmonic_while_js = bool(re.search(
             r'for\s*\(\s*(?:let|var|const|int|long)?\s*(\w+)\s*=\s*1\s*;'
             r'\s*\1\s*<=?\s*(\w+)[^;]*;[^)]*(?:\1\+\+|\+\+\1|\1\s*\+=\s*1)[^)]*\).*?'
             r'(?:let|var|const|int|long)?\s*(\w+)\s*=\s*(?:0|1)\s*;?\s*'
-            r'while\s*\(?\s*\3\s*<=?\s*\2\s*\)?.*?'
-            r'\b\3\s*\+=\s*\1\b',
-            compact,
-            re.IGNORECASE
+            r'while\s*\(?\s*\3\s*<=?\s*\2\s*\)?.*?\b\3\s*\+=\s*\1\b',
+            compact, re.IGNORECASE
         ))
         if harmonic_while_python or harmonic_while_js:
-            return {
-                'detected': True,
-                'complexity': 'O(n log n)',
-                'reason': 'Harmonic step loop: inner work sums n/1 + n/2 + ... + n/n = O(n log n)'
-            }
+            return {'detected': True, 'complexity': 'O(n log n)', 'reason': 'Harmonic step loop: n/1 + n/2 + ... + n/n = O(n log n)'}
 
         geometric_prefix_linear = bool(re.search(
-            r'while\s+(\w+)\s*<\s*\w+.*?for\s+\w+\s+in\s+range\s*\(\s*\1\s*\).*?(?:\1\s*\*=\s*2|\1\s*=\s*\1\s*\*\s*2|\1\s*<<=\s*1)',
-            compact,
-            re.IGNORECASE
+            r'while\s+(\w+)\s*<\s*\w+.*?for\s+\w+\s+in\s+range\s*\(\s*\1\s*\).*?'
+            r'(?:\1\s*\*=\s*2|\1\s*=\s*\1\s*\*\s*2|\1\s*<<=\s*1)',
+            compact, re.IGNORECASE
         ))
         if geometric_prefix_linear:
-            return {
-                'detected': True,
-                'complexity': 'O(n)',
-                'reason': 'Geometric prefix sum detected: 1 + 2 + 4 + ... + n is O(n)'
-            }
-
-        geometric_prefix = bool(re.search(
-            r'while\s+\w+\s*<\s*\w+.*?for\s+\w+\s+in\s+range\s*\(\s*\w+\s*\).*?while\s+\w+\s*<\s*\w+.*?\*=\s*2.*?\*=\s*2',
-            compact,
-            re.IGNORECASE
-        ))
-        if geometric_prefix:
-            return {
-                'detected': True,
-                'complexity': 'O(n log n)',
-                'reason': 'Geometric outer loop sums inner ranges to O(n), with an inner logarithmic loop'
-            }
+            return {'detected': True, 'complexity': 'O(n)', 'reason': 'Geometric prefix sum: 1+2+4+...+n = O(n)'}
 
         harmonic_step_js = bool(re.search(
-            r'for\s*\(\s*(?:let|var|const)?\s*(\w+)\s*=[^;]*;\s*\1\s*\*\s*\1\s*<=?\s*\w+[^;]*;\s*\1\+\+.*?for\s*\([^;]*;[^;]*<\s*\w+[^;]*;\s*\w+\s*\+=\s*\1\s*\)',
-            compact,
-            re.IGNORECASE
+            r'for\s*\(\s*(?:let|var|const)?\s*(\w+)\s*=[^;]*;\s*\1\s*\*\s*\1\s*<=?\s*\w+[^;]*;\s*\1\+\+.*?'
+            r'for\s*\([^;]*;[^;]*<\s*\w+[^;]*;\s*\w+\s*\+=\s*\1\s*\)',
+            compact, re.IGNORECASE
         ))
         harmonic_step_python = bool(re.search(
             r'for\s+\w+\s+in\s+range\s*\(\s*1\s*,.*?\).*?for\s+\w+\s+in\s+range\s*\(\s*0\s*,\s*\w+\s*,\s*\w+\s*\)',
-            compact,
-            re.IGNORECASE
+            compact, re.IGNORECASE
         ))
         if harmonic_step_js or harmonic_step_python:
-            return {
-                'detected': True,
-                'complexity': 'O(n log n)',
-                'reason': 'Harmonic loop detected: inner work is n/1 + n/2 + ... = O(n log n)'
-            }
+            return {'detected': True, 'complexity': 'O(n log n)', 'reason': 'Harmonic loop: n/1 + n/2 + ... = O(n log n)'}
 
         return {'detected': False}
 
     def detect_catastrophic_regex(self, code):
-        """
-        Detects regexes with nested ambiguous quantifiers that can cause
-        catastrophic backtracking in engines such as JavaScript RegExp.
-        """
         regex_patterns = []
-
-        regex_patterns.extend(re.findall(
-            r'/(.+?)/[gimsuy]*',
-            code
-        ))
-        regex_patterns.extend(re.findall(
-            r'RegExp\s*\(\s*[\'"](.+?)[\'"]',
-            code
-        ))
-        regex_patterns.extend(re.findall(
-            r're\.compile\s*\(\s*[rR]?[\'"](.+?)[\'"]',
-            code
-        ))
-
+        regex_patterns.extend(re.findall(r'/(.+?)/[gimsuy]*', code))
+        regex_patterns.extend(re.findall(r'RegExp\s*\(\s*[\'"](.+?)[\'"]', code))
+        regex_patterns.extend(re.findall(r're\.compile\s*\(\s*[rR]?[\'"](.+?)[\'"]', code))
         if not regex_patterns:
             return {'detected': False}
-
         regex_is_used = bool(re.search(
-            r'\.test\s*\(|\.match\s*\(|\.search\s*\(|\.exec\s*\(|re\.(?:match|search|fullmatch)\s*\(',
-            code
+            r'\.test\s*\(|\.match\s*\(|\.search\s*\(|\.exec\s*\(|re\.(?:match|search|fullmatch)\s*\(', code
         ))
         if not regex_is_used:
             return {'detected': False}
-
         for pattern in regex_patterns:
             if self._has_catastrophic_regex_shape(pattern):
                 return {
-                    'detected': True,
-                    'complexity': 'O(2^n)',
-                    'space': 'O(n)',
+                    'detected': True, 'complexity': 'O(2^n)', 'space': 'O(n)',
                     'pattern': pattern,
-                    'reason': (
-                        'Catastrophic regex backtracking detected: nested ambiguous '
-                        'quantifiers can try exponentially many matches'
-                    )
+                    'reason': 'Catastrophic regex backtracking: nested ambiguous quantifiers can try exponentially many matches'
                 }
-
         return {'detected': False}
 
     def _has_catastrophic_regex_shape(self, pattern):
-        nested_quantifier = bool(re.search(
-            r'\((?:[^()\\]|\\.)*[+*](?:[^()\\]|\\.)*\)\s*[+*{]',
-            pattern
-        ))
-        overlapping_alternation = bool(re.search(
-            r'\(([^|()]+)\|(\1[^()]*)\)\s*[+*{]',
-            pattern
-        ))
-        repeated_wildcard = bool(re.search(
-            r'\((?:\.\*|\.\+|\[[^\]]+\][+*])\)\s*[+*{]',
-            pattern
-        ))
+        nested_quantifier = bool(re.search(r'\((?:[^()\\]|\\.)*[+*](?:[^()\\]|\\.)*\)\s*[+*{]', pattern))
+        overlapping_alternation = bool(re.search(r'\(([^|()]+)\|(\1[^()]*)\)\s*[+*{]', pattern))
+        repeated_wildcard = bool(re.search(r'\((?:\.\*|\.\+|\[[^\]]+\][+*])\)\s*[+*{]', pattern))
         return nested_quantifier or overlapping_alternation or repeated_wildcard
 
     def _is_sorting_call(self, line):
-        return bool(re.search(
-            r'\.sort\s*\(|\bsorted\s*\(|Arrays\.sort|Collections\.sort|\bsort\s*\(',
-            line
-        ))
+        return bool(re.search(r'\.sort\s*\(|\bsorted\s*\(|Arrays\.sort|Collections\.sort|\bsort\s*\(', line))
 
     def _sorting_complexity(self, code):
         if not any(self._is_sorting_call(line) for line in code.split('\n')):
             return None
-
         max_depth = self._max_sorting_loop_depth(code)
-        if max_depth <= 0:
-            return 'O(n log n)'
-        if max_depth == 1:
-            return 'O(n² log n)'
-        if max_depth == 2:
-            return 'O(n³ log n)'
+        if max_depth <= 0: return 'O(n log n)'
+        if max_depth == 1: return 'O(n² log n)'
+        if max_depth == 2: return 'O(n³ log n)'
         return f'O(n^{max_depth + 1} log n)'
 
     def _max_sorting_loop_depth(self, code):
         loop_stack = []
         max_depth = 0
-
         for line in code.split('\n'):
             stripped = line.strip()
             if not stripped:
                 continue
-
             indent = self._get_indent(line)
             loop_stack = [level for level in loop_stack if level < indent]
-
             if self._is_sorting_call(stripped):
                 max_depth = max(max_depth, len(loop_stack))
-
             if re.match(r'(for|while)\s*[\(\s]', stripped):
                 loop_stack.append(indent)
-
         return max_depth
 
     def classify_loop(self, body_lines, all_lines, lang):
         body = '\n'.join(body_lines) if isinstance(body_lines, list) else body_lines
         log_patterns = [
-            r'\*=\s*2', r'\/=\s*2', r'>>=\s*1', r'<<=\s*1',
+            r'\*=\s*[2-9]', r'\/=\s*[2-9]', r'>>=\s*1', r'<<=\s*1',
             r'Math\.floor\s*\(\s*\w+\s*\/\s*2\s*\)',
-            r'\w+\s*=\s*\w+\s*\*\s*2',
-            r'\w+\s*=\s*\w+\s*\/\s*2',
+            r'\w+\s*=\s*\w+\s*\*\s*[2-9]', r'\w+\s*=\s*\w+\s*\/\s*[2-9]',
             r'\b(\w+)\s*\+=\s*\(?\s*\1\s*&\s*-\s*\1\s*\)?',
             r'\b(\w+)\s*-=\s*\(?\s*\1\s*&\s*-\s*\1\s*\)?',
-            r'\b(\w+)\s*=\s*\1\s*[+-]\s*\(?\s*\1\s*&\s*-\s*\1\s*\)?',
         ]
         for pattern in log_patterns:
             if re.search(pattern, body):
@@ -1949,23 +3044,18 @@ class CodeAnalyzer:
         control = self._loop_control_variable(header)
         if not control:
             return self.classify_loop(body_lines, all_lines, lang)
-
         body = '\n'.join(body_lines) if isinstance(body_lines, list) else str(body_lines)
-        control_growth_patterns = [
-            rf'\b{control}\s*\*=\s*2\b',
-            rf'\b{control}\s*=\s*{control}\s*\*\s*2\b',
-            rf'\b{control}\s*=\s*2\s*\*\s*{control}\b',
-            rf'\b{control}\s*<<=\s*1\b',
-            rf'\b{control}\s*(?://|/)=\s*2\b',
-            rf'\b{control}\s*=\s*{control}\s*(?://|/)\s*2\b',
+        patterns = [
+            rf'\b{control}\s*\*=\s*[2-9]\b', rf'\b{control}\s*=\s*{control}\s*\*\s*[2-9]\b',
+            rf'\b{control}\s*=\s*[2-9]\s*\*\s*{control}\b', rf'\b{control}\s*<<=\s*1\b',
+            rf'\b{control}\s*(?://|/)=\s*[2-9]\b', rf'\b{control}\s*=\s*{control}\s*(?://|/)\s*[2-9]\b',
             rf'\b{control}\s*>>=\s*1\b',
             rf'\b{control}\s*\+=\s*\(?\s*{control}\s*&\s*-\s*{control}\s*\)?',
             rf'\b{control}\s*-=\s*\(?\s*{control}\s*&\s*-\s*{control}\s*\)?',
-            rf'\b{control}\s*=\s*{control}\s*[+-]\s*\(?\s*{control}\s*&\s*-\s*{control}\s*\)?',
             rf'\b{control}\s*=\s*{control}\s*&\s*\(?\s*{control}\s*-\s*1\s*\)?',
             rf'\b{control}\s*&=\s*\(?\s*{control}\s*-\s*1\s*\)?',
         ]
-        if any(re.search(pattern, body) for pattern in control_growth_patterns):
+        if any(re.search(p, body) for p in patterns):
             return 'logarithmic'
         return 'linear'
 
@@ -1974,14 +3064,9 @@ class CodeAnalyzer:
         if js_for:
             update = js_for.group(1).strip()
             for p in [
-                r'\*=\s*2',
-                r'\/=\s*2',
-                r'>>=\s*1',
-                r'=\s*\w+\s*\*\s*2',
-                r'=\s*\w+\s*\/\s*2',
+                r'\*=\s*[2-9]', r'\/=\s*[2-9]', r'>>=\s*1',
+                r'=\s*\w+\s*\*\s*[2-9]', r'=\s*\w+\s*\/\s*[2-9]',
                 r'\b(\w+)\s*\+=\s*\(?\s*\1\s*&\s*-\s*\1\s*\)?',
-                r'\b(\w+)\s*-=\s*\(?\s*\1\s*&\s*-\s*\1\s*\)?',
-                r'\b(\w+)\s*=\s*\1\s*[+-]\s*\(?\s*\1\s*&\s*-\s*\1\s*\)?',
             ]:
                 if re.search(p, update):
                     return 'logarithmic'
@@ -1994,59 +3079,32 @@ class CodeAnalyzer:
         while_match = re.search(r'while\s*\(?\s*(\w+)\s*(?:<|<=|>|>=)', header)
         if while_match:
             return while_match.group(1)
-
-        for_match = re.search(
-            r'for\s*\(\s*(?:(?:let|var|const|int|long|size_t)\s+)?(\w+)\s*=',
-            header
-        )
+        for_match = re.search(r'for\s*\(\s*(?:(?:let|var|const|int|long|size_t)\s+)?(\w+)\s*=', header)
         if for_match:
             return for_match.group(1)
-
         return None
 
     def _loop_growth_variable(self, header, body_lines):
         control = self._loop_control_variable(header)
         if not control:
             return None
-
         body = '\n'.join(body_lines) if isinstance(body_lines, list) else str(body_lines)
         growth_patterns = [
-            rf'\b{control}\s*\*=\s*2\b',
-            rf'\b{control}\s*=\s*{control}\s*\*\s*2\b',
-            rf'\b{control}\s*=\s*2\s*\*\s*{control}\b',
+            rf'\b{control}\s*\*=\s*[2-9]\b', rf'\b{control}\s*=\s*{control}\s*\*\s*[2-9]\b',
             rf'\b{control}\s*<<=\s*1\b',
-            rf'\b{control}\s*(?://|/)=\s*2\b',
-            rf'\b{control}\s*=\s*{control}\s*(?://|/)\s*2\b',
+            rf'\b{control}\s*(?://|/)=\s*[2-9]\b', rf'\b{control}\s*=\s*{control}\s*(?://|/)\s*[2-9]\b',
             rf'\b{control}\s*>>=\s*1\b',
             rf'\b{control}\s*\+=\s*\(?\s*{control}\s*&\s*-\s*{control}\s*\)?',
-            rf'\b{control}\s*-=\s*\(?\s*{control}\s*&\s*-\s*{control}\s*\)?',
-            rf'\b{control}\s*=\s*{control}\s*[+-]\s*\(?\s*{control}\s*&\s*-\s*{control}\s*\)?',
             rf'\b{control}\s*=\s*{control}\s*&\s*\(?\s*{control}\s*-\s*1\s*\)?',
             rf'\b{control}\s*&=\s*\(?\s*{control}\s*-\s*1\s*\)?',
         ]
         if any(re.search(pattern, body) for pattern in growth_patterns):
             return control
-
         js_for = re.search(r'for\s*\([^;]*;[^;]*;([^)]*)\)', header)
         if js_for:
             update = js_for.group(1)
-            update_patterns = [
-                rf'\b{control}\s*\*=\s*2\b',
-                rf'\b{control}\s*=\s*{control}\s*\*\s*2\b',
-                rf'\b{control}\s*=\s*2\s*\*\s*{control}\b',
-                rf'\b{control}\s*<<=\s*1\b',
-                rf'\b{control}\s*(?://|/)=\s*2\b',
-                rf'\b{control}\s*=\s*{control}\s*(?://|/)\s*2\b',
-                rf'\b{control}\s*>>=\s*1\b',
-                rf'\b{control}\s*\+=\s*\(?\s*{control}\s*&\s*-\s*{control}\s*\)?',
-                rf'\b{control}\s*-=\s*\(?\s*{control}\s*&\s*-\s*{control}\s*\)?',
-                rf'\b{control}\s*=\s*{control}\s*[+-]\s*\(?\s*{control}\s*&\s*-\s*{control}\s*\)?',
-                rf'\b{control}\s*=\s*{control}\s*&\s*\(?\s*{control}\s*-\s*1\s*\)?',
-                rf'\b{control}\s*&=\s*\(?\s*{control}\s*-\s*1\s*\)?',
-            ]
-            if any(re.search(pattern, update) for pattern in update_patterns):
+            if any(re.search(pattern, update) for pattern in growth_patterns):
                 return control
-
         return None
 
     def _loop_bound_variables(self, header):
@@ -2057,7 +3115,6 @@ class CodeAnalyzer:
             for arg in args[:2]:
                 bounds.update(re.findall(r'\b[a-zA-Z_]\w*\b', arg))
             return bounds
-
         js_match = re.search(r'for\s*\([^;]*;([^;]*);[^)]*\)', header)
         if js_match:
             control = self._loop_control_variable(header)
@@ -2069,13 +3126,11 @@ class CodeAnalyzer:
                 for bound in re.findall(rf'\b(\w+)\s*(?:<|<=|>|>=)\s*{control}\b', condition):
                     bounds.add(bound)
             return bounds
-
         return set()
 
     def _loop_bound_complexity(self, header, loop_type):
         if loop_type == 'logarithmic':
             return ('log', 1)
-
         range_match = re.search(r'for\s+\w+\s+in\s+range\s*\(([^)]*)\)', header)
         if range_match:
             args = [arg.strip() for arg in range_match.group(1).split(',')]
@@ -2083,7 +3138,6 @@ class CodeAnalyzer:
             power = self._polynomial_bound_power(bound)
             if power:
                 return ('n', power)
-
         js_match = re.search(r'for\s*\([^;]*;([^;]*);[^)]*\)', header)
         if js_match:
             control = self._loop_control_variable(header)
@@ -2093,41 +3147,32 @@ class CodeAnalyzer:
                 power = self._polynomial_bound_power(bound)
                 if power:
                     return ('n', power)
-
         return ('n', 1)
 
     def _condition_bound_expression(self, condition, control):
         right = re.search(rf'\b{control}\s*(?:<|<=)\s*(.+)$', condition)
         if right:
             return right.group(1).strip()
-
         left = re.search(rf'^(.+?)\s*(?:<|<=)\s*{control}\b', condition)
         if left:
             return left.group(1).strip()
-
         return ''
 
     def _polynomial_bound_power(self, expression):
         expression = expression.strip()
         if not expression:
             return 1
-
         if re.fullmatch(r'\d+', expression):
             return 0
-
         expr = re.sub(r'\s+', '', expression)
-
         exponent_match = re.fullmatch(r'\w+(?:\*\*|\^)(\d+)', expr)
         if exponent_match:
             return int(exponent_match.group(1))
-
         factors = expr.split('*')
         if len(factors) > 1 and all(re.fullmatch(r'\w+', factor) for factor in factors):
             return len(factors)
-
         if re.fullmatch(r'\w+', expr):
             return 1
-
         return 1
 
     def extract_loop_tree(self, code, lang):
@@ -2147,10 +3192,7 @@ class CodeAnalyzer:
                 i += 1
                 continue
             indent = self._get_indent(line)
-            is_loop = (
-                re.match(r'for\s*[\(\s]', stripped) or
-                re.match(r'while\s*[\(\s]', stripped)
-            )
+            is_loop = re.match(r'for\s*[\(\s]', stripped) or re.match(r'while\s*[\(\s]', stripped)
             if is_loop and indent >= start_indent:
                 body_lines = []
                 j = i + 1
@@ -2172,9 +3214,7 @@ class CodeAnalyzer:
                     loop_type = self.classify_for_loop(header, body_lines, lines, lang)
                 children = self._parse_loops(body_lines, 0, lang)
                 loops.append({
-                    'type': loop_type,
-                    'header': header,
-                    'children': children,
+                    'type': loop_type, 'header': header, 'children': children,
                     'growth_var': self._loop_growth_variable(header, body_lines),
                     'bound_vars': self._loop_bound_variables(header),
                     'bound_complexity': self._loop_bound_complexity(header, loop_type),
@@ -2226,29 +3266,25 @@ class CodeAnalyzer:
             return a
         if type_a in ('quasi_log_fact', 'quasi_poly') or type_b in ('quasi_log_fact', 'quasi_poly'):
             return ('quasi_poly', 1)
+        log_powers = {'log': 1, 'log2': 2, 'log3': 3, 'log4': 4}
+        if type_a in log_powers and type_b in log_powers:
+            return self._log_power_tuple(log_powers[type_a] + log_powers[type_b])
         if type_a == 'log' and type_b == 'n':
-            if pow_b == 2:
-                return ('n2_log', 1)
-            if pow_b == 3:
-                return ('n3_log', 1)
+            if pow_b == 2: return ('n2_log', 1)
+            if pow_b == 3: return ('n3_log', 1)
             return ('n_log', 1)
         if type_a == 'n' and type_b == 'log':
-            if pow_a == 2:
-                return ('n2_log', 1)
-            if pow_a == 3:
-                return ('n3_log', 1)
+            if pow_a == 2: return ('n2_log', 1)
+            if pow_a == 3: return ('n3_log', 1)
             return ('n_log', 1)
         combos = {
             ('n', 'n'): ('n', pow_a + pow_b),
-            ('n', 'log'): ('n_log', 1),
-            ('log', 'n'): ('n_log', 1),
+            ('n', 'log'): ('n_log', 1), ('log', 'n'): ('n_log', 1),
             ('log', 'log'): ('log2', 1),
-            ('n', 'n_log'): ('n2_log', 1),
-            ('n_log', 'n'): ('n2_log', 1),
-            ('n', 'log2'): ('n_log2', 1),
-            ('log2', 'n'): ('n_log2', 1),
-            ('n_log', 'log'): ('n_log2', 1),
-            ('log', 'n_log'): ('n_log2', 1),
+            ('n', 'n_log'): ('n2_log', 1), ('n_log', 'n'): ('n2_log', 1),
+            ('n', 'log2'): ('n_log2', 1), ('log2', 'n'): ('n_log2', 1),
+            ('n_log', 'log'): ('n_log2', 1), ('log', 'n_log'): ('n_log2', 1),
+            ('sqrt', 'n'): ('n', 2),
         }
         result = combos.get((type_a, type_b))
         if result:
@@ -2257,20 +3293,31 @@ class CodeAnalyzer:
             return ('n', pow_a + pow_b)
         return ('n', pow_a + pow_b)
 
+    def _log_power_tuple(self, power):
+        if power <= 1:
+            return ('log', 1)
+        if power == 2:
+            return ('log2', 1)
+        if power == 3:
+            return ('log3', 1)
+        if power == 4:
+            return ('log4', 1)
+        return ('logp', power)
+
     def _complexity_rank(self, c):
         type_c, pow_c = c
         ranks = {
-            'const': 0, 'loglog': 0.5, 'log': 1, 'log2': 2, 'sqrt': 2.5,
+            'const': 0, 'alpha': 0.05, 'loglog': 0.5, 'log': 1,
+            'log2': 2, 'log3': 2.2, 'log4': 2.3, 'logp': 2.4, 'sqrt': 2.5,
             'n': 10, 'n_log': 20, 'n_log2': 25,
-            'n2_log': 35, 'n3_log': 45, 'factorial': 110,
-            'n_factorial': 120, 'ackermann': 140, 'exp': 100, 'n_exp': 105,
-            'quasi_log_fact': 90, 'quasi_poly': 90
+            'n2_log': 35, 'n3_log': 45,
+            'strassen': 28,
+            'quasi_log_fact': 90, 'quasi_poly': 90,
+            'phi_exp': 95, 'exp': 100, 'n_exp': 105,
+            'factorial': 110, 'n_factorial': 120, 'ackermann': 140,
         }
         if type_c == 'n':
-            if pow_c == 1: return 10
-            if pow_c == 2: return 30
-            if pow_c == 3: return 40
-            return 40 + pow_c
+            return 10 * float(pow_c)
         return ranks.get(type_c, 10)
 
     def _max_complexity_tuple(self, complexities):
@@ -2290,63 +3337,113 @@ class CodeAnalyzer:
             return s
         mapping = {
             'O(1)': ('const', 0),
+            'O(1) amortized': ('const', 0),
+            'O(log n) amortized': ('log', 1),
+            'O(α(n))': ('alpha', 1),
             'O(log log n)': ('loglog', 1),
+            'O(log log U)': ('loglog', 1),
             'O(log n)': ('log', 1),
+            'O(log_t n)': ('log', 1),
+            'O(log n) to O(1)': ('log', 1),
+            'O(log min(a,b))': ('log', 1),
+            'O(log p)': ('log', 1),
+            'O(k log² n)': ('log2', 1),
             'O(log² n)': ('log2', 1),
+            'O(log^2 n)': ('log2', 1),
+            'O(log³ n)': ('log3', 1),
+            'O(log^3 n)': ('log3', 1),
             'O(√n)': ('sqrt', 1),
+            'O(n^(1/4))': ('n', 1),
             'O(n)': ('n', 1),
             'O(n log log n)': ('n', 1),
             'O(n log n)': ('n_log', 1),
             'O(n log² n)': ('n_log2', 1),
-            'O(n²)': ('n', 2),
-            'O(n^2)': ('n', 2),
-            'O(n² log n)': ('n2_log', 1),
-            'O(n^2 log n)': ('n2_log', 1),
-            'O(n³)': ('n', 3),
-            'O(n^3)': ('n', 3),
-            'O(n³ log n)': ('n3_log', 1),
-            'O(n^3 log n)': ('n3_log', 1),
+            'O(n log n) build, O(1) query': ('n_log', 1),
+            'O(n log n) preprocess, O(log n) query': ('n_log', 1),
+            'O(n log n) build, O(log n) query': ('n_log', 1),
+            'O(n log n) build, O(log² n) query': ('n_log', 1),
+            'O(n log n) worst, O(n) best': ('n_log', 1),
+            'O(n) build, O(log n) query/update': ('n', 1),
+            'O(n²)': ('n', 2), 'O(n^2)': ('n', 2),
+            'O(n² log n)': ('n2_log', 1), 'O(n^2 log n)': ('n2_log', 1),
+            'O(n³)': ('n', 3), 'O(n^3)': ('n', 3),
+            'O(n³ log n)': ('n3_log', 1), 'O(n^3 log n)': ('n3_log', 1),
+            'O(n^2.807)': ('strassen', 1),
+            'O(n^1.585)': ('n', 1.585),
+            'O(φⁿ)': ('phi_exp', 1),
             'O(n!)': ('factorial', 1),
             'O((log n)!)': ('quasi_log_fact', 1),
             'O(n^log n)': ('quasi_poly', 1),
-            'O(n × n!)': ('n_factorial', 1),
-            'O(n * n!)': ('n_factorial', 1),
+            'O(n × n!)': ('n_factorial', 1), 'O(n * n!)': ('n_factorial', 1),
             'O(A(m, n))': ('ackermann', 1),
-            'O(2ⁿ)': ('exp', 2),
-            'O(2^n)': ('exp', 2),
-            'O(n * 2^n)': ('n_exp', 2),
-            'O(n × 2^n)': ('n_exp', 2),
+            'O(2ⁿ)': ('exp', 2), 'O(2^n)': ('exp', 2),
+            'O(2^(n/2))': ('exp', 2),
+            'O(n * 2^n)': ('n_exp', 2), 'O(n × 2^n)': ('n_exp', 2),
             'O(n² × 2^n)': ('n_exp', 2),
-            'O(3ⁿ)': ('exp', 3),
-            'O(3^n)': ('exp', 3),
-            'O((V + E) log V)': ('n_log', 1),
-            'O(V + E)': ('n', 1),
-            'O(V × E)': ('n', 2),
-            'O(V³)': ('n', 3),
-            'O(n + k)': ('n', 1),
-            'O(n + m)': ('n', 1),
-            'O(n × m)': ('n', 2),
+            'O(3ⁿ)': ('exp', 3), 'O(3^n)': ('exp', 3),
+            'O((V + E) log V)': ('n_log', 1), 'O(V + E)': ('n', 1),
+            'O(E log V)': ('n_log', 1), 'O(E log E)': ('n_log', 1),
+            'O(E√V)': ('n', 2),
+            'O(V × E)': ('n', 2), 'O(V E²)': ('n', 3), 'O(V³)': ('n', 3),
+            'O(V²E)': ('n', 3), 'O(V² log V + VE)': ('n2_log', 1),
+            'O(n + k)': ('n', 1), 'O(n + m)': ('n', 1), 'O(n × m)': ('n', 2),
+            'O(n + m + z)': ('n', 1),
             'O(log n) query/update': ('log', 1),
-            'O(n) build, O(log n) query/update': ('n', 1),
             'O((n + q) √n)': ('n', 2),
             'O(n log n) average, O(n²) worst': ('n', 2),
             'O(n + m) average': ('n', 1),
+            'O(n/m) best, O(nm) worst': ('n', 2),
+            'O(m)': ('log', 1),
+            'O(k)': ('const', 0),
+            'O(k log M)': ('log', 1),
+            'O(k³ log n)': ('n', 3),
+            'O(epochs × n × L × w)': ('n', 2),
+            'O(epochs × batch × L × w)': ('n', 2),
+            'O(iterations × n)': ('n', 1),
+            'O(n × d²)': ('n', 2),
+            'O(k × n log n × d)': ('n_log', 1),
+            'O(k × n log n × √d)': ('n_log', 1),
+            'O(9^m)': ('exp', 9),
+            'O(iterations)': ('n', 1),
+            'O(generations × population × fitness_cost)': ('n', 2),
+            'O(1) average, O(n) worst': ('n', 1),
+            'O(k³)': ('n', 3),
+            'O(input size)': ('n', 1),
+            'O(popcount(n)), worst-case O(log n)': ('log', 1),
+            'O(expected)': ('n', 1),
+            'O(2^n) worst, much better with good bounds': ('exp', 2),
+            'O(b^(d/2))': ('exp', 2),
+            'O(n × W)': ('n', 2),
+            'O(n² × m)': ('n', 3),
+            'O(n² × 2^n)': ('n_exp', 2),
+            'O(n log n × d)': ('n_log', 1),
+            'O(k × n)': ('n', 1),
+            'O(n log n) build, O(log² n) query': ('n_log', 1),
         }
+        fractional = re.fullmatch(r'O\(n\^([0-9]+(?:\.[0-9]+)?)\)', s)
+        if fractional:
+            return ('n', float(fractional.group(1)))
         return mapping.get(s, ('n', 1))
 
     def _tuple_to_string(self, c):
         type_c, pow_c = c
         mapping = {
-            'const': 'O(1)', 'loglog': 'O(log log n)', 'log': 'O(log n)', 'log2': 'O(log² n)', 'sqrt': 'O(√n)',
+            'const': 'O(1)', 'alpha': 'O(α(n))', 'loglog': 'O(log log n)',
+            'log': 'O(log n)', 'log2': 'O(log² n)', 'log3': 'O(log³ n)',
+            'log4': 'O(log^4 n)', 'sqrt': 'O(√n)',
             'n_log': 'O(n log n)', 'n_log2': 'O(n log² n)',
             'n2_log': 'O(n² log n)', 'n3_log': 'O(n³ log n)',
             'factorial': 'O(n!)', 'n_factorial': 'O(n * n!)',
             'ackermann': 'O(A(m, n))',
             'quasi_log_fact': 'O((log n)!)', 'quasi_poly': 'O(n^log n)',
             'n_exp': f'O(n * {pow_c}^n)', 'exp': f'O({pow_c}^n)',
+            'strassen': 'O(n^2.807)',
+            'phi_exp': 'O(φⁿ)',
         }
         if type_c in mapping:
             return mapping[type_c]
+        if type_c == 'logp':
+            return f'O(log^{pow_c} n)'
         if type_c == 'n':
             if pow_c == 1: return 'O(n)'
             if pow_c == 2: return 'O(n²)'
@@ -2359,83 +3456,44 @@ class CodeAnalyzer:
     # ─────────────────────────────────────────────
 
     def detect_time_complexity(self, code, language):
-        # 1. Check graph algorithms first
         graph = self.detect_graph_algorithm(code)
         if graph['detected']:
-            return {
-                'complexity': graph['complexity'],
-                'reason': graph['reason'],
-                'graph': graph,
-                'recursion': None
-            }
+            return {'complexity': graph['complexity'], 'reason': graph['reason'], 'graph': graph, 'recursion': None}
 
-        # 2. Check known algorithms that should override structural loop analysis
         known = self.detect_known_algorithm(code)
         if known['detected'] and known.get('algorithm') != 'Dynamic Programming':
-            return {
-                'complexity': known['complexity'],
-                'reason': known['reason'],
-                'known': known,
-                'recursion': None
-            }
+            return {'complexity': known['complexity'], 'reason': known['reason'], 'known': known, 'recursion': None}
 
-        # 3. Analyze recursion
         recursion = self.analyze_recursion(code, language)
         mutual_recursion = self.detect_mutual_recursion(code, language)
 
         if known['detected']:
-            return {
-                'complexity': known['complexity'],
-                'reason': known['reason'],
-                'known': known,
-                'recursion': None
-            }
+            return {'complexity': known['complexity'], 'reason': known['reason'], 'known': known, 'recursion': None}
 
         if mutual_recursion['detected']:
             return {
                 'complexity': mutual_recursion['complexity'],
                 'reason': mutual_recursion['reason'],
-                'known': None,
-                'recursion': mutual_recursion,
-                'graph': None
+                'known': None, 'recursion': mutual_recursion, 'graph': None
             }
 
-        # 4. Regex engine behavior can dominate ordinary loop structure
         regex = self.detect_catastrophic_regex(code)
         if regex['detected']:
-            return {
-                'complexity': regex['complexity'],
-                'reason': regex['reason'],
-                'known': None,
-                'recursion': None,
-                'graph': None,
-                'regex': regex
-            }
+            return {'complexity': regex['complexity'], 'reason': regex['reason'], 'known': None, 'recursion': None, 'graph': None}
 
-        # 5. Analyze special loop summations before generic nesting
         special_loop = self.detect_special_loop_patterns(code, language)
         if special_loop['detected']:
-            return {
-                'complexity': special_loop['complexity'],
-                'reason': special_loop['reason'],
-                'known': None,
-                'recursion': None,
-                'graph': None
-            }
+            return {'complexity': special_loop['complexity'], 'reason': special_loop['reason'], 'known': None, 'recursion': None, 'graph': None}
 
-        # 6. Analyze loops
         loops = self.extract_loop_tree(code, language)
         loop_complexity = self.compute_loop_complexity(loops)
-
         sorting_complexity = self._sorting_complexity(code)
-        has_sorting = sorting_complexity is not None
 
-        if not loops and not recursion['is_recursive'] and not has_sorting:
+        if not loops and not recursion['is_recursive'] and not sorting_complexity:
             return {'complexity': 'O(1)', 'reason': 'No loops or recursion found', 'recursion': None}
 
         candidates = []
         reasons = []
-
         if loop_complexity:
             candidates.append(loop_complexity)
             reasons.append(f'Loop analysis: {loop_complexity}')
@@ -2481,8 +3539,7 @@ class CodeAnalyzer:
         has_dict = bool(re.search(r'\{\}|new\s+HashMap|new\s+Map\(\)|dict\(\)', code))
         has_array = bool(re.search(
             r'=\s*\[\]|new\s+Array|new\s+ArrayList|new\s+\w+\s*\[|Arrays\.copyOf|copyOf\s*\(|\.append\(',
-            code,
-            re.MULTILINE
+            code, re.MULTILINE
         ))
         has_cpp_vector_alloc = any(
             re.search(r'\bvector\s*<[^>]+>\s+\w+\s*(?:\(|=|\{)', line.strip()) and
@@ -2495,13 +3552,17 @@ class CodeAnalyzer:
         func_complexities = self._extract_all_function_complexities(code, language)
         materialized_complexity = self._materialized_generator_complexity(code, func_complexities)
 
+        # Two-pointer / sliding window → O(1) if no auxiliary data structures
+        if self._looks_like_two_pointers(code) and not has_array and not has_dict:
+            return 'O(1)'
+        if self._looks_like_sliding_window(code) and not has_2d:
+            return 'O(n)' if (has_array or has_dict) else 'O(1)'
+
         if materialized_complexity:
             return materialized_complexity
         if has_recursion and recursion.get('type') == 'ackermann':
             return 'O(A(m, n))'
-        if has_recursion and self._has_recursive_shrinking_substring_calls(
-            recursion.get('func_name', ''), code
-        ):
+        if has_recursion and self._has_recursive_shrinking_substring_calls(recursion.get('func_name', ''), code):
             return 'O(n²)'
         if has_dp and has_2d: return 'O(n²)'
         if has_dp: return 'O(n)'
@@ -2509,7 +3570,7 @@ class CodeAnalyzer:
         if has_recursion and recursion.get('type') == 'quasi_polynomial':
             return 'O(n)'
         if has_recursion and re.search(r'\/\s*2|>>\s*1|mid\s*=|Math\.floor\s*\(\s*\w+\s*\/\s*2', code):
-            return 'O(log n)'
+            return 'O(n)' if has_array else 'O(log n)'
         if has_recursion: return 'O(n)'
         if has_array or has_dict or has_cpp_vector_alloc: return 'O(n)'
         return 'O(1)'
@@ -2533,11 +3594,10 @@ class CodeAnalyzer:
         self._check_nested_loop_issues(loops, issues, lines)
 
         recursion = self.analyze_recursion(code, language)
-        if recursion['is_recursive'] and recursion.get('type') == 'exponential':
+        if recursion['is_recursive'] and recursion.get('type') in ('exponential', 'fibonacci_exponential'):
             issues.append({
                 'line': self._find_recursive_func_line(code, lines),
-                'type': 'performance',
-                'severity': 'high',
+                'type': 'performance', 'severity': 'high',
                 'message': f'Exponential recursion ({recursion["complexity"]}) — add memoization or use dynamic programming'
             })
 
@@ -2545,26 +3605,21 @@ class CodeAnalyzer:
         if regex['detected']:
             issues.append({
                 'line': self._find_regex_line(lines),
-                'type': 'performance',
-                'severity': 'high',
+                'type': 'performance', 'severity': 'high',
                 'message': 'Catastrophic regex backtracking can cause O(2^n) time on adversarial input'
             })
 
         known = self.detect_known_algorithm(code)
         if known.get('detected') and known.get('can_optimize'):
             issues.append({
-                'line': 1,
-                'type': 'performance',
-                'severity': 'high',
+                'line': 1, 'type': 'performance', 'severity': 'high',
                 'message': f'{known["algorithm"]} detected ({known["complexity"]}) — can be optimized to {known.get("optimized_to", "better complexity")}'
             })
 
         graph = self.detect_graph_algorithm(code)
         if graph.get('detected') and graph.get('can_optimize'):
             issues.append({
-                'line': 1,
-                'type': 'performance',
-                'severity': 'medium',
+                'line': 1, 'type': 'performance', 'severity': 'medium',
                 'message': f'{graph["algorithm"]} ({graph["complexity"]}) — {graph.get("note", "")}'
             })
 
@@ -2590,11 +3645,14 @@ class CodeAnalyzer:
                 if loop['type'] == 'linear' and linear_children:
                     issues.append({
                         'line': self._find_loop_line(loop['header'], lines),
-                        'type': 'performance',
-                        'severity': 'high',
-                        'message': 'Nested linear loops — causes O(n²) or worse. Use hash map to reduce to O(n).'
+                        'type': 'performance', 'severity': 'high',
+                        'message': (
+                            'Nested linear loops — causes O(n²) or worse. '
+                            'The right optimization depends on the operation: hashing, sorting/two pointers, '
+                            'prefix sums, pruning, or DP may apply.'
+                        )
                     })
-                self._check_nested_loop_issues(loop['children'], issues, lines, depth+1)
+                self._check_nested_loop_issues(loop['children'], issues, lines, depth + 1)
 
     def _find_loop_line(self, header, lines):
         for i, line in enumerate(lines, 1):
@@ -2625,7 +3683,6 @@ class CodeAnalyzer:
         graph = time_result.get('graph')
         known = time_result.get('known')
 
-        # Graph algorithm optimizations
         if graph and graph.get('can_optimize'):
             optimizations.append({
                 'title': f'Optimize {graph["algorithm"]} — {graph["complexity"]} → {graph.get("optimized_to", "better")}',
@@ -2636,7 +3693,6 @@ class CodeAnalyzer:
                 'example': self._get_graph_optimization_example(graph, language)
             })
 
-        # Known algorithm optimizations
         if known and known.get('can_optimize') and 'Generator recursion' not in known.get('algorithm', ''):
             optimizations.append({
                 'title': f'Replace {known["algorithm"]} — {known["complexity"]} → {known.get("optimized_to", "better")}',
@@ -2657,8 +3713,7 @@ class CodeAnalyzer:
                 'example': self._get_generator_memo_example(language)
             })
 
-        # Exponential recursion
-        if recursion and recursion.get('type') == 'exponential':
+        if recursion and recursion.get('type') in ('exponential', 'fibonacci_exponential'):
             optimizations.append({
                 'title': f'Add Memoization — {recursion["complexity"]} → O(n)',
                 'problem': f'Exponential recursion with {recursion["branches"]} branches per call',
@@ -2668,28 +3723,51 @@ class CodeAnalyzer:
                 'example': self._get_memo_example(code, recursion, language)
             })
 
-        # Nested loops
-        if complexity == 'O(n²)' and not graph and not known:
+        if complexity == 'O(n²)' and not graph and not known and self._hashmap_optimization_applicable(code):
             optimizations.append({
                 'title': 'Replace Nested Loops with Hash Map — O(n²) → O(n)',
                 'problem': 'Nested linear loops check every pair — quadratic time',
                 'solution': 'Use a hash map to store and look up values in O(1)',
-                'complexity_before': 'O(n²)',
-                'complexity_after': 'O(n)',
+                'complexity_before': 'O(n²)', 'complexity_after': 'O(n)',
                 'example': self._get_hashmap_example(language)
             })
+        elif complexity == 'O(n²)' and not graph and not known:
+            optimizations.append({
+                'title': 'Review Nested Loops — O(n²) may be reducible',
+                'problem': 'Nested linear loops perform pairwise or repeated work.',
+                'solution': (
+                    'Choose the optimization that matches the problem: '
+                    'hashing for lookup, sorting/two-pointers for ordered pairs, '
+                    'prefix sums for range queries, DP/memoization for repeated states.'
+                ),
+                'complexity_before': 'O(n²)', 'complexity_after': 'problem-dependent',
+                'example': self._get_nested_loop_strategy_example(language)
+            })
 
-        if complexity == 'O(n³)':
+        if complexity == 'O(n³)' and not known:
             optimizations.append({
                 'title': 'Reduce Triple Loops — O(n³) → O(n²)',
                 'problem': 'Triple nested loops are extremely slow',
                 'solution': 'Fix outer two loops, use hash set for third lookup',
-                'complexity_before': 'O(n³)',
-                'complexity_after': 'O(n²)',
+                'complexity_before': 'O(n³)', 'complexity_after': 'O(n²)',
                 'example': self._get_triple_loop_example(language)
             })
 
         return optimizations
+
+    def _hashmap_optimization_applicable(self, code):
+        compact = re.sub(r'\s+', ' ', code)
+        name_hint = bool(re.search(
+            r'two.?sum|pair.?sum|contains.?duplicate|duplicate|frequency|complement|target',
+            code, re.IGNORECASE
+        ))
+        pair_sum_shape = bool(re.search(
+            r'\b\w+\s*\[[^\]]+\]\s*\+\s*\w+\s*\[[^\]]+\]\s*==\s*\w+|'
+            r'\b\w+\s*==\s*\w+\s*\[[^\]]+\]\s*\+\s*\w+\s*\[[^\]]+\]', compact
+        ))
+        membership_scan = bool(re.search(r'if\s+.*(?:==|in|contains|includes|has)\s+.*:', code, re.IGNORECASE))
+        has_nested_loop = len(re.findall(r'\b(?:for|while)\b', code)) >= 2
+        return has_nested_loop and (name_hint or pair_sum_shape or membership_scan)
 
     def _get_graph_optimization_example(self, graph, language):
         if 'Bellman-Ford' in graph['algorithm']:
@@ -2733,23 +3811,30 @@ function dijkstra(graph, source) {
         return '// Use a more efficient algorithm for this graph problem.'
 
     def _get_known_algorithm_example(self, known, language):
-        if 'Generator recursion' in known['algorithm']:
+        if 'Generator recursion' in known.get('algorithm', ''):
             return self._get_generator_memo_example(language)
-        if 'Bubble' in known['algorithm'] or 'Selection' in known['algorithm'] or 'Insertion' in known['algorithm']:
+        if any(x in known.get('algorithm', '') for x in ['Bubble', 'Selection', 'Insertion']):
             if language == 'python':
-                return '''# Replace with built-in sort — O(n log n) Tim Sort:
-arr = [5, 3, 1, 4, 2]
-arr.sort()  # In-place O(n log n)
-# or
-sorted_arr = sorted(arr)  # Returns new list O(n log n)'''
+                return '# Replace with built-in sort — O(n log n) Tim Sort:\narr.sort()\n# or: sorted_arr = sorted(arr)'
             elif language == 'javascript':
-                return '''// Replace with built-in sort — O(n log n):
-arr.sort((a, b) => a - b);  // Ascending
-arr.sort((a, b) => b - a);  // Descending'''
+                return '// Replace with built-in sort — O(n log n):\narr.sort((a, b) => a - b);'
             elif language == 'java':
-                return '''// Replace with Arrays.sort — O(n log n):
-Arrays.sort(arr);  // For primitives
-Collections.sort(list);  // For objects'''
+                return '// Replace with Arrays.sort — O(n log n):\nArrays.sort(arr);\nCollections.sort(list);'
+        if 'LIS' in known.get('algorithm', '') and 'DP' in known.get('algorithm', ''):
+            if language == 'python':
+                return '''# O(n²) DP → O(n log n) with patience sorting:
+import bisect
+
+def lis_length(nums):
+    tails = []
+    for num in nums:
+        pos = bisect.bisect_left(tails, num)
+        if pos == len(tails):
+            tails.append(num)
+        else:
+            tails[pos] = num
+    return len(tails)
+# Time: O(n²) → O(n log n)'''
         return '// Use a more efficient algorithm.'
 
     def _get_generator_memo_example(self, language):
@@ -2760,10 +3845,6 @@ function genMemo(n, memo = new Map()) {
     const result = genMemo(n - 1, memo) + genMemo(Math.floor(n / 2), memo);
     memo.set(n, result);
     return result;
-}
-
-function solution(n) {
-    return genMemo(n);
 }'''
 
     def _get_memo_example(self, code, recursion, language):
@@ -2771,7 +3852,6 @@ function solution(n) {
         if language == 'python':
             return f'''from functools import lru_cache
 
-# Add @lru_cache decorator for automatic memoization:
 @lru_cache(maxsize=None)
 def {name}(arr, target, index=0):
     if target == 0: return True
@@ -2780,32 +3860,24 @@ def {name}(arr, target, index=0):
     exclude = {name}(arr, target, index + 1)
     return include or exclude
 
-# Note: Convert list to tuple when calling:
-# {name}(tuple(arr), target)
-# Complexity: O(2ⁿ) → O(n × target)'''
+# Note: Convert list to tuple: {name}(tuple(arr), target)
+# Complexity: {recursion["complexity"]} → O(n × target)'''
         elif language == 'javascript':
-            return f'''// Add memo object for memoization:
-function {name}(arr, target, index = 0, memo = {{}}) {{
+            return f'''function {name}(arr, target, index = 0, memo = {{}}) {{
     const key = `${{index}}-${{target}}`;
     if (key in memo) return memo[key];
     if (target === 0) return true;
     if (index >= arr.length) return false;
-    const include = {name}(arr, target - arr[index], index + 1, memo);
-    const exclude = {name}(arr, target, index + 1, memo);
-    memo[key] = include || exclude;
+    memo[key] = {name}(arr, target - arr[index], index + 1, memo) ||
+                {name}(arr, target, index + 1, memo);
     return memo[key];
 }}
-// Complexity: O(2ⁿ) → O(n × target)'''
+// Complexity: {recursion["complexity"]} → O(n × target)'''
         return '// Add memoization to cache subproblem results.'
 
     def _get_hashmap_example(self, language):
         if language == 'python':
-            return '''# Instead of O(n²) nested loops:
-# for i in range(n):
-#     for j in range(i+1, n):
-#         if arr[i] + arr[j] == target: ...
-
-# Use O(n) hash map:
+            return '''# Use O(n) hash map instead of O(n²) nested loops:
 def twoSum(arr, target):
     seen = {}
     for i, num in enumerate(arr):
@@ -2815,12 +3887,7 @@ def twoSum(arr, target):
         seen[num] = i
 # Time: O(n²) → O(n)'''
         elif language == 'javascript':
-            return '''// Instead of O(n²) nested loops:
-// for (let i=0; i<n; i++)
-//   for (let j=i+1; j<n; j++)
-//     if (arr[i]+arr[j]===target) ...
-
-// Use O(n) hash map:
+            return '''// Use O(n) hash map instead of O(n²) nested loops:
 function twoSum(arr, target) {
     const seen = new Map();
     for (let i = 0; i < arr.length; i++) {
@@ -2846,15 +3913,26 @@ public int[] twoSum(int[] arr, int target) {
 // Time: O(n²) → O(n)'''
         return '// Use a hash map for O(1) lookups instead of nested loops.'
 
+    def _get_nested_loop_strategy_example(self, language):
+        if language == 'python':
+            return '''# Nested loops — choose the right optimization:
+# - lookup / two-sum: use dict or set → O(n)
+# - sorted pair search: sort + two pointers → O(n log n)
+# - range sums: prefix sums → O(n)
+# - repeated states: memoization / DP
+# - all-pairs output required: O(n²) may be unavoidable'''
+        if language == 'javascript':
+            return '''// Nested loops — choose the right optimization:
+// - lookup / two-sum: Map or Set → O(n)
+// - sorted pair search: sort + two pointers → O(n log n)
+// - range sums: prefix sums → O(n)
+// - repeated states: memoization / DP
+// - all-pairs output required: O(n²) may be unavoidable'''
+        return '// Nested-loop optimization is problem-specific: hashing, two pointers, prefix sums, DP, or no safe reduction.'
+
     def _get_triple_loop_example(self, language):
         if language == 'python':
-            return '''# Instead of O(n³):
-# for i in range(n):
-#   for j in range(i+1, n):
-#     for k in range(j+1, n):
-#       if arr[i]+arr[j]+arr[k]==target: ...
-
-# Use O(n²) with hash set:
+            return '''# Use O(n²) with hash set instead of O(n³):
 def threeSum(arr, target):
     results = set()
     for i in range(len(arr)):
@@ -2869,28 +3947,25 @@ def threeSum(arr, target):
         return '// Fix two outer loops and use hash set for third lookup.'
 
     # ─────────────────────────────────────────────
-    # TRANSFORMED CODE — KEY NEW FEATURE
+    # TRANSFORMED CODE
     # ─────────────────────────────────────────────
 
     def generate_transformed_code(self, code, language, time_result):
-        """
-        Generates the actual transformed version of the user's code
-        with lower time complexity where possible.
-        """
         complexity = time_result['complexity']
         recursion = time_result.get('recursion')
         known = time_result.get('known')
         graph = time_result.get('graph')
 
-        # Already optimal
-        if complexity in ['O(1)', 'O(log n)', 'O(n)', 'O(n log n)']:
+        already_optimal = [
+            'O(1)', 'O(log n)', 'O(n)', 'O(n log n)',
+            'O(α(n))', 'O(√n)', 'O(log log n)', 'O(log² n)', 'O(log³ n)',
+        ]
+        if complexity in already_optimal:
             if not (known and known.get('can_optimize')) and not (graph and graph.get('can_optimize')):
                 return {
                     'available': False,
                     'reason': f'Your code is already at {complexity} — no transformation needed.',
-                    'complexity_before': complexity,
-                    'complexity_after': complexity,
-                    'code': None
+                    'complexity_before': complexity, 'complexity_after': complexity, 'code': None
                 }
 
         if known and 'Generator recursion' in known.get('algorithm', ''):
@@ -2902,8 +3977,7 @@ def threeSum(arr, target):
                 'code': self._get_generator_memo_example(language)
             }
 
-        # Exponential recursion → memoized version
-        if recursion and recursion.get('type') == 'exponential':
+        if recursion and recursion.get('type') in ('exponential', 'fibonacci_exponential'):
             transformed = self._transform_recursive_to_memo(code, recursion, language)
             if transformed:
                 return {
@@ -2914,43 +3988,52 @@ def threeSum(arr, target):
                     'code': transformed
                 }
 
-        # Bubble/Selection/Insertion sort → built-in sort
-        if known and known.get('can_optimize') and known['algorithm'] in [
-            'Bubble Sort', 'Selection Sort', 'Insertion Sort'
-        ]:
+        if known and known.get('can_optimize') and known['algorithm'] in ['Bubble Sort', 'Selection Sort', 'Insertion Sort']:
             transformed = self._transform_sort_to_builtin(code, language)
             if transformed:
                 return {
                     'available': True,
-                    'complexity_before': known['complexity'],
-                    'complexity_after': 'O(n log n)',
+                    'complexity_before': known['complexity'], 'complexity_after': 'O(n log n)',
                     'description': f'Replaced {known["algorithm"]} with built-in O(n log n) sort',
                     'code': transformed
                 }
 
-        # Bellman-Ford → Dijkstra
+        if known and known.get('can_optimize') and 'LIS' in known.get('algorithm', '') and 'DP' in known.get('algorithm', ''):
+            if language == 'python':
+                return {
+                    'available': True,
+                    'complexity_before': 'O(n²)', 'complexity_after': 'O(n log n)',
+                    'description': 'Replaced quadratic LIS DP with patience sorting (O(n log n))',
+                    'code': '''import bisect
+
+def lis_length(nums):
+    """Longest Increasing Subsequence in O(n log n)."""
+    tails = []
+    for num in nums:
+        pos = bisect.bisect_left(tails, num)
+        if pos == len(tails):
+            tails.append(num)
+        else:
+            tails[pos] = num
+    return len(tails)
+# Complexity: O(n²) → O(n log n)'''
+                }
+
         if graph and graph.get('can_optimize') and 'Bellman' in graph.get('algorithm', ''):
             return {
                 'available': True,
-                'complexity_before': graph['complexity'],
-                'complexity_after': 'O((V+E) log V)',
+                'complexity_before': graph['complexity'], 'complexity_after': 'O((V+E) log V)',
                 'description': 'Replace Bellman-Ford with Dijkstra for non-negative weights',
                 'code': self._get_dijkstra_template(language)
             }
 
-        # Generic: no specific transform available
         return {
             'available': False,
             'reason': 'Automatic transformation not available for this pattern. See optimizations above for manual guidance.',
-            'complexity_before': complexity,
-            'complexity_after': 'varies',
-            'code': None
+            'complexity_before': complexity, 'complexity_after': 'varies', 'code': None
         }
 
     def _transform_recursive_to_memo(self, code, recursion, language):
-        """
-        Automatically adds memoization to exponential recursive functions.
-        """
         func_name = recursion.get('func_name', '')
         if not func_name:
             return None
@@ -2960,24 +4043,19 @@ def threeSum(arr, target):
             new_lines = []
             added_import = False
             for line in lines:
-                # Add import at top
                 if not added_import and (line.strip().startswith('def ') or line.strip().startswith('import') or line.strip().startswith('from')):
                     if 'lru_cache' not in code:
                         new_lines.append('from functools import lru_cache')
                         new_lines.append('')
                     added_import = True
-
-                # Add decorator before function
                 if re.match(rf'\s*def\s+{func_name}\s*\(', line):
                     indent = len(line) - len(line.lstrip())
                     new_lines.append(' ' * indent + '@lru_cache(maxsize=None)')
-
                 new_lines.append(line)
-
             new_lines.append('')
             new_lines.append(f'# NOTE: Convert list arguments to tuple when calling:')
             new_lines.append(f'# {func_name}(tuple(arr), target)')
-            new_lines.append(f'# Complexity improved: {recursion["complexity"]} → O(n × subproblems)')
+            new_lines.append(f'# Complexity: {recursion["complexity"]} → O(n × subproblems)')
             return '\n'.join(new_lines)
 
         elif language == 'javascript':
@@ -2987,18 +4065,15 @@ def threeSum(arr, target):
             for i, line in enumerate(lines):
                 if re.match(rf'\s*function\s+{func_name}\s*\(', line) and not func_found:
                     func_found = True
-                    # Add memo parameter if not present
                     modified = re.sub(
                         rf'(function\s+{func_name}\s*\()([^)]*)\)',
                         lambda m: m.group(1) + (m.group(2).rstrip() + (', ' if m.group(2).strip() else '') + 'memo = {}') + ')',
                         line
                     )
                     new_lines.append(modified)
-                    # Add memo check at start of function body
                     new_lines.append('  const _key = JSON.stringify(Array.from(arguments).slice(0, -1));')
                     new_lines.append('  if (_key in memo) return memo[_key];')
                     continue
-                # Before return statements, add memo caching
                 if func_found and re.search(r'\breturn\b', line):
                     indent = len(line) - len(line.lstrip())
                     ret_val = re.search(r'return\s+(.+);', line)
@@ -3008,117 +4083,80 @@ def threeSum(arr, target):
                         new_lines.append(' ' * indent + 'return _result;')
                         continue
                 new_lines.append(line)
-
-            new_lines.append('')
-            new_lines.append(f'// Complexity improved: {recursion["complexity"]} → O(n × subproblems)')
+            new_lines.append(f'// Complexity: {recursion["complexity"]} → O(n × subproblems)')
             return '\n'.join(new_lines)
 
         return None
 
     def _transform_sort_to_builtin(self, code, language):
-        """
-        Replaces bubble/selection/insertion sort with built-in sort.
-        """
         if language == 'python':
-            return f'''# Optimized version using built-in Timsort — O(n log n):
+            return '''# Optimized using built-in Timsort — O(n log n):
 def sort_array(arr):
-    return sorted(arr)  # Returns new sorted list
+    return sorted(arr)
 
-# Or in-place:
 def sort_array_inplace(arr):
-    arr.sort()  # Modifies original list
+    arr.sort()
     return arr
-
-# Both run at O(n log n) — same result, much faster than manual sort algorithms
-# Original complexity: O(n²) → New complexity: O(n log n)'''
-
+# Original: O(n²) → New: O(n log n)'''
         elif language == 'javascript':
-            return '''// Optimized version using built-in sort — O(n log n):
+            return '''// Optimized using built-in sort — O(n log n):
 function sortArray(arr) {
-    return [...arr].sort((a, b) => a - b); // New sorted array
+    return [...arr].sort((a, b) => a - b);
 }
-
-// Or in-place:
-function sortArrayInPlace(arr) {
-    arr.sort((a, b) => a - b); // Modifies original
-    return arr;
-}
-
-// Both run at O(n log n) — faster than manual sort algorithms
-// Original complexity: O(n²) → New complexity: O(n log n)'''
-
+// Original: O(n²) → New: O(n log n)'''
         elif language == 'java':
-            return '''// Optimized version using Arrays.sort — O(n log n):
+            return '''// Optimized using Arrays.sort — O(n log n):
 import java.util.Arrays;
-
 public static int[] sortArray(int[] arr) {
     int[] copy = Arrays.copyOf(arr, arr.length);
-    Arrays.sort(copy); // O(n log n) dual-pivot quicksort
+    Arrays.sort(copy);
     return copy;
 }
-
-// Original complexity: O(n²) → New complexity: O(n log n)'''
-
+// Original: O(n²) → New: O(n log n)'''
         return None
 
     def _get_dijkstra_template(self, language):
         if language == 'python':
             return '''import heapq
 
-# Dijkstra — O((V+E) log V) replacing Bellman-Ford O(V×E):
 def dijkstra(graph, source):
-    """
-    graph: dict of {node: [(neighbor, weight), ...]}
-    source: starting node
-    """
+    """graph: {node: [(neighbor, weight), ...]}"""
     dist = {node: float('inf') for node in graph}
     dist[source] = 0
-    pq = [(0, source)]  # (distance, node)
-
+    pq = [(0, source)]
     while pq:
         d, u = heapq.heappop(pq)
         if d > dist[u]:
-            continue  # Skip outdated entries
+            continue
         for v, weight in graph[u]:
-            new_dist = dist[u] + weight
-            if new_dist < dist[v]:
-                dist[v] = new_dist
-                heapq.heappush(pq, (new_dist, v))
-
+            if dist[u] + weight < dist[v]:
+                dist[v] = dist[u] + weight
+                heapq.heappush(pq, (dist[v], v))
     return dist
-
-# Complexity: O(V×E) → O((V+E) log V)
-# Note: Only works for non-negative edge weights'''
+# Time: O((V+E) log V) vs Bellman-Ford O(V×E)'''
         elif language == 'java':
             return '''import java.util.*;
-
-// Dijkstra — O((V+E) log V) replacing Bellman-Ford:
 public static int[] dijkstra(List<List<int[]>> graph, int source) {
     int n = graph.size();
     int[] dist = new int[n];
     Arrays.fill(dist, Integer.MAX_VALUE);
     dist[source] = 0;
-
-    PriorityQueue<int[]> pq = new PriorityQueue<>(
-        Comparator.comparingInt(a -> a[1])
-    );
+    PriorityQueue<int[]> pq = new PriorityQueue<>(Comparator.comparingInt(a -> a[1]));
     pq.offer(new int[]{source, 0});
-
     while (!pq.isEmpty()) {
         int[] curr = pq.poll();
         int node = curr[0], d = curr[1];
         if (d > dist[node]) continue;
         for (int[] edge : graph.get(node)) {
-            int next = edge[0], weight = edge[1];
-            if (dist[node] + weight < dist[next]) {
-                dist[next] = dist[node] + weight;
-                pq.offer(new int[]{next, dist[next]});
+            if (dist[node] + edge[1] < dist[edge[0]]) {
+                dist[edge[0]] = dist[node] + edge[1];
+                pq.offer(new int[]{edge[0], dist[edge[0]]});
             }
         }
     }
     return dist;
 }
-// Complexity: O(V×E) → O((V+E) log V)'''
+// Time: O((V+E) log V)'''
         return '// Replace with Dijkstra algorithm for better performance.'
 
     # ─────────────────────────────────────────────
@@ -3129,45 +4167,76 @@ public static int[] dijkstra(List<List<int[]>> graph, int source) {
         suggestions = []
         tc = result['time_complexity']
         sc = result['space_complexity']
-        issues = result['issues']
         optimizations = result['optimizations']
         transformed = result.get('transformed_code', {})
 
         complexity_messages = {
             'O(1)':             '✅ Excellent! Constant time — as efficient as possible.',
+            'O(α(n))':          '✅ Excellent! Inverse-Ackermann amortized — practically O(1) for all realistic n.',
+            'O(log log n)':     '✅ Excellent! Log-log time — virtually constant for any real-world input.',
+            'O(log log U)':     '✅ Excellent! Van Emde Boas log-log time — faster than any polynomial.',
             'O(log n)':         '✅ Great! Logarithmic time — scales very well.',
+            'O(log n) amortized': '✅ Great! Amortized logarithmic time — excellent for dynamic structures.',
+            'O(log_t n)':       '✅ Great! Log base t — optimal for B-Tree operations.',
+            'O(log³ n)':        '✅ Good! Polylogarithmic time — very scalable even with several nested logarithmic loops.',
+            'O(√n)':            '✅ Good! Square-root time — efficient for n up to 10^12.',
             'O(n)':             '✅ Good! Linear time — efficient for most use cases.',
-            'O(n log n)':       '✅ Good! Optimal for comparison-based sorting.',
-            'O(n log² n)':      '⚠️ Fair. Slightly above linearithmic — acceptable for most cases.',
-            'O(n²)':            '⚠️ Warning! Quadratic — slow for large inputs (n > 10,000).',
-            'O(n³)':            '🔴 Critical! Cubic — extremely slow for n > 1,000.',
+            'O(n log log n)':   '✅ Near-linear — optimal for sieve-class algorithms.',
+            'O(n log n)':       '✅ Good! Optimal for comparison-based sorting and many divide-and-conquer algorithms.',
+            'O(n log n) worst, O(n) best': '✅ Good! Tim Sort — adaptive, O(n) on nearly-sorted data.',
+            'O(n log² n)':      '⚠️  Fair. Slightly above linearithmic — acceptable for most cases.',
+            'O(n^1.585)':       '✅ Karatsuba — subquadratic integer multiplication.',
+            'O(n²)':            '⚠️  Warning! Quadratic — slow for large inputs (n > 10,000). Consider optimizing.',
+            'O(n^2.807)':       '⚠️  Strassen — better than O(n³) but still heavy. Impractical for small matrices.',
+            'O(n³)':            '🔴 Critical! Cubic — extremely slow for n > 1,000. Optimize urgently.',
+            'O(n² log n)':      '🔴 Heavy. Quadratic work repeated across logarithmic steps.',
+            'O(n³ log n)':      '🔴 Critical! Sorting repeated inside nested loops.',
+            'O(φⁿ)':            '🔴 Critical! Fibonacci-exponential — add memoization immediately.',
+            'O(2^n)':           '🔴 Critical! Exponential — times out for n > 30. Optimize immediately.',
             'O(2ⁿ)':            '🔴 Critical! Exponential — times out for n > 30. Optimize immediately.',
+            'O(2^(n/2))':       '⚠️  Meet-in-middle exponential — much better than O(2^n) but still grows fast.',
+            'O(3^n)':           '🔴 Critical! Exponential — times out for n > 20. Optimize immediately.',
             'O(3ⁿ)':            '🔴 Critical! Exponential — times out for n > 20. Optimize immediately.',
+            'O(n!)':            '🔴 Critical! Factorial growth — only practical for n ≤ 12.',
+            'O(n * n!)':        '🔴 Critical! Super-factorial — only practical for n ≤ 11.',
+            'O(n * 2^n)':       '🔴 Critical! Exponential output growth — consider DP if searching, not enumerating.',
+            'O((log n)!)':      '🔴 Critical! Quasi-polynomial — consider DP/memoisation.',
+            'O(A(m, n))':       '🔴 Ackermann growth — only feasible for very small m, n.',
             'O((V + E) log V)': '✅ Optimal for graph shortest path with priority queue.',
             'O(V + E)':         '✅ Optimal graph traversal complexity.',
-            'O(V × E)':         '⚠️ Can be improved — consider Dijkstra if no negative weights.',
-            'O(V³)':            '⚠️ Cubic graph complexity — use Dijkstra per vertex for sparse graphs.',
-            'O(n log n) average, O(n²) worst': '⚠️ Worst case is O(n²) — use randomized pivot or Merge Sort.',
+            'O(E log V)':       '✅ Optimal for heuristic-guided graph search.',
+            'O(E√V)':           '✅ Optimal for bipartite matching (Hopcroft-Karp).',
+            'O(V × E)':         '⚠️  Can be improved — consider Dijkstra if no negative weights.',
+            'O(V³)':            '⚠️  Cubic graph complexity — use Dijkstra per vertex for sparse graphs.',
+            'O(n log n) average, O(n²) worst': '⚠️  Worst case is O(n²) — use randomized pivot or Merge Sort.',
+            'O(9^m)':           '🔴 Critical! Exponential Sudoku search — add constraint propagation to prune.',
+            'O(1) amortized':   '✅ Excellent! Amortized constant time per operation.',
+            'O(m)':             '✅ Linear in key length — optimal for trie operations.',
+            'O(k)':             '✅ Linear in hash functions — optimal for Bloom filter.',
+            'O(n + k)':         '✅ Excellent! Linear-time sort — optimal for bounded integer keys.',
+            'O(n + m + z)':     '✅ Optimal for multi-pattern search with Aho-Corasick.',
+            'O(n + m)':         '✅ Linear — optimal for string search (KMP/Z-algorithm).',
         }
-
-        complexity_messages.update({
-            'O(n² log n)': 'Heavy. Quadratic work is repeated across logarithmic steps.',
-            'O(n³ log n)': 'Critical. Sorting is repeated inside nested loops.',
-            'O(n * n!)': 'Critical. Factorial growth is only practical for very small n.',
-            'O(n * 2^n)': 'Critical. The code generates exponentially many outputs and copies up to n items per output.',
-            'O((log n)!)': 'Critical. The recursive work grows quasi-polynomially because each level creates a logarithmic number of subcalls.',
-            'O(2^n)': 'Critical. Exponential recursion times out quickly without memoization.',
-            'O(3^n)': 'Critical. Exponential recursion times out quickly without memoization.',
-        })
 
         msg = complexity_messages.get(tc)
         if msg:
             suggestions.append(msg)
+        elif tc:
+            if any(x in tc for x in ['^n)', 'n!', '2^n', '3^n', 'ⁿ)', 'factorial', 'φⁿ']):
+                suggestions.append(f'🔴 Critical! {tc} — exponential or worse. Optimize urgently.')
+            elif re.fullmatch(r'O\(n\^0\.\d+\)', tc):
+                suggestions.append(f'✅ Sublinear polynomial time {tc} — faster than linear growth.')
+            elif re.fullmatch(r'O\(n\^1\.\d+\)', tc):
+                suggestions.append(f'✅ Subquadratic time {tc} — better than O(n²), often from uneven divide-and-conquer.')
+            elif any(x in tc for x in ['n²', 'n^2', 'n³', 'n^3']):
+                suggestions.append(f'⚠️  Warning! {tc} — polynomial but heavy. Consider optimizing.')
 
         if sc == 'O(n²)':
-            suggestions.append('⚠️ High memory O(n²) — try in-place algorithms or rolling arrays.')
-        elif sc == 'O(1)':
+            suggestions.append('⚠️  High memory O(n²) — try in-place algorithms or rolling arrays.')
+        elif sc in ('O(1)', 'O(α(n))'):
             suggestions.append('✅ Constant space — memory usage is optimal.')
+        elif sc == 'O(log n)':
+            suggestions.append('✅ Logarithmic space — excellent (typically recursion stack only).')
 
         if optimizations:
             suggestions.append(
@@ -3191,26 +4260,45 @@ public static int[] dijkstra(List<List<int[]>> graph, int source) {
     def calculate_rating(self, result):
         score = 10
         deductions = {
-            'O(1)': 0, 'O(log n)': 0, 'O(log² n)': 0.5,
-            'O(n)': 1, 'O(n log n)': 2, 'O(n log² n)': 2.5,
+            'O(1)': 0, 'O(α(n))': 0, 'O(1) amortized': 0,
+            'O(log log n)': 0, 'O(log log U)': 0,
+            'O(log n)': 0.5,
+            'O(log n) amortized': 0.5,
+            'O(log log n)': 0,
+            'O(log³ n)': 0.7,
+            'O(√n)': 1,
+            'O(n)': 1, 'O(n log log n)': 1.5,
+            'O(n log n)': 2, 'O(n log n) worst, O(n) best': 2,
+            'O(n log² n)': 2.5,
+            'O(n^1.585)': 3,
+            'O(n^2.807)': 3.5,
             'O(n²)': 4, 'O(n² log n)': 5, 'O(n³)': 7,
-            'O(2ⁿ)': 8, 'O(3ⁿ)': 9,
+            'O(φⁿ)': 7.5,
+            'O(2ⁿ)': 8, 'O(2^n)': 8, 'O(2^(n/2))': 5,
+            'O(n * 2^n)': 8.5, 'O(3ⁿ)': 9, 'O(3^n)': 9,
+            'O(n!)': 9, 'O(n * n!)': 9.5, 'O(A(m, n))': 10,
             'O((V + E) log V)': 1, 'O(V + E)': 0,
-            'O(V × E)': 4, 'O(V³)': 6,
+            'O(E log V)': 1, 'O(E√V)': 3,
+            'O(V × E)': 4, 'O(V³)': 6, 'O(V²E)': 7,
             'O(n log n) average, O(n²) worst': 3,
+            'O(9^m)': 8,
+            'O(1) amortized': 0, 'O(α(n))': 0,
+            'O(m)': 0, 'O(k)': 0,
+            'O(n + k)': 1, 'O(n + m)': 1, 'O(n + m + z)': 1,
+            'O(iterations × n)': 3,
+            'O(epochs × n × L × w)': 4,
+            'O(k³)': 7,
+            'O(n × W)': 4, 'O(n² × m)': 7,
+            'O(n × d²)': 4,
+            'O(k × n log n × d)': 2,
+            'O(n log n × d)': 2,
         }
-        deductions.update({
-            'O(n² log n)': 5,
-            'O(n³ log n)': 8,
-            'O(n * n!)': 9,
-            'O(n * 2^n)': 8.5,
-            'O((log n)!)': 7,
-            'O(2^n)': 8,
-            'O(3^n)': 9,
-        })
-
         score -= deductions.get(result['time_complexity'], 2)
-
+        fractional = re.fullmatch(r'O\(n\^([0-9]+(?:\.[0-9]+)?)\)', result['time_complexity'])
+        if result['time_complexity'] not in deductions and fractional:
+            score += 2
+            exponent = float(fractional.group(1))
+            score -= min(6, max(0.5, exponent * 2))
         if result['space_complexity'] == 'O(n²)': score -= 2
         elif result['space_complexity'] == 'O(n)': score -= 0.5
 
@@ -3220,3 +4308,449 @@ public static int[] dijkstra(List<List<int[]>> graph, int source) {
             elif issue['severity'] == 'low': score -= 0.2
 
         return max(1, round(score))
+
+    # ─────────────────────────────────────────────
+    # AMORTIZED ANALYSIS
+    # ─────────────────────────────────────────────
+
+    def explain_amortized_complexity(self, code, language):
+        """
+        Detects dynamic-array doubling, union-find, splay tree, and
+        monotonic-stack patterns and explains their amortized cost.
+        Returns an amortized analysis dict or None.
+        """
+        # Dynamic array doubling
+        doubling = bool(re.search(
+            r'capacity\s*\*=\s*2|capacity\s*=\s*capacity\s*\*\s*2|'
+            r'new_cap\s*=\s*\w+\s*\*\s*2|reserve.*\*\s*2|'
+            r'if\s+len\s*\(\s*\w+\s*\)\s*==\s*capacity',
+            code, re.IGNORECASE
+        ))
+        if doubling:
+            return {
+                'detected': True,
+                'pattern': 'dynamic_array_doubling',
+                'per_operation_worst': 'O(n)',
+                'amortized_per_operation': 'O(1)',
+                'total_for_n_ops': 'O(n)',
+                'reason': (
+                    'Doubling strategy: starting from capacity 1, resizing at 1,2,4,8,…,n '
+                    'costs 1+2+4+…+n = O(2n) = O(n) total copy work across n appends. '
+                    'Amortized cost per append = O(n)/n = O(1).'
+                ),
+                'note': 'Pre-reserve final capacity with reserve(n) if known to eliminate all resizes.'
+            }
+
+        # Union-Find / DSU with path compression
+        union_find = bool(re.search(
+            r'path.?compress|find_parent|find_root|union.?by.?rank|union.?by.?size',
+            code, re.IGNORECASE
+        ))
+        if union_find:
+            return {
+                'detected': True,
+                'pattern': 'union_find_path_compression',
+                'per_operation_worst': 'O(log n)',
+                'amortized_per_operation': 'O(α(n))',
+                'total_for_n_ops': 'O(n α(n))',
+                'reason': (
+                    'Path compression + union by rank/size gives amortized O(α(n)) per operation '
+                    'where α is the inverse Ackermann function — effectively O(1) for all practical n.'
+                ),
+                'note': 'α(n) ≤ 4 for n < 10^600. Already optimal — no further improvement possible.'
+            }
+
+        # Monotonic stack
+        mono_stack = bool(re.search(
+            r'while\s+stack\s+and|while\s*\(?\s*!?\s*(?:stack|mono)\s*\.isEmpty',
+            code, re.IGNORECASE
+        ))
+        if mono_stack:
+            return {
+                'detected': True,
+                'pattern': 'monotonic_stack',
+                'per_operation_worst': 'O(n)',
+                'amortized_per_operation': 'O(1)',
+                'total_for_n_ops': 'O(n)',
+                'reason': (
+                    'Each element is pushed onto the stack at most once and popped at most once '
+                    'across the entire traversal — O(2n) total push+pop operations = O(n) amortized.'
+                ),
+                'note': 'Already optimal for next-greater-element, histogram, and span problems.'
+            }
+
+        # Splay tree / self-adjusting structure
+        splay = bool(re.search(r'splay\s*\(|zig.?zig|zig.?zag', code, re.IGNORECASE))
+        if splay:
+            return {
+                'detected': True,
+                'pattern': 'splay_tree',
+                'per_operation_worst': 'O(n)',
+                'amortized_per_operation': 'O(log n)',
+                'total_for_n_ops': 'O(n log n)',
+                'reason': (
+                    'Splay trees use the access lemma: each splay brings the accessed node to root. '
+                    'Potential function argument shows amortized O(log n) per access over any sequence.'
+                ),
+                'note': 'O(log n) amortized, O(n) worst-case per op. Good cache locality for non-uniform access.'
+            }
+
+        return None
+
+    # ─────────────────────────────────────────────
+    # BITWISE COMPLEXITY CLASSIFIER
+    # ─────────────────────────────────────────────
+
+    def classify_bitwise_loop(self, code):
+        """
+        Identifies the complexity of common bitwise loop idioms.
+        Returns a dict with complexity and explanation, or None.
+        """
+        if re.search(r'\bn\s*&\s*\(\s*n\s*-\s*1\s*\)|\bx\s*&=\s*\(\s*x\s*-\s*1\s*\)', code):
+            return {
+                'pattern': 'clear_lowest_set_bit',
+                'complexity': 'O(popcount(n))',
+                'worst_case': 'O(log n)',
+                'note': 'Iterates exactly popcount(n) times — each iteration clears one set bit.'
+            }
+        if re.search(r'while\s*\(?\s*\w+\s*>\s*0.*(?:>>=\s*1|>>\s*=\s*1|\w+\s*=\s*\w+\s*>>\s*1)', code):
+            return {
+                'pattern': 'right_shift_loop',
+                'complexity': 'O(log n)',
+                'note': 'Shifts right by 1 each step — iterates floor(log₂n)+1 times.'
+            }
+        if re.search(r'bit.?revers|reverse.?bits|swap.*bits', code, re.IGNORECASE):
+            return {
+                'pattern': 'bit_reversal',
+                'complexity': 'O(log w)',
+                'note': 'O(log w) where w is word size (constant 32 or 64) — effectively O(1).'
+            }
+        if re.search(r'n\s*\|\s*\(n\s*-\s*1\)', code):
+            return {
+                'pattern': 'set_lowest_zero_bit',
+                'complexity': 'O(1)',
+                'note': 'n | (n-1) sets all trailing zeros in one operation — O(1).'
+            }
+        if re.search(r'\bpopcount\s*\(|\b__builtin_popcount\s*\(', code):
+            return {
+                'pattern': 'hardware_popcount',
+                'complexity': 'O(1)',
+                'note': 'Hardware popcount instruction — single CPU cycle regardless of n.'
+            }
+        return None
+
+    # ─────────────────────────────────────────────
+    # COMPLEXITY CLASS DESCRIPTOR
+    # ─────────────────────────────────────────────
+
+    def describe_complexity_class(self, complexity_string):
+        """
+        Returns a human-readable description of a complexity class
+        including typical algorithm examples and practical input size limits.
+        """
+        descriptions = {
+            'O(1)':         {'class': 'Constant',           'practical_limit': 'Unlimited',   'examples': ['Array index lookup', 'Hash table get (avg)', 'Stack push/pop', 'Bloom filter query']},
+            'O(α(n))':      {'class': 'Inverse-Ackermann',  'practical_limit': 'Unlimited',   'examples': ['Union-Find with path compression', 'DSU operations']},
+            'O(log log n)': {'class': 'Log-Logarithmic',    'practical_limit': 'n ~ 10^30',   'examples': ['Van Emde Boas tree ops', 'Interpolation search (uniform data)']},
+            'O(log n)':     {'class': 'Logarithmic',        'practical_limit': 'n ~ 10^15',   'examples': ['Binary search', 'AVL/Red-Black tree ops', 'Fast exponentiation', 'Heap push/pop']},
+            'O(log² n)':    {'class': 'Polylogarithmic',    'practical_limit': 'n ~ 10^9',    'examples': ['Some skip list ops', '2D segment tree query', 'HLD query']},
+            'O(log³ n)':    {'class': 'Polylogarithmic',    'practical_limit': 'n ~ 10^8',    'examples': ['Nested logarithmic loops', 'Some multi-level data-structure queries']},
+            'O(√n)':        {'class': 'Square-root',        'practical_limit': 'n ~ 10^12',   'examples': ["Mo's algorithm", 'Sqrt decomposition', 'Trial division primality', "Hopcroft-Karp inner"]},
+            'O(n)':         {'class': 'Linear',              'practical_limit': 'n ~ 10^8',    'examples': ['Linear scan', 'BFS/DFS', 'Counting sort', 'KMP', 'Z-Algorithm', 'Manacher']},
+            'O(n log log n)':{'class': 'Near-linear',        'practical_limit': 'n ~ 5×10^7',  'examples': ['Sieve of Eratosthenes', 'Segmented sieve']},
+            'O(n log n)':   {'class': 'Linearithmic',       'practical_limit': 'n ~ 10^6',    'examples': ['Merge sort', 'FFT', 'NTT', 'Heap sort', 'Convex hull Graham scan']},
+            'O(n log² n)':  {'class': 'Super-linearithmic', 'practical_limit': 'n ~ 5×10^5',  'examples': ['HLD + segment tree', 'Some divide-and-conquer']},
+            'O(n^1.585)':   {'class': 'Karatsuba',          'practical_limit': 'n ~ 10^5',    'examples': ['Karatsuba integer multiplication']},
+            'O(n²)':        {'class': 'Quadratic',           'practical_limit': 'n ~ 10^4',    'examples': ['Bubble sort', 'Naive string matching', 'LIS DP', 'Floyd-Warshall (dense)']},
+            'O(n^2.807)':   {'class': 'Strassen',            'practical_limit': 'n ~ 10^3',    'examples': ["Strassen matrix multiplication"]},
+            'O(n³)':        {'class': 'Cubic',               'practical_limit': 'n ~ 500',     'examples': ['Gaussian elimination', 'Floyd-Warshall', 'Matrix chain DP', 'LU decomposition']},
+            'O(n³ log n)':  {'class': 'Super-cubic',         'practical_limit': 'n ~ 200',     'examples': ['Sorting inside triple-nested loops']},
+            'O(2^(n/2))':   {'class': 'Meet-in-middle exp.', 'practical_limit': 'n ~ 50',     'examples': ['Meet-in-the-middle subset sum', 'Baby-step giant-step']},
+            'O(φⁿ)':        {'class': 'Fibonacci-exponential','practical_limit': 'n ~ 35',    'examples': ['Naive Fibonacci T(n)=T(n-1)+T(n-2)', 'Fibonacci number without memo']},
+            'O(2^n)':       {'class': 'Exponential',         'practical_limit': 'n ~ 30',     'examples': ['Subset enumeration', 'Naive Fibonacci', 'TSP brute force', 'Bitmask DP']},
+            'O(n * 2^n)':   {'class': 'Exp × linear',        'practical_limit': 'n ~ 25',     'examples': ['Printing all subsets with their contents', 'Held-Karp TSP']},
+            'O(3^n)':       {'class': 'Tripling exponential', 'practical_limit': 'n ~ 20',    'examples': ['Coloring with 3 colors', 'Some set-cover DP']},
+            'O(n!)':        {'class': 'Factorial',            'practical_limit': 'n ~ 12',     'examples': ['Permutation generation', 'N-Queens brute force', 'Branch-and-bound TSP']},
+            'O(n * n!)':    {'class': 'Super-Factorial',      'practical_limit': 'n ~ 11',     'examples': ['Generating all permutations with output', 'Permutation backtracking']},
+            'O(A(m, n))':   {'class': 'Ackermann',            'practical_limit': 'n ~ 4',      'examples': ['Ackermann function itself', 'Some inverse-Ackermann problems']},
+        }
+        return descriptions.get(complexity_string, {
+            'class': 'Unknown',
+            'practical_limit': 'Unknown',
+            'examples': ['Complexity class not catalogued — add it to describe_complexity_class()']
+        })
+
+    # ─────────────────────────────────────────────
+    # MASTER THEOREM EXPLAINER (public API)
+    # ─────────────────────────────────────────────
+
+    def explain_master_theorem(self, a, b, f_complexity='O(1)'):
+        """
+        Public wrapper around MasterTheoremEngine.
+        a = number of subproblems, b = divisor (shrink factor), f_complexity = work per level.
+        Returns a full explanation dict.
+        """
+        ft, fp = self._body_work_to_ft_fp(f_complexity)
+        result, case, reason = self.master_theorem.solve(a, b, ft, fp)
+        import math
+        return {
+            'recurrence': f'T(n) = {a}T(n/{b}) + {f_complexity}',
+            'log_b_a': round(math.log(a, b), 4) if a > 0 and b > 1 else 'N/A',
+            'f_complexity': f_complexity,
+            'theorem_case': case,
+            'result': result,
+            'reason': reason,
+        }
+
+    # ─────────────────────────────────────────────
+    # RECURRENCE DETECTOR (explicit T(n) strings)
+    # ─────────────────────────────────────────────
+
+    def detect_recurrence_from_string(self, recurrence_str):
+        """
+        Parse a recurrence like 'T(n) = 3T(n/2) + O(n)' and return complexity.
+        Useful for testing or educational explanations.
+        """
+        pattern = re.match(
+            r'T\s*\(\s*n\s*\)\s*=\s*(\d+)\s*T\s*\(\s*n\s*/\s*(\d+)\s*\)'
+            r'(?:\s*\+\s*(O\([^)]+\)))?',
+            recurrence_str.strip(), re.IGNORECASE
+        )
+        if not pattern:
+            return {'available': False, 'reason': 'Could not parse recurrence string. Expected format: T(n) = aT(n/b) + O(f)'}
+        a = int(pattern.group(1))
+        b = int(pattern.group(2))
+        f = pattern.group(3) or 'O(1)'
+        return {
+            'available': True,
+            'parsed': {'a': a, 'b': b, 'f': f},
+            **self.explain_master_theorem(a, b, f)
+        }
+
+    # ─────────────────────────────────────────────
+    # PROBABILISTIC / RANDOMIZED ANALYSIS
+    # ─────────────────────────────────────────────
+
+    def analyze_probabilistic_complexity(self, code):
+        """
+        Detects randomized algorithms and returns expected vs worst-case complexity.
+        """
+        results = []
+
+        if re.search(r'random.*pivot|rand.*partition|randomized.*quick', code, re.IGNORECASE):
+            results.append({
+                'algorithm': 'Randomized QuickSort',
+                'expected': 'O(n log n)',
+                'worst_case': 'O(n²)',
+                'probability_of_worst': 'O(1/n!) — exponentially unlikely with random pivot',
+                'note': 'Expected O(n log n) with high probability. Use Introsort for strict O(n log n) guarantee.'
+            })
+
+        if re.search(r'miller.?rabin|strong.*witness|fermat.*prime', code, re.IGNORECASE):
+            results.append({
+                'algorithm': 'Miller-Rabin Primality Test',
+                'expected': 'O(k log² n)',
+                'worst_case': 'O(k log² n)',
+                'error_probability': 'at most 4^(-k)',
+                'note': 'k=40 gives error probability < 10^(-24). Deterministic for n < 3.3×10²⁴ with k=7 fixed witnesses.'
+            })
+
+        if re.search(r'bloom.?filter|bloomfilter', code, re.IGNORECASE):
+            results.append({
+                'algorithm': 'Bloom Filter',
+                'expected': 'O(k) per op',
+                'worst_case': 'O(k) per op',
+                'false_positive_rate': '(1 - e^(-kn/m))^k ≈ 0.6185^(m/n) with optimal k',
+                'note': 'No false negatives. Optimal k = (m/n) ln 2.'
+            })
+
+        if re.search(r'skip.?list|skiplist', code, re.IGNORECASE):
+            results.append({
+                'algorithm': 'Skip List',
+                'expected': 'O(log n)',
+                'worst_case': 'O(n)',
+                'probability_of_worst': 'O(1/n^c) for constant c — with high probability O(log n)',
+                'note': 'Expected O(log n) with O(n log n) space. Randomized but practically reliable.'
+            })
+
+        if re.search(r'treap|tree.*heap.*rand', code, re.IGNORECASE):
+            results.append({
+                'algorithm': 'Treap',
+                'expected': 'O(log n)',
+                'worst_case': 'O(n)',
+                'probability_of_worst': 'Exponentially small — random priorities give O(log n) w.h.p.',
+                'note': 'O(log n) expected height. Much simpler than Red-Black Trees with same bounds.'
+            })
+
+        if re.search(r'monte.?carlo|random.*sample', code, re.IGNORECASE):
+            results.append({
+                'algorithm': 'Monte Carlo Sampling',
+                'expected': 'O(n)',
+                'worst_case': 'O(n)',
+                'accuracy': 'Error ε with probability δ requires n = O(log(1/δ) / ε²) samples (Chernoff)',
+                'note': 'Always terminates in O(n). May produce wrong answer — increase samples for accuracy.'
+            })
+
+        if re.search(r'las.?vegas|always.?correct.*rand', code, re.IGNORECASE):
+            results.append({
+                'algorithm': 'Las Vegas Algorithm',
+                'expected': 'O(expected)',
+                'worst_case': 'Unbounded (but probability of long runs decays exponentially)',
+                'note': 'Always correct. Expected runtime finite — geometric distribution of success per trial.'
+            })
+
+        return results if results else []
+
+    # ─────────────────────────────────────────────
+    # PARALLEL / CONCURRENT COMPLEXITY HINTS
+    # ─────────────────────────────────────────────
+
+    def detect_parallelism_hints(self, code):
+        """
+        Detects patterns that suggest parallelizable work and estimates
+        potential parallel complexity (span / work model).
+        """
+        hints = []
+
+        if re.search(r'map\s*\(|filter\s*\(|reduce\s*\(|\.map\s*\(|\.filter\s*\(', code):
+            hints.append({
+                'pattern': 'map/filter/reduce',
+                'sequential': 'O(n)',
+                'parallel_work': 'O(n)',
+                'parallel_span': 'O(log n)',
+                'speedup': 'O(n / log n) with n processors',
+                'note': 'Embarrassingly parallel — trivially maps to GPU or SIMD.'
+            })
+
+        if re.search(r'merge.?sort|mergeSort', code, re.IGNORECASE):
+            hints.append({
+                'pattern': 'merge sort',
+                'sequential': 'O(n log n)',
+                'parallel_work': 'O(n log n)',
+                'parallel_span': 'O(log² n)',
+                'note': 'Parallel merge sort achieves O(log² n) span using Cole\'s algorithm.'
+            })
+
+        if re.search(r'prefix.?sum|prefix_sum|cumulative.?sum', code, re.IGNORECASE):
+            hints.append({
+                'pattern': 'prefix sum',
+                'sequential': 'O(n)',
+                'parallel_work': 'O(n)',
+                'parallel_span': 'O(log n)',
+                'note': 'Parallel prefix (scan) achieves O(log n) span with n processors — standard GPU primitive.'
+            })
+
+        if re.search(r'matrix.*mul|matmul|dot.*product', code, re.IGNORECASE):
+            hints.append({
+                'pattern': 'matrix multiplication',
+                'sequential': 'O(n³)',
+                'parallel_work': 'O(n³)',
+                'parallel_span': 'O(log n)',
+                'speedup': 'O(n³ / log n) with n³ processors',
+                'note': 'Inner products are independent — highly parallelizable on GPU (cuBLAS).'
+            })
+
+        if re.search(r'for\s+.*\s+in\s+.*:\n.*\bsort\b|\bsorted\b', code, re.IGNORECASE | re.DOTALL):
+            hints.append({
+                'pattern': 'independent sorts',
+                'note': 'Multiple independent sort calls can be parallelized — each on a separate thread.'
+            })
+
+        return hints
+
+    # ─────────────────────────────────────────────
+    # CACHE / MEMORY COMPLEXITY HINTS
+    # ─────────────────────────────────────────────
+
+    def detect_cache_complexity(self, code):
+        """
+        Detects cache-oblivious or cache-unfriendly patterns and
+        estimates cache miss complexity (I/O model).
+        """
+        hints = []
+
+        # Column-major access on row-major array (cache unfriendly in C/C++)
+        col_major = bool(re.search(
+            r'for\s+\w+\s+in\s+range.*:\s*\n\s*for\s+\w+\s+in\s+range.*:\s*\n\s*.*\[\s*\w+\s*\]\s*\[\s*\w+\s*\]',
+            code, re.DOTALL
+        )) or bool(re.search(r'arr\s*\[j\]\s*\[i\]|matrix\s*\[j\]\s*\[i\]', code))
+        if col_major:
+            hints.append({
+                'pattern': 'column-major access on row-major array',
+                'cache_misses': 'O(n²) — every access is a cache miss for large n',
+                'fix': 'Transpose the loop order: iterate rows in outer loop, columns in inner loop.',
+                'severity': 'high'
+            })
+
+        # Merge sort — cache-oblivious optimal
+        if re.search(r'merge.?sort|mergeSort', code, re.IGNORECASE):
+            hints.append({
+                'pattern': 'merge sort',
+                'cache_complexity': 'O((n/B) log_{M/B}(n/B)) I/Os',
+                'note': 'Cache-oblivious optimal for sorting. B=block size, M=cache size.'
+            })
+
+        # Random access patterns (hash tables)
+        if re.search(r'hash.*table|dict\[|map\[|\{\}', code, re.IGNORECASE):
+            hints.append({
+                'pattern': 'hash table random access',
+                'cache_complexity': 'O(n) cache misses for n lookups (poor locality)',
+                'note': 'Hash tables have poor cache locality. For sequential access, sorted arrays + binary search may be faster in practice.'
+            })
+
+        # Sequential array access (cache friendly)
+        if re.search(r'for\s+\w+\s+in\s+range.*arr\[', code) or re.search(r'for\s*\(.*;\s*\w+\s*<\s*n.*arr\[', code):
+            hints.append({
+                'pattern': 'sequential array access',
+                'cache_complexity': 'O(n/B) cache misses — optimal sequential scan',
+                'note': 'Sequential access is cache-friendly — hardware prefetcher will predict next cache line.'
+            })
+
+        return hints
+
+    # ─────────────────────────────────────────────
+    # COMPREHENSIVE FULL ANALYSIS (extended API)
+    # ─────────────────────────────────────────────
+
+    def full_analysis(self, code, filename=None, concrete_inputs=None):
+        """
+        Runs all analyses and returns a unified report dict including
+        standard analysis, Master Theorem, probabilistic hints,
+        parallelism hints, and cache complexity hints.
+        """
+        base = self.analyze(code, filename, concrete_inputs)
+        language = base.get('language', 'unknown')
+
+        master_info = None
+        recursion = self.analyze_recursion(code, language)
+        if recursion.get('is_recursive'):
+            body = self._extract_function_body(code, recursion.get('func_name', ''), language) or ''
+            call_count = len(re.findall(rf'\b{recursion.get("func_name", "_")}\s*\(', body))
+            has_halving = bool(re.search(r'\/\s*2|>>\s*1|Math\.floor\s*\(', body))
+            if call_count >= 2 and has_halving:
+                ft, fp = self._body_work_to_ft_fp(
+                    self.compute_loop_complexity(self.extract_loop_tree(body, language)) or 'O(1)'
+                )
+                result, case, reason = self.master_theorem.solve(call_count, 2, ft, fp)
+                master_info = {
+                    'recurrence': f'T(n) = {call_count}T(n/2) + {self._tuple_to_string((ft, fp))}',
+                    'theorem_case': case,
+                    'result': result,
+                    'reason': reason,
+                }
+
+        prob = self.analyze_probabilistic_complexity(code)
+        parallel = self.detect_parallelism_hints(code)
+        cache = self.detect_cache_complexity(code)
+        bitwise = self.classify_bitwise_loop(code)
+        complexity_class = self.describe_complexity_class(base['time_complexity'])
+
+        return {
+            **base,
+            'master_theorem': master_info,
+            'probabilistic_analysis': prob,
+            'parallelism_hints': parallel,
+            'cache_complexity_hints': cache,
+            'bitwise_analysis': bitwise,
+            'complexity_class_description': complexity_class,
+        }

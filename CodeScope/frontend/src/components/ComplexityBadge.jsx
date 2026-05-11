@@ -1,6 +1,6 @@
 export default function ComplexityBadge({ complexity }) {
   const getStyle = () => {
-    const good = ['O(1)', 'O(log n)'];
+    const good = ['O(1)', 'O(log n)', 'O(log² n)', 'O(log³ n)'];
     const medium = ['O(n)', 'O(n log n)'];
     if (good.includes(complexity)) {
       return { background: '#e6f4ea', color: '#34a853', border: '1px solid #34a853' };
@@ -15,6 +15,8 @@ export default function ComplexityBadge({ complexity }) {
     const labels = {
       'O(1)': 'Excellent',
       'O(log n)': 'Great',
+      'O(log² n)': 'Great',
+      'O(log³ n)': 'Great',
       'O(n)': 'Good',
       'O(n log n)': 'Fair',
       'O((log n)!)': 'Critical',

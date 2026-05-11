@@ -141,6 +141,28 @@ class AnalyzerComplexityTests(unittest.TestCase):
 
         self.assertEqual(result["complexity"], "O(n log n)")
 
+    def test_nested_log_triangular_loop_is_log_cubed(self):
+        code = """def tricky_loop(n):
+    count = 0
+    i = 1
+    while i < n:
+        j = 1
+        while j < n:
+            k = j
+            while k > 0:
+                k //= 2
+                count += 1
+            j *= 2
+        i *= 2
+    return count
+"""
+
+        result = self.analyzer.analyze(code, "tricky_loop.py", {"n": 1024})
+
+        self.assertEqual(result["time_complexity"], "O(log³ n)")
+        self.assertEqual(result["space_complexity"], "O(1)")
+        self.assertEqual(result["input_effect_analysis"]["estimated_time_units"], "1,000")
+
     def test_regular_nested_loops_stay_quadratic(self):
         code = """def example(n):
     for i in range(n):
@@ -151,6 +173,80 @@ class AnalyzerComplexityTests(unittest.TestCase):
         result = self.analyzer.detect_time_complexity(code, "python")
 
         self.assertEqual(result["complexity"], "O(n²)")
+
+    def test_generic_quadratic_optimization_is_problem_dependent_not_hashmap(self):
+        code = """def matrix_scan(n):
+    total = 0
+    for i in range(n):
+        for j in range(n):
+            total += i * j
+    return total
+"""
+
+        result = self.analyzer.analyze(code, "matrix.py")
+
+        self.assertEqual(result["time_complexity"], "O(n²)")
+        self.assertTrue(result["optimizations"])
+        self.assertNotIn("Hash Map", result["optimizations"][0]["title"])
+        self.assertEqual(result["optimizations"][0]["complexity_after"], "problem-dependent")
+
+    def test_pair_search_quadratic_optimization_can_suggest_hashmap(self):
+        code = """def two_sum(nums, target):
+    for i in range(len(nums)):
+        for j in range(i + 1, len(nums)):
+            if nums[i] + nums[j] == target:
+                return [i, j]
+    return []
+"""
+
+        result = self.analyzer.analyze(code, "two_sum.py")
+
+        self.assertEqual(result["time_complexity"], "O(n²)")
+        self.assertTrue(result["optimizations"])
+        self.assertIn("Hash Map", result["optimizations"][0]["title"])
+
+    def test_strassen_matrix_multiplication_is_detected_without_screen_error(self):
+        code = """import numpy as np
+
+def split(matrix):
+    row, col = matrix.shape
+    r, c = row // 2, col // 2
+    return matrix[:r, :c], matrix[:r, c:], matrix[r:, :c], matrix[r:, c:]
+
+def strassen(A, B):
+    if len(A) == 1:
+        return A * B
+
+    A11, A12, A21, A22 = split(A)
+    B11, B12, B21, B22 = split(B)
+
+    M1 = strassen(A11 + A22, B11 + B22)
+    M2 = strassen(A21 + A22, B11)
+    M3 = strassen(A11, B12 - B22)
+    M4 = strassen(A22, B21 - B11)
+    M5 = strassen(A11 + A12, B22)
+    M6 = strassen(A21 - A11, B11 + B12)
+    M7 = strassen(A12 - A22, B21 + B22)
+
+    C11 = M1 + M4 - M5 + M7
+    C12 = M3 + M5
+    C21 = M2 + M4
+    C22 = M1 - M2 + M3 + M6
+
+    return np.vstack((np.hstack((C11, C12)),
+                      np.hstack((C21, C22))))
+"""
+
+        result = self.analyzer.analyze(
+            code,
+            "strassen.py",
+            {"A": [[1, 2], [3, 4]], "B": [[5, 6], [7, 8]]}
+        )
+
+        self.assertEqual(result["time_complexity"], "O(n^2.807)")
+        self.assertEqual(result["space_complexity"], "O(n²)")
+        self.assertIn("input_effect_analysis", result)
+        self.assertEqual(self.analyzer.last_func_complexities["strassen"], "O(n^2.807)")
 
 
     def test_inner_square_bound_sums_to_cubic(self):
@@ -231,6 +327,19 @@ class AnalyzerComplexityTests(unittest.TestCase):
         result = self.analyzer.detect_time_complexity(code, "python")
 
         self.assertEqual(result["complexity"], "O(n)")
+
+    def test_uneven_divide_recursion_uses_akra_bazzi(self):
+        code = """def weird_recursion(n):
+    if n <= 1:
+        return 1
+    return weird_recursion(n // 2) + weird_recursion(n // 3) + n
+"""
+
+        result = self.analyzer.analyze(code, "weird.py", {"n": 1024})
+
+        self.assertEqual(result["time_complexity"], "O(n^0.788)")
+        self.assertEqual(result["space_complexity"], "O(log n)")
+        self.assertIn("Akra-Bazzi", result["time_complexity_reason"])
 
     def test_balanced_mid_partition_recursion_is_linear_not_exponential(self):
         code = """def tricky_bs(arr, l, r):

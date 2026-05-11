@@ -1,7 +1,7 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDropzone } from 'react-dropzone';
-import { analyzeCode, analyzeZip, analyzeGithub } from '../services/api';
+import { analyzeCode, analyzeZip, analyzeGithub, inferInputs } from '../services/api';
 
 const splitParams = (raw = '') => {
   const params = [];
@@ -139,7 +139,39 @@ export default function Analyze() {
   const [zipFile, setZipFile] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const inputSchema = useMemo(() => inferInputSchema(code, filename), [code, filename]);
+  const [backendInputSchema, setBackendInputSchema] = useState(null);
+  const [schemaLoading, setSchemaLoading] = useState(false);
+  const localInputSchema = useMemo(() => inferInputSchema(code, filename), [code, filename]);
+  const inputSchema = backendInputSchema || localInputSchema;
+
+  useEffect(() => {
+    const trimmed = code.trim();
+    setBackendInputSchema(null);
+    if (!trimmed) {
+      setSchemaLoading(false);
+      return undefined;
+    }
+
+    let active = true;
+    setSchemaLoading(true);
+    const timer = window.setTimeout(async () => {
+      try {
+        const response = await inferInputs(code, filename);
+        if (active && response?.input_schema) {
+          setBackendInputSchema(response.input_schema);
+        }
+      } catch {
+        if (active) setBackendInputSchema(null);
+      } finally {
+        if (active) setSchemaLoading(false);
+      }
+    }, 350);
+
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [code, filename]);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     accept: { 'application/zip': ['.zip'] },
@@ -287,7 +319,7 @@ export default function Analyze() {
                       Inputs for {inputSchema.function}()
                     </label>
                     <span style={{ fontSize: '12px', color: 'var(--gray)', fontFamily: 'var(--font-code)' }}>
-                      Detected from pasted code
+                      {schemaLoading ? 'Checking analyzer' : backendInputSchema ? 'Analyzer schema' : 'Detected from pasted code'}
                     </span>
                   </div>
                   <div style={{
