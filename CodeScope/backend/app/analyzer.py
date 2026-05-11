@@ -2298,11 +2298,11 @@ class CodeAnalyzer:
             }
 
         # Dynamic Array (Amortized)
-        if re.search(r'dynamic.?array|amortized|array.*double.*capacity|capacity.*double.*append|vector.*push_back.*realloc|amortised', code, re.IGNORECASE):
+        if self._looks_like_dynamic_array_doubling(code) or re.search(r'dynamic.?array|amortized|amortised|vector.*push_back.*realloc', code, re.IGNORECASE):
             return {
                 'detected': True, 'algorithm': 'Dynamic Array (Amortized Append)',
-                'complexity': 'O(1) amortized', 'space': 'O(n)',
-                'reason': 'Doubling strategy: total copy work = O(n), amortized O(1) per append',
+                'complexity': 'O(n)', 'space': 'O(n)',
+                'reason': 'Dynamic-array doubling: resizes copy 1+2+4+...+n elements total = O(n), so n appends are O(n) total and O(1) amortized each',
                 'can_optimize': False, 'note': 'Already optimal. Pre-reserve capacity if final size is known.'
             }
 
@@ -2639,6 +2639,26 @@ class CodeAnalyzer:
             r'monoton|next.?greater|prev.?greater|next.?smaller|histogram|largest.?rectangle', code, re.IGNORECASE
         ))
         return has_mono_name or (has_stack_ops and has_mono_comparison)
+
+    def _looks_like_dynamic_array_doubling(self, code):
+        compact = re.sub(r'\s+', ' ', code)
+        has_capacity = bool(re.search(r'\bcapacity\b', code, re.IGNORECASE))
+        doubles_capacity = bool(re.search(
+            r'\bcapacity\s*\*=\s*2\b|\bcapacity\s*=\s*capacity\s*\*\s*2\b|'
+            r'\bnew_?\w*\s*=\s*\[[^\]]*\]\s*\*\s*\(?\s*2\s*\*\s*capacity\s*\)?|'
+            r'\bnew\s+\w+\s*\[\s*2\s*\*\s*capacity\s*\]',
+            code,
+            re.IGNORECASE
+        ))
+        copies_old_items = bool(re.search(
+            r'for\s+\w+\s+in\s+range\s*\(\s*capacity\s*\)|'
+            r'for\s*\([^;]*;\s*\w+\s*<\s*capacity\s*;',
+            code,
+            re.IGNORECASE
+        ))
+        appends = bool(re.search(r'\.append\s*\(|\.push\s*\(|push_back\s*\(', code, re.IGNORECASE))
+        resize_guard = bool(re.search(r'if\s+[^:\n{]*(?:size|len\s*\([^)]*\))\s*==\s*capacity', compact, re.IGNORECASE))
+        return has_capacity and doubles_capacity and copies_old_items and appends and resize_guard
 
     def _looks_like_permutation_backtracking(self, code):
         code_lower = code.lower()
@@ -3639,6 +3659,8 @@ class CodeAnalyzer:
         return issues
 
     def _check_nested_loop_issues(self, loops, issues, lines, depth=0):
+        if depth == 0 and self._looks_like_dynamic_array_doubling('\n'.join(lines)):
+            return
         for loop in loops:
             if loop['children']:
                 linear_children = [c for c in loop['children'] if c['type'] == 'linear']
@@ -4320,7 +4342,7 @@ public static int[] dijkstra(List<List<int[]>> graph, int source) {
         Returns an amortized analysis dict or None.
         """
         # Dynamic array doubling
-        doubling = bool(re.search(
+        doubling = self._looks_like_dynamic_array_doubling(code) or bool(re.search(
             r'capacity\s*\*=\s*2|capacity\s*=\s*capacity\s*\*\s*2|'
             r'new_cap\s*=\s*\w+\s*\*\s*2|reserve.*\*\s*2|'
             r'if\s+len\s*\(\s*\w+\s*\)\s*==\s*capacity',

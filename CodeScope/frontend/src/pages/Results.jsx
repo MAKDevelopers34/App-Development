@@ -77,6 +77,7 @@ export default function Results() {
     const issues = Array.isArray(r?.issues) ? r.issues : [];
     const concrete = r?.concrete_analysis;
     const inputEffect = r?.input_effect_analysis;
+    const amortized = r?.amortized_analysis;
     //const suggestions = Array.isArray(r?.suggestions) ? r.suggestions : [];
     const safeFilename = filename || getSafeFilename(data);
 
@@ -236,6 +237,40 @@ export default function Results() {
                   {inputEffect.reason || 'Input impact estimate is unavailable for these values.'}
                 </p>
               )}
+            </div>
+          )}
+
+          {/* Amortized Analysis */}
+          {amortized && (
+            <div className="card" style={{ border: '1px solid #b7dfbf', background: '#f6fff8' }}>
+              <h3 style={{ fontSize: '16px', fontWeight: '600', marginBottom: '14px' }}>
+                Amortized Analysis
+              </h3>
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+                gap: '12px',
+                marginBottom: '12px'
+              }}>
+                {[
+                  ['Pattern', amortized.pattern],
+                  ['Worst Operation', amortized.per_operation_worst],
+                  ['Amortized Operation', amortized.amortized_per_operation],
+                  ['Total Cost', amortized.total_for_n_ops],
+                ].map(([label, value]) => (
+                  <div key={label} style={{ background: 'white', border: '1px solid var(--border)', borderRadius: '8px', padding: '10px' }}>
+                    <div style={{ fontSize: '11px', color: 'var(--gray)', fontWeight: '700', textTransform: 'uppercase', marginBottom: '4px' }}>
+                      {label}
+                    </div>
+                    <div style={{ fontSize: '13px', color: 'var(--dark)', fontWeight: '600', fontFamily: 'var(--font-code)', overflowWrap: 'anywhere' }}>
+                      {String(value || 'N/A')}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <p style={{ fontSize: '13px', color: 'var(--dark)', lineHeight: '1.6', margin: 0 }}>
+                {amortized.reason}
+              </p>
             </div>
           )}
 

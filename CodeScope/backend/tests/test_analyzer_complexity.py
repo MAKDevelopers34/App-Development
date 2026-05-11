@@ -174,6 +174,32 @@ class AnalyzerComplexityTests(unittest.TestCase):
 
         self.assertEqual(result["complexity"], "O(n²)")
 
+    def test_dynamic_array_doubling_is_linear_total_with_amortized_append(self):
+        code = """def dynamic_array_ops(n):
+    arr = []
+    size = 1
+    capacity = 1
+
+    for i in range(n):
+        if size == capacity:
+            new_arr = [0] * (2 * capacity)
+            for j in range(capacity):
+                new_arr[j] = arr[j] if j < len(arr) else 0
+            arr = new_arr
+            capacity *= 2
+        arr.append(i)
+        size += 1
+    return arr
+"""
+
+        result = self.analyzer.analyze(code, "dynamic.py", {"n": 1024})
+
+        self.assertEqual(result["time_complexity"], "O(n)")
+        self.assertEqual(result["space_complexity"], "O(n)")
+        self.assertIn("amortized_analysis", result)
+        self.assertEqual(result["amortized_analysis"]["amortized_per_operation"], "O(1)")
+        self.assertFalse(result["issues"])
+
     def test_generic_quadratic_optimization_is_problem_dependent_not_hashmap(self):
         code = """def matrix_scan(n):
     total = 0
