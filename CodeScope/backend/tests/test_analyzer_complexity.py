@@ -1,6 +1,7 @@
 import unittest
 
 from app.analyzer import CodeAnalyzer
+from app.ai_explainer import _merge_ai_function_explanations
 
 
 class AnalyzerComplexityTests(unittest.TestCase):
@@ -231,6 +232,70 @@ class AnalyzerComplexityTests(unittest.TestCase):
         self.assertTrue(result["optimizations"])
         self.assertIn("Hash Map", result["optimizations"][0]["title"])
 
+    def test_matrix_power_reports_professional_per_function_breakdown(self):
+        code = """def multiply(A, B):
+    n = len(A)
+    result = [[0]*n for _ in range(n)]
+
+    for i in range(n):
+        for j in range(n):
+            for k in range(n):
+                result[i][j] += A[i][k] * B[k][j]
+    return result
+
+def power(matrix, n):
+    if n == 1:
+        return matrix
+    if n % 2 == 0:
+        half = power(matrix, n // 2)
+        return multiply(half, half)
+    else:
+        return multiply(matrix, power(matrix, n - 1))
+"""
+
+        result = self.analyzer.analyze(code, "matrix_power.py")
+        details = {item["function"]: item for item in result["function_complexity_details"]}
+
+        self.assertEqual(result["time_complexity"], "O(k\u00b3 log n)")
+        self.assertEqual(result["space_complexity"], "O(k\u00b2)")
+        self.assertEqual(self.analyzer.last_func_own_complexities["power"], "O(log n)")
+        self.assertEqual(self.analyzer.last_func_complexities["power"], "O(k\u00b3 log n)")
+        self.assertEqual(details["power"]["own_complexity"], "O(log n)")
+        self.assertEqual(details["power"]["effective_complexity"], "O(k\u00b3 log n)")
+        self.assertIn("Binary matrix exponentiation", details["power"]["reason"])
+        self.assertEqual(len(result["issues"]), 1)
+        self.assertIn("Naive matrix multiplication core", result["issues"][0]["message"])
+
+    def test_ai_function_text_cannot_override_analyzer_complexity_facts(self):
+        details = [
+            {
+                "function": "power",
+                "own_complexity": "O(log n)",
+                "effective_complexity": "O(k\u00b3 log n)",
+                "complexity": "O(k\u00b3 log n)",
+                "reason": "Binary matrix exponentiation",
+                "calls": [{"function": "multiply", "multiplier": "O(1)", "complexity": "O(k\u00b3)"}],
+            }
+        ]
+        ai_items = [
+            {
+                "function": "power",
+                "own_complexity": "O(1)",
+                "effective_complexity": "O(n)",
+                "complexity": "O(n)",
+                "calls": [],
+                "explanation": "AI wording only."
+            }
+        ]
+
+        merged = _merge_ai_function_explanations(details, ai_items)
+
+        self.assertEqual(merged[0]["own_complexity"], "O(log n)")
+        self.assertEqual(merged[0]["effective_complexity"], "O(k\u00b3 log n)")
+        self.assertEqual(merged[0]["complexity"], "O(k\u00b3 log n)")
+        self.assertEqual(merged[0]["calls"], details[0]["calls"])
+        self.assertEqual(merged[0]["explanation"], "AI wording only.")
+
     def test_strassen_matrix_multiplication_is_detected_without_screen_error(self):
         code = """import numpy as np
 
@@ -460,6 +525,27 @@ def strassen(A, B):
         self.assertEqual(concrete["calls"], 4)
         self.assertEqual(concrete["edge_scans"], 4)
         self.assertEqual(concrete["symbolic_time_complexity"], "O(V + E)")
+
+    def test_repeated_dfs_with_fresh_visited_repeats_graph_work(self):
+        code = """def dfs(graph, node, visited):
+    if node in visited:
+        return
+    visited.add(node)
+    for neighbor in graph[node]:
+        dfs(graph, neighbor, visited)
+
+def run_all_nodes(graph):
+    for node in graph:
+        dfs(graph, node, set())
+"""
+
+        result = self.analyzer.analyze(code, "graph.py")
+
+        self.assertEqual(result["time_complexity"], "O(V * (V + E))")
+        self.assertEqual(result["space_complexity"], "O(V)")
+        self.assertIn("fresh visited set", result["time_complexity_reason"])
+        self.assertEqual(result["optimizations"][0]["complexity_after"], "O(V + E)")
+        self.assertTrue(result["transformed_code"]["available"])
 
     def test_javascript_generator_mixed_recurrence_is_exponential(self):
         code = r"""function* js_4_gen(n) {

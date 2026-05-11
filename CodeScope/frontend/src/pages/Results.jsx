@@ -367,14 +367,13 @@ export default function Results() {
           {r.function_explanations && r.function_explanations.length > 0 && (
             <div className="card">
               <h3 style={{ fontSize: '16px', fontWeight: '600', marginBottom: '16px' }}>
-                🧩 Per-Function Complexity Breakdown
+                Per-Function Complexity Breakdown
               </h3>
               {r.function_explanations.map((fn, i) => (
                 <div key={i} style={{
-                  display: 'flex',
-                  alignItems: 'flex-start',
-                  flexWrap: 'wrap',
-                  gap: '12px',
+                  display: 'grid',
+                  gridTemplateColumns: 'minmax(120px, 180px) minmax(0, 1fr)',
+                  gap: '12px 16px',
                   padding: '12px 0',
                   borderBottom: i < r.function_explanations.length - 1 ? '1px solid var(--border)' : 'none'
                 }}>
@@ -392,18 +391,53 @@ export default function Results() {
                     {fn.function}()
                   </code>
                   <div style={{ flex: '1 1 220px', minWidth: 0 }}>
-                    <span style={{
-                      fontSize: '12px',
-                      fontWeight: '600',
-                      fontFamily: 'var(--font-code)',
-                      color: 'var(--dark)',
-                      marginRight: '8px'
-                    }}>
-                      {fn.complexity}
-                    </span>
-                    <span style={{ fontSize: '13px', color: 'var(--gray)', lineHeight: '1.6', overflowWrap: 'anywhere' }}>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '6px' }}>
+                      <span style={{
+                        fontSize: '12px',
+                        fontWeight: '700',
+                        fontFamily: 'var(--font-code)',
+                        color: 'var(--dark)',
+                        background: '#f8fafc',
+                        border: '1px solid var(--border)',
+                        borderRadius: '999px',
+                        padding: '3px 8px'
+                      }}>
+                        own: {fn.own_complexity || fn.complexity}
+                      </span>
+                      {(fn.effective_complexity || fn.complexity) !== (fn.own_complexity || fn.complexity) && (
+                        <span style={{
+                          fontSize: '12px',
+                          fontWeight: '700',
+                          fontFamily: 'var(--font-code)',
+                          color: 'var(--danger)',
+                          background: '#fce8e6',
+                          border: '1px solid #f6b8b3',
+                          borderRadius: '999px',
+                          padding: '3px 8px'
+                        }}>
+                          effective: {fn.effective_complexity || fn.complexity}
+                        </span>
+                      )}
+                    </div>
+                    <p style={{ fontSize: '13px', color: 'var(--gray)', lineHeight: '1.6', overflowWrap: 'anywhere', margin: 0 }}>
                       {fn.explanation}
-                    </span>
+                    </p>
+                    {fn.calls && fn.calls.length > 0 && (
+                      <div style={{ marginTop: '8px', display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                        {fn.calls.map((call, callIndex) => (
+                          <span key={callIndex} style={{
+                            fontSize: '11px',
+                            fontFamily: 'var(--font-code)',
+                            color: 'var(--primary)',
+                            background: 'var(--primary-light)',
+                            borderRadius: '999px',
+                            padding: '3px 8px'
+                          }}>
+                            calls {call.function}() {call.multiplier && call.multiplier !== 'O(1)' ? `x ${call.multiplier}` : ''}{' -> '}{call.complexity}
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 </div>
               ))}

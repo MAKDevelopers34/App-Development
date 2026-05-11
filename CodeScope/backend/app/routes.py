@@ -64,7 +64,9 @@ def analyze_code():
         result['function_explanations'] = get_function_level_explanations(
             analyzer.last_func_complexities,
             call_graph_report,
-            language
+            language,
+            analyzer.last_func_complexity_details,
+            code
         )
 
         return jsonify({'success': True, 'filename': filename, 'result': result})
@@ -140,7 +142,9 @@ def analyze_zip():
                         result['function_explanations'] = get_function_level_explanations(
                             analyzer.last_func_complexities,
                             call_graph_report,
-                            language
+                            language,
+                            analyzer.last_func_complexity_details,
+                            code
                         )
 
                         results.append({'filename': filename, 'result': result})
@@ -202,7 +206,9 @@ def analyze_github():
             result['function_explanations'] = get_function_level_explanations(
                 analyzer.last_func_complexities,
                 call_graph_report,
-                language
+                language,
+                analyzer.last_func_complexity_details,
+                file['code']
             )
 
             results.append({'filename': file['filename'], 'result': result})

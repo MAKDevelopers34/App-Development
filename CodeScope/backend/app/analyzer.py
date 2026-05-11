@@ -79,7 +79,7 @@ class CallGraphAnalyzer:
             'O(n!)': 11, 'O(n * n!)': 11.5,
             'O(A(m, n))': 12,
             'O((V + E) log V)': 4, 'O(V + E)': 3,
-            'O(V × E)': 6, 'O(V E²)': 7, 'O(V³)': 8,
+            'O(V × E)': 6, 'O(V * (V + E))': 7.5, 'O(V E²)': 7, 'O(V³)': 8,
         }
         return a if rank.get(a, 3) >= rank.get(b, 3) else b
 
@@ -229,6 +229,8 @@ class CodeAnalyzer:
         self.call_graph_analyzer = CallGraphAnalyzer()
         self.master_theorem = MasterTheoremEngine()
         self.last_func_complexities = {}
+        self.last_func_own_complexities = {}
+        self.last_func_complexity_details = {}
 
     def _function_def_regex(self):
         return (
@@ -256,6 +258,9 @@ class CodeAnalyzer:
         language = self.detect_language(code, filename)
         input_schema = self.infer_input_schema(code, language)
         self.last_func_complexities = self._extract_all_function_complexities(code, language)
+        self.last_func_complexity_details = self._build_function_complexity_details(
+            code, language, self.last_func_own_complexities, self.last_func_complexities
+        )
         time_result = self.detect_time_complexity(code, language)
         if self.last_func_complexities:
             function_worst = self._max_complexity(self.last_func_complexities.values())
@@ -290,6 +295,7 @@ class CodeAnalyzer:
             'rating': 0,
             'lines_of_code': len(code.strip().split('\n')),
             'input_schema': input_schema,
+            'function_complexity_details': list(self.last_func_complexity_details.values()),
         }
         if concrete_inputs:
             result['provided_inputs'] = concrete_inputs
@@ -632,12 +638,20 @@ class CodeAnalyzer:
             v = max(1, graph.get('V', n))
             e = max(0, graph.get('E', 0))
             log_v = max(1, math.log2(max(2, v)))
+            if text == 'O(V)':
+                return self._estimate_payload(v, f'V = {v}')
+            if text == 'O(E)':
+                return self._estimate_payload(e, f'E = {e}')
             if text == 'O(V + E)':
                 return self._estimate_payload(v + e, f'V + E = {v} + {e}')
             if text == 'O((V + E) log V)':
                 return self._estimate_payload((v + e) * log_v, f'(V+E)logV = ({v}+{e})*log2({v})')
             if text == 'O(V x E)':
                 return self._estimate_payload(v * e, f'V*E = {v}*{e}')
+            if text in ('O(V * (V + E))', 'O(V x (V + E))'):
+                return self._estimate_payload(v * (v + e), f'V*(V+E) = {v}*({v}+{e})')
+            if text == 'O(V^2)':
+                return self._estimate_payload(v ** 2, f'V^2 = {v}^2')
             if text == 'O(V^3)':
                 return self._estimate_payload(v ** 3, f'V^3 = {v}^3')
             if text == 'O(V E^2)':
@@ -668,6 +682,7 @@ class CodeAnalyzer:
             ('O(n^2 log n)', (n ** 2) * log_n, f'{n}^2*log2({n})'),
             ('O(n^3)', n ** 3, f'{n}^3'),
             ('O(n^3 log n)', (n ** 3) * log_n, f'{n}^3*log2({n})'),
+            ('O(k^3 log n)', (n ** 3) * log_n, f'k^3*log2(n) using dominant size {n}'),
         ]
         for expected, value, formula in formulas:
             if text == expected:
@@ -751,7 +766,7 @@ class CodeAnalyzer:
     # PER-FUNCTION COMPLEXITY EXTRACTION
     # ─────────────────────────────────────────────
 
-    def _extract_all_function_complexities(self, code, language):
+    def _extract_function_own_complexities(self, code, language):
         complexities = {}
         func_pattern = self._function_def_regex()
         func_names = re.findall(func_pattern, code)
@@ -765,6 +780,14 @@ class CodeAnalyzer:
                 else:
                     time_result = self.detect_time_complexity(body, language)
                     complexities[name] = time_result['complexity']
+
+        return complexities
+
+    def _extract_all_function_complexities(self, code, language):
+        func_pattern = self._function_def_regex()
+        func_names = re.findall(func_pattern, code)
+        complexities = self._extract_function_own_complexities(code, language)
+        self.last_func_own_complexities = dict(complexities)
 
         for _ in range(max(1, len(complexities))):
             changed = False
@@ -782,7 +805,83 @@ class CodeAnalyzer:
             if not changed:
                 break
 
+        self._apply_function_effective_overrides(code, language, complexities)
         return complexities
+
+    def _apply_function_effective_overrides(self, code, language, complexities):
+        func_pattern = self._function_def_regex()
+        for name in re.findall(func_pattern, code):
+            body = self._extract_function_body(code, name, language)
+            if self._looks_like_matrix_power_recursion(name, body, complexities):
+                complexities[name] = 'O(k³ log n)'
+
+    def _build_function_complexity_details(self, code, language, own_complexities, effective_complexities):
+        details = {}
+        func_pattern = self._function_def_regex()
+        for name in re.findall(func_pattern, code):
+            body = self._extract_function_body(code, name, language)
+            own = own_complexities.get(name, 'O(1)')
+            effective = effective_complexities.get(name, own)
+            reason = self._function_complexity_reason(name, body, own, effective, effective_complexities)
+            calls = self._function_call_summaries(body, effective_complexities, current_func=name)
+            details[name] = {
+                'function': name,
+                'own_complexity': own,
+                'effective_complexity': effective,
+                'complexity': effective,
+                'reason': reason,
+                'calls': calls,
+            }
+        return details
+
+    def _function_call_summaries(self, body, effective_complexities, current_func=None):
+        summaries = []
+        seen = set()
+        matrix_power_context = bool(
+            current_func and
+            self._looks_like_matrix_power_recursion(current_func, body, effective_complexities)
+        )
+        for callee, multiplier in self._call_loop_contexts(body, set(effective_complexities), current_func):
+            if callee == current_func:
+                continue
+            key = (callee, multiplier)
+            if key in seen:
+                continue
+            seen.add(key)
+            callee_complexity = effective_complexities.get(callee, 'O(1)')
+            if matrix_power_context and callee_complexity in ('O(n³)', 'O(n^3)'):
+                callee_complexity = 'O(k³)'
+            summaries.append({
+                'function': callee,
+                'multiplier': multiplier,
+                'complexity': callee_complexity,
+            })
+        return summaries
+
+    def _function_complexity_reason(self, name, body, own, effective, effective_complexities):
+        if self._looks_like_matrix_power_recursion(name, body, effective_complexities):
+            return (
+                'Binary matrix exponentiation: the exponent reaches the base case in O(log n) '
+                'recursive levels. Each level performs one matrix multiplication costing O(k³), '
+                'so the effective function cost is O(k³ log n).'
+            )
+        if self._looks_like_naive_matrix_multiplication(body):
+            return (
+                'Naive square matrix multiplication: three nested loops fill the k×k result, '
+                'and each cell computes a length-k dot product, giving O(k³) arithmetic work.'
+            )
+        if own != effective:
+            return (
+                f'Own work is {own}, but calls to helper functions raise the effective cost to {effective}.'
+            )
+        recursion = self._detect_body_recursion_complexity(name, body)
+        if recursion:
+            return recursion.get('reason', f'Recursive function with {effective} effective complexity.')
+        loops = self.extract_loop_tree(body, 'unknown')
+        loop_complexity = self.compute_loop_complexity(loops)
+        if loop_complexity:
+            return f'Loop structure in this function contributes {loop_complexity} work.'
+        return f'No input-sized loops or recursive expansion were found, so this function is {effective}.'
 
     # ─────────────────────────────────────────────
     # RECURSION COMPLEXITY DETECTION
@@ -849,6 +948,12 @@ class CodeAnalyzer:
         # T(n) = T(n/2) + O(n) → O(n) [Master Case 3]
         if call_count == 1 and has_halving and body_work == 'O(n)':
             return {'complexity': 'O(n)', 'reason': 'T(n)=T(n/2)+O(n) — Master Theorem Case 3 → O(n)'}
+
+        if self._looks_like_binary_exponentiation_recursion(func_name, body):
+            return {
+                'complexity': 'O(log n)',
+                'reason': 'Binary exponentiation recursion: only one branch runs per call, and the exponent halves after at most two steps'
+            }
 
         # T(n) = 2T(n/2) + O(n) → O(n log n) [Merge Sort]
         if call_count == 2 and has_halving and body_work == 'O(n)':
@@ -1612,6 +1717,15 @@ class CodeAnalyzer:
                 'reason': 'BFS augmenting paths × E iterations',
                 'can_optimize': True, 'optimized_to': "O(V²E) with Dinic's",
                 'note': "Dinic's algorithm gives O(V²E) which is better on unit-capacity graphs."
+            }
+        # Repeated DFS with a fresh visited set for every start node
+        if self._looks_like_repeated_fresh_graph_search(code, 'dfs'):
+            return {
+                'detected': True, 'algorithm': 'Repeated DFS from All Nodes',
+                'complexity': 'O(V * (V + E))', 'space': 'O(V)',
+                'reason': 'Outer loop starts DFS with a fresh visited set for each vertex, so traversal work can repeat from every start node',
+                'can_optimize': True, 'optimized_to': 'O(V + E)',
+                'note': 'Reuse one visited set across the outer loop when you only need graph traversal/components.'
             }
         # BFS
         if re.search(r'\bqueue\b|deque|bfs|breadth.?first', code, re.IGNORECASE):
@@ -2660,6 +2774,67 @@ class CodeAnalyzer:
         resize_guard = bool(re.search(r'if\s+[^:\n{]*(?:size|len\s*\([^)]*\))\s*==\s*capacity', compact, re.IGNORECASE))
         return has_capacity and doubles_capacity and copies_old_items and appends and resize_guard
 
+    def _looks_like_binary_exponentiation_recursion(self, func_name, body):
+        has_parity_branch = bool(re.search(r'%\s*2|&\s*1|is_?odd|is_?even', body, re.IGNORECASE))
+        has_halving_call = bool(re.search(
+            rf'\b{func_name}\s*\([^)]*(?://\s*2|/\s*2|>>\s*1|Math\.floor\s*\([^)]*/\s*2)',
+            body
+        ))
+        has_decrement_call = bool(re.search(
+            rf'\b{func_name}\s*\([^)]*\b\w+\s*-\s*1',
+            body
+        ))
+        return has_parity_branch and has_halving_call and has_decrement_call
+
+    def _looks_like_matrix_power_recursion(self, func_name, body, func_complexities=None):
+        if not self._looks_like_binary_exponentiation_recursion(func_name, body):
+            return False
+        matrix_hint = bool(re.search(r'\bmatrix\b|mat(?:rix)?|k×k|k\s*x\s*k', body, re.IGNORECASE))
+        helper_call = re.search(r'\b(\w*(?:multiply|matmul|matrix_mul|matrix_multiply|mul)\w*)\s*\(', body, re.IGNORECASE)
+        if not helper_call:
+            return False
+        if not func_complexities:
+            return matrix_hint
+        helper = helper_call.group(1)
+        helper_complexity = func_complexities.get(helper, '')
+        return matrix_hint or helper_complexity in ('O(n³)', 'O(n^3)', 'O(k³)')
+
+    def _looks_like_naive_matrix_multiplication(self, code):
+        compact = re.sub(r'\s+', ' ', code)
+        loop_count = len(re.findall(r'\b(?:for|while)\b', code))
+        has_2d_product = bool(re.search(
+            r'\[[^\]]+\]\s*\[[^\]]+\].*\*.*\[[^\]]+\]\s*\[[^\]]+\]',
+            compact
+        ))
+        updates_2d_result = bool(re.search(
+            r'\[[^\]]+\]\s*\[[^\]]+\]\s*(?:\+=|=)',
+            compact
+        ))
+        matrix_names = bool(re.search(r'\b(?:matrix|mat|multiply|matmul|A|B|result)\b', code))
+        return loop_count >= 3 and has_2d_product and updates_2d_result and matrix_names
+
+    def _looks_like_repeated_fresh_graph_search(self, code, search_name='dfs'):
+        compact = re.sub(r'\s+', ' ', code)
+        fresh_seen = (
+            r'(?:set\s*\(\s*\)|new\s+Set\s*\(\s*\)|'
+            r'new\s+HashSet(?:\s*<[^>]*>)?\s*\(\s*\))'
+        )
+        search_call_with_fresh_seen = rf'\b{search_name}\s*\([^)]*{fresh_seen}[^)]*\)'
+        graph_loop = (
+            r'(?:for\s+\w+\s+in\s+(?:graph|adj|adjacency)\b[^:]*:?|'
+            r'for\s*\([^)]*(?:graph|adj|adjacency)[^)]*\)\s*\{?)'
+        )
+        if re.search(rf'{graph_loop}.{{0,800}}{search_call_with_fresh_seen}', compact, re.IGNORECASE):
+            return True
+
+        fresh_seen_assignment = rf'\b(?:visited|seen)\s*=\s*{fresh_seen}'
+        call_with_seen_name = rf'\b{search_name}\s*\([^)]*\b(?:visited|seen)\b[^)]*\)'
+        return bool(re.search(
+            rf'{graph_loop}.{{0,800}}{fresh_seen_assignment}.{{0,800}}{call_with_seen_name}',
+            compact,
+            re.IGNORECASE
+        ))
+
     def _looks_like_permutation_backtracking(self, code):
         code_lower = code.lower()
         has_permutation_name = bool(re.search(r'\b(permute|permutation|permutations|backtrack)\b', code_lower))
@@ -3331,7 +3506,8 @@ class CodeAnalyzer:
             'log2': 2, 'log3': 2.2, 'log4': 2.3, 'logp': 2.4, 'sqrt': 2.5,
             'n': 10, 'n_log': 20, 'n_log2': 25,
             'n2_log': 35, 'n3_log': 45,
-            'strassen': 28,
+            'strassen': 28, 'k3_log': 45,
+            'v_times_ve': 30,
             'quasi_log_fact': 90, 'quasi_poly': 90,
             'phi_exp': 95, 'exp': 100, 'n_exp': 105,
             'factorial': 110, 'n_factorial': 120, 'ackermann': 140,
@@ -3404,7 +3580,10 @@ class CodeAnalyzer:
             'O((V + E) log V)': ('n_log', 1), 'O(V + E)': ('n', 1),
             'O(E log V)': ('n_log', 1), 'O(E log E)': ('n_log', 1),
             'O(E√V)': ('n', 2),
-            'O(V × E)': ('n', 2), 'O(V E²)': ('n', 3), 'O(V³)': ('n', 3),
+            'O(V × E)': ('n', 2), 'O(V * (V + E))': ('v_times_ve', 1),
+            'O(V x (V + E))': ('v_times_ve', 1),
+            'O(V*(V+E))': ('v_times_ve', 1),
+            'O(V E²)': ('n', 3), 'O(V³)': ('n', 3),
             'O(V²E)': ('n', 3), 'O(V² log V + VE)': ('n2_log', 1),
             'O(n + k)': ('n', 1), 'O(n + m)': ('n', 1), 'O(n × m)': ('n', 2),
             'O(n + m + z)': ('n', 1),
@@ -3439,6 +3618,7 @@ class CodeAnalyzer:
             'O(n log n × d)': ('n_log', 1),
             'O(k × n)': ('n', 1),
             'O(n log n) build, O(log² n) query': ('n_log', 1),
+            'O(k³ log n)': ('k3_log', 1), 'O(k^3 log n)': ('k3_log', 1),
         }
         fractional = re.fullmatch(r'O\(n\^([0-9]+(?:\.[0-9]+)?)\)', s)
         if fractional:
@@ -3459,6 +3639,8 @@ class CodeAnalyzer:
             'n_exp': f'O(n * {pow_c}^n)', 'exp': f'O({pow_c}^n)',
             'strassen': 'O(n^2.807)',
             'phi_exp': 'O(φⁿ)',
+            'v_times_ve': 'O(V * (V + E))',
+            'k3_log': 'O(k³ log n)',
         }
         if type_c in mapping:
             return mapping[type_c]
@@ -3659,8 +3841,21 @@ class CodeAnalyzer:
         return issues
 
     def _check_nested_loop_issues(self, loops, issues, lines, depth=0):
-        if depth == 0 and self._looks_like_dynamic_array_doubling('\n'.join(lines)):
-            return
+        if depth == 0:
+            code = '\n'.join(lines)
+            if self._looks_like_dynamic_array_doubling(code):
+                return
+            if self._looks_like_naive_matrix_multiplication(code):
+                first_loop = next((lp for lp in loops if lp.get('children')), loops[0] if loops else {'header': ''})
+                issues.append({
+                    'line': self._find_loop_line(first_loop['header'], lines),
+                    'type': 'performance', 'severity': 'medium',
+                    'message': (
+                        'Naive matrix multiplication core — three nested loops cost O(k³). '
+                        'This is expected for the basic algorithm; for large matrices use NumPy/BLAS, blocking, or Strassen where appropriate.'
+                    )
+                })
+                return
         for loop in loops:
             if loop['children']:
                 linear_children = [c for c in loop['children'] if c['type'] == 'linear']
@@ -3674,6 +3869,7 @@ class CodeAnalyzer:
                             'prefix sums, pruning, or DP may apply.'
                         )
                     })
+                    continue
                 self._check_nested_loop_issues(loop['children'], issues, lines, depth + 1)
 
     def _find_loop_line(self, header, lines):
@@ -3792,6 +3988,26 @@ class CodeAnalyzer:
         return has_nested_loop and (name_hint or pair_sum_shape or membership_scan)
 
     def _get_graph_optimization_example(self, graph, language):
+        if 'Repeated DFS' in graph['algorithm']:
+            if language == 'python':
+                return '''# Share one visited set across all starts:
+def run_all_nodes(graph):
+    visited = set()
+    for node in graph:
+        if node not in visited:
+            dfs(graph, node, visited)
+# Time: O(V+E), Space: O(V)'''
+            if language == 'javascript':
+                return '''// Share one visited set across all starts:
+function runAllNodes(graph) {
+    const visited = new Set();
+    for (const node of graph.keys()) {
+        if (!visited.has(node)) dfs(graph, node, visited);
+    }
+}
+// Time: O(V+E), Space: O(V)'''
+            return '// Reuse one visited set across the outer graph loop: O(V * (V+E)) -> O(V+E).'
+
         if 'Bellman-Ford' in graph['algorithm']:
             if language == 'python':
                 return '''# Replace Bellman-Ford with Dijkstra (no negative weights):
@@ -4049,6 +4265,14 @@ def lis_length(nums):
                 'code': self._get_dijkstra_template(language)
             }
 
+        if graph and graph.get('can_optimize') and 'Repeated DFS' in graph.get('algorithm', ''):
+            return {
+                'available': True,
+                'complexity_before': graph['complexity'], 'complexity_after': 'O(V + E)',
+                'description': 'Reuse one visited set instead of restarting DFS with a fresh set for every node',
+                'code': self._get_graph_optimization_example(graph, language)
+            }
+
         return {
             'available': False,
             'reason': 'Automatic transformation not available for this pattern. See optimizations above for manual guidance.',
@@ -4229,6 +4453,7 @@ public static int[] dijkstra(List<List<int[]>> graph, int source) {
             'O(E log V)':       '✅ Optimal for heuristic-guided graph search.',
             'O(E√V)':           '✅ Optimal for bipartite matching (Hopcroft-Karp).',
             'O(V × E)':         '⚠️  Can be improved — consider Dijkstra if no negative weights.',
+            'O(V * (V + E))':   '⚠️  Repeated graph traversal — a fresh visited set makes DFS repeat from every start node.',
             'O(V³)':            '⚠️  Cubic graph complexity — use Dijkstra per vertex for sparse graphs.',
             'O(n log n) average, O(n²) worst': '⚠️  Worst case is O(n²) — use randomized pivot or Merge Sort.',
             'O(9^m)':           '🔴 Critical! Exponential Sudoku search — add constraint propagation to prune.',
@@ -4238,6 +4463,7 @@ public static int[] dijkstra(List<List<int[]>> graph, int source) {
             'O(n + k)':         '✅ Excellent! Linear-time sort — optimal for bounded integer keys.',
             'O(n + m + z)':     '✅ Optimal for multi-pattern search with Aho-Corasick.',
             'O(n + m)':         '✅ Linear — optimal for string search (KMP/Z-algorithm).',
+            'O(k³ log n)':      '✅ Matrix exponentiation — logarithmic in the exponent, with cubic k×k matrix multiplies.',
         }
 
         msg = complexity_messages.get(tc)
@@ -4301,7 +4527,7 @@ public static int[] dijkstra(List<List<int[]>> graph, int source) {
             'O(n!)': 9, 'O(n * n!)': 9.5, 'O(A(m, n))': 10,
             'O((V + E) log V)': 1, 'O(V + E)': 0,
             'O(E log V)': 1, 'O(E√V)': 3,
-            'O(V × E)': 4, 'O(V³)': 6, 'O(V²E)': 7,
+            'O(V × E)': 4, 'O(V * (V + E))': 5, 'O(V³)': 6, 'O(V²E)': 7,
             'O(n log n) average, O(n²) worst': 3,
             'O(9^m)': 8,
             'O(1) amortized': 0, 'O(α(n))': 0,
@@ -4314,6 +4540,7 @@ public static int[] dijkstra(List<List<int[]>> graph, int source) {
             'O(n × d²)': 4,
             'O(k × n log n × d)': 2,
             'O(n log n × d)': 2,
+            'O(k³ log n)': 4,
         }
         score -= deductions.get(result['time_complexity'], 2)
         fractional = re.fullmatch(r'O\(n\^([0-9]+(?:\.[0-9]+)?)\)', result['time_complexity'])

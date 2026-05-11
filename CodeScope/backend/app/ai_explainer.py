@@ -11,24 +11,22 @@ GROQ_MODEL = os.getenv('GROQ_MODEL', 'llama3-8b-8192')
 GROK_API_KEY = os.getenv('GROK_API_KEY') or os.getenv('XAI_API_KEY', '')
 GROK_MODEL = os.getenv('GROK_MODEL', 'grok-3-mini')
 GROK_API_BASE = os.getenv('GROK_API_BASE', 'https://api.x.ai/v1/chat/completions')
+AI_EXPLAINER_PROVIDER = os.getenv('AI_EXPLAINER_PROVIDER', 'auto').lower()
 
 
 def get_ai_explanation(analysis_result, code, language):
     """
-    Uses Groq API to generate intelligent natural language
-    explanation of the analysis results.
+    Uses the configured AI provider to generate intelligent natural language
+    explanation of analyzer-owned results.
     Falls back to rule-based explanation if API unavailable.
     """
-    if GROQ_API_KEY:
-        try:
-            return _get_groq_explanation(analysis_result, code, language)
-        except Exception as e:
-            print(f'Groq API error: {e}')
-    if GROK_API_KEY:
-        try:
-            return _get_grok_explanation(analysis_result, code, language)
-        except Exception as e:
-            print(f'Grok API error: {e}')
+    try:
+        prompt = _build_ai_prompt(analysis_result, code, language)
+        content = _call_ai_completion(prompt, max_tokens=900)
+        if content:
+            return _parse_ai_json(content)
+    except Exception as e:
+        print(f'AI explanation error: {e}')
     return _get_fallback_explanation(analysis_result, code, language)
 
 
@@ -82,8 +80,11 @@ def _build_ai_prompt(analysis_result, code, language):
     input_effect = analysis_result.get('input_effect_analysis')
     optimizations = analysis_result.get('optimizations') or []
     issues = analysis_result.get('issues') or []
+    function_details = analysis_result.get('function_complexity_details') or []
 
     return f"""You are CodeScope's algorithm teacher. Explain this {language} code's complexity result for a beginner, but stay mathematically accurate.
+
+Important: CodeScope's analyzer is the source of truth for complexity detection. Do not recalculate or change any Big-O result. Your job is only to explain the analyzer-owned facts clearly for this exact code.
 
 CODE:
 ```{language}
@@ -100,6 +101,7 @@ ANALYSIS RESULTS:
 - User Provided Inputs: {json.dumps(provided_inputs, ensure_ascii=False) if provided_inputs else 'None'}
 - Concrete Analysis: {json.dumps(concrete, ensure_ascii=False) if concrete else 'None'}
 - Input Effect Estimate: {json.dumps(input_effect, ensure_ascii=False) if input_effect else 'None'}
+- Function Complexity Details: {json.dumps(function_details, ensure_ascii=False)}
 - Top Optimization Data: {json.dumps(optimizations[:2], ensure_ascii=False)}
 
 Please provide:
@@ -110,6 +112,8 @@ Please provide:
 
 Rules:
 - Treat the analyzer's detected reason as primary evidence.
+- Never replace CodeScope's time_complexity, space_complexity, own_complexity, or effective_complexity with your own guess.
+- Use Function Complexity Details when explaining multi-function code.
 - Treat Top Optimization Data as the only safe source for modified-code advice; do not invent replacement code.
 - If the reason is a special sum such as sum_i log(n/i), explain that tighter bound instead of saying nested loops always multiply.
 - If the user-provided values are fixed inputs, say fixed inputs are concrete examples; symbolic Big-O still describes variable input growth.
@@ -125,13 +129,82 @@ Rules:
 Format as JSON with keys: why_this_complexity, real_world_analogy, performance_impact, top_optimization"""
 
 
+def _provider_order():
+    if AI_EXPLAINER_PROVIDER in ('grok', 'xai'):
+        return ('grok', 'groq')
+    if AI_EXPLAINER_PROVIDER == 'groq':
+        return ('groq', 'grok')
+    if GROK_API_KEY:
+        return ('grok', 'groq')
+    return ('groq', 'grok')
+
+
+def _call_ai_completion(prompt, max_tokens=900):
+    last_error = None
+    for provider in _provider_order():
+        if provider == 'grok' and GROK_API_KEY:
+            try:
+                response = requests.post(
+                    GROK_API_BASE,
+                    headers={
+                        'Authorization': f'Bearer {GROK_API_KEY}',
+                        'Content-Type': 'application/json',
+                    },
+                    json={
+                        'model': GROK_MODEL,
+                        'messages': [{'role': 'user', 'content': prompt}],
+                        'temperature': 0.2,
+                        'max_tokens': max_tokens,
+                    },
+                    timeout=20,
+                )
+                response.raise_for_status()
+                payload = response.json()
+                return payload['choices'][0]['message']['content']
+            except Exception as exc:
+                last_error = exc
+                print(f'Grok API error: {exc}')
+        if provider == 'groq' and GROQ_API_KEY:
+            try:
+                from groq import Groq
+                client = Groq(api_key=GROQ_API_KEY)
+                response = client.chat.completions.create(
+                    model=GROQ_MODEL,
+                    messages=[{'role': 'user', 'content': prompt}],
+                    temperature=0.2,
+                    max_tokens=max_tokens
+                )
+                return response.choices[0].message.content
+            except Exception as exc:
+                last_error = exc
+                print(f'Groq API error: {exc}')
+    if last_error:
+        raise last_error
+    return None
+
+
 def _parse_ai_json(content):
-    content = re.sub(r'```json|```', '', content or '').strip()
+    content = _extract_json_payload(content)
     try:
         return json.loads(content)
     except Exception:
         return {'why_this_complexity': content, 'real_world_analogy': '',
                 'performance_impact': '', 'top_optimization': ''}
+
+
+def _extract_json_payload(content):
+    text = re.sub(r'```(?:json)?|```', '', content or '').strip()
+    if not text:
+        return text
+    first_object = text.find('{')
+    first_array = text.find('[')
+    starts = [i for i in (first_object, first_array) if i != -1]
+    if not starts:
+        return text
+    start = min(starts)
+    end_char = '}' if text[start] == '{' else ']'
+    end = text.rfind(end_char)
+    return text[start:end + 1] if end >= start else text
 
 
 def _get_fallback_explanation(analysis_result, code, language):
@@ -585,6 +658,12 @@ def _get_fallback_explanation_legacy(analysis_result, code, language):
             'performance_impact': 'Efficient for sparse graphs. V=1,000, E=5,000 → very fast. Scales well with graph size.',
             'top_optimization': 'Already optimal for single-source shortest path with non-negative weights.'
         },
+        'O(k³ log n)': {
+            'why_this_complexity': 'Matrix exponentiation detected: the exponent is reduced by squaring in O(log n) levels, and each level performs one k by k matrix multiplication costing O(k³).',
+            'real_world_analogy': 'Like folding the exponent in half again and again, but paying for a full matrix multiplication at each fold.',
+            'performance_impact': 'Excellent when the exponent is large: doubling the exponent only adds one more matrix multiplication level.',
+            'top_optimization': 'Use a tuned matrix multiplication backend such as NumPy/BLAS; for very large matrices, consider blocking or Strassen-style multiplication.'
+        },
     }
 
     default = {
@@ -597,11 +676,44 @@ def _get_fallback_explanation_legacy(analysis_result, code, language):
     return explanations.get(tc, default)
 
 
-def get_function_level_explanations(func_complexities, call_chain_report, language):
+def get_function_level_explanations(func_complexities, call_chain_report, language, function_details=None, code=None):
     """
     Generates per-function explanations for the call chain analysis.
+    Analyzer data owns the facts; AI only writes the user-facing explanation text.
     """
     explanations = []
+
+    if function_details:
+        try:
+            ai_explanations = _get_ai_function_explanations(
+                function_details,
+                call_chain_report,
+                language,
+                code or ''
+            )
+            if ai_explanations:
+                return ai_explanations
+        except Exception as e:
+            print(f'AI function explanation error: {e}')
+
+        detail_items = (
+            function_details.values()
+            if isinstance(function_details, dict)
+            else function_details
+        )
+        for detail in detail_items:
+            own = detail.get('own_complexity', detail.get('complexity', 'O(1)'))
+            effective = detail.get('effective_complexity', detail.get('complexity', own))
+            calls = detail.get('calls') or []
+            explanations.append({
+                'function': detail.get('function'),
+                'complexity': effective,
+                'own_complexity': own,
+                'effective_complexity': effective,
+                'calls': calls,
+                'explanation': _explain_detailed_function(detail)
+            })
+        return explanations
 
     for func_name, complexity in func_complexities.items():
         chain_info = next(
@@ -615,6 +727,120 @@ def get_function_level_explanations(func_complexities, call_chain_report, langua
         explanations.append(explanation)
 
     return explanations
+
+
+def _get_ai_function_explanations(function_details, call_chain_report, language, code):
+    prompt = _build_function_explanation_prompt(function_details, call_chain_report, language, code)
+    content = _call_ai_completion(prompt, max_tokens=1500)
+    if not content:
+        return None
+    parsed = _parse_function_explanation_json(content)
+    if not parsed:
+        return None
+    return _merge_ai_function_explanations(function_details, parsed)
+
+
+def _build_function_explanation_prompt(function_details, call_chain_report, language, code):
+    detail_items = (
+        list(function_details.values())
+        if isinstance(function_details, dict)
+        else list(function_details or [])
+    )
+    return f"""You are writing CodeScope's Per-Function Complexity Breakdown for this {language} code.
+
+CodeScope's analyzer already detected all complexity values. Do not recalculate, rename, simplify, upgrade, or downgrade any Big-O. Your only job is to make each function explanation specific, professional, and helpful for the user's exact code.
+
+CODE:
+```{language}
+{(code or '')[:3500]}
+```
+
+ANALYZER FUNCTION FACTS:
+{json.dumps(detail_items, ensure_ascii=False)}
+
+CALL CHAIN REPORT:
+{json.dumps(call_chain_report or [], ensure_ascii=False)}
+
+For each function:
+- Keep function, own_complexity, effective_complexity, complexity, and calls exactly as analyzer provided.
+- Explain why the own complexity happens from the function body.
+- If effective_complexity differs from own_complexity, explain which helper call causes the increase.
+- If recursion exists, explain the recurrence/branching/depth instead of calling it a loop problem.
+- If the function is an algorithm pattern such as matrix multiplication, DFS, DP, subset generation, sorting, regex, graph traversal, or backtracking, name the pattern.
+- Do not give optimization code here; this section is for understanding the function.
+- Use 1-3 concise sentences per explanation.
+
+Return valid JSON only as an array. Each item must have:
+function, complexity, own_complexity, effective_complexity, calls, explanation"""
+
+
+def _parse_function_explanation_json(content):
+    payload = _extract_json_payload(content)
+    try:
+        parsed = json.loads(payload)
+    except Exception:
+        return None
+    if isinstance(parsed, dict):
+        parsed = parsed.get('functions') or parsed.get('function_explanations') or parsed.get('items')
+    return parsed if isinstance(parsed, list) else None
+
+
+def _merge_ai_function_explanations(function_details, ai_items):
+    detail_items = (
+        list(function_details.values())
+        if isinstance(function_details, dict)
+        else list(function_details or [])
+    )
+    ai_by_name = {
+        item.get('function'): item
+        for item in ai_items
+        if isinstance(item, dict) and item.get('function')
+    }
+    merged = []
+    for detail in detail_items:
+        name = detail.get('function')
+        ai_item = ai_by_name.get(name, {})
+        explanation = str(ai_item.get('explanation') or '').strip()
+        if not explanation:
+            explanation = _explain_detailed_function(detail)
+        own = detail.get('own_complexity', detail.get('complexity', 'O(1)'))
+        effective = detail.get('effective_complexity', detail.get('complexity', own))
+        merged.append({
+            'function': name,
+            'complexity': effective,
+            'own_complexity': own,
+            'effective_complexity': effective,
+            'calls': detail.get('calls') or [],
+            'explanation': explanation
+        })
+    return merged
+
+
+def _explain_detailed_function(detail):
+    func_name = detail.get('function', 'function')
+    own = detail.get('own_complexity', detail.get('complexity', 'O(1)'))
+    effective = detail.get('effective_complexity', detail.get('complexity', own))
+    reason = detail.get('reason') or ''
+    calls = detail.get('calls') or []
+
+    if own != effective:
+        call_text = ''
+        if calls:
+            parts = [
+                f"{call.get('function')}() at {call.get('complexity')}"
+                for call in calls
+                if call.get('function')
+            ]
+            if parts:
+                call_text = f" It calls {', '.join(parts)}."
+        return (
+            f"{func_name}() has own/control cost {own}, but its effective cost is {effective} "
+            f"after including helper calls.{call_text} {reason}"
+        ).strip()
+
+    if reason:
+        return reason
+    return _explain_single_function(func_name, effective, None)
 
 
 def _explain_single_function(func_name, complexity, chain_info):
