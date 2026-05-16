@@ -23,6 +23,10 @@ export default function ComplexityBadge({ complexity }) {
       'O(n²)': 'Poor',
       'O(n³)': 'Critical'
     };
+    labels['O(n^((log n + 1)/2))'] = 'Critical';
+    labels['O(n^log n)'] = 'Critical';
+    labels['O(n) average, O(n²) worst'] = 'Worst-case risk';
+    labels['O(n²) average, O(n³) worst'] = 'Critical risk';
     return labels[complexity] || '';
   };
 

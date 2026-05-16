@@ -160,6 +160,11 @@ def _add_single_file_report(elements, result, filename, heading_style, normal_st
     rating = result.get('rating', 0)
     time_c = result.get('time_complexity', 'N/A')
     space_c = result.get('space_complexity', 'N/A')
+    overall = result.get('overall_complexity') or {}
+    allocation = result.get('memory_allocation_analysis') or {}
+    reported_space = overall.get('space') or space_c
+    peak_space = overall.get('peak_space') or allocation.get('peak_live_auxiliary_space')
+    total_allocation = overall.get('total_allocation') or allocation.get('total_allocated_space')
     language = result.get('language', 'unknown').upper()
     loc = result.get('lines_of_code', 0)
 
@@ -168,7 +173,9 @@ def _add_single_file_report(elements, result, filename, heading_style, normal_st
         ['Language', language],
         ['Lines of Code', str(loc)],
         ['Time Complexity', time_c],
-        ['Space Complexity', space_c],
+        ['Space Complexity', reported_space],
+        ['Peak Live Auxiliary Memory', peak_space or reported_space],
+        ['Total Allocated/Copied Memory', total_allocation or reported_space],
         ['Performance Rating', f'{rating}/10'],
     ]
 

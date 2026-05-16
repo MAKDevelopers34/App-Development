@@ -70,6 +70,7 @@ export default function Results() {
 
     // Safe defaults for missing properties
     const rating = r?.rating || 0;
+    const overall = r?.overall_complexity || {};
     const time_complexity = r?.time_complexity || 'Unknown';
     const space_complexity = r?.space_complexity || 'Unknown';
     const language = r?.language || 'Unknown';
@@ -78,11 +79,80 @@ export default function Results() {
     const concrete = r?.concrete_analysis;
     const inputEffect = r?.input_effect_analysis;
     const amortized = r?.amortized_analysis;
+    const allocation = r?.memory_allocation_analysis;
+    const displaySpace = overall.space || space_complexity;
+    const peakSpace = overall.peak_space || displaySpace;
+    const totalAllocation = overall.total_allocation || allocation?.total_allocated_space;
+    const hasDistinctAllocation = totalAllocation && totalAllocation !== displaySpace;
+    const hasDistinctPeak = peakSpace && peakSpace !== displaySpace;
+    const confidence = r?.analysis_confidence;
+    const confidenceDetail = !Array.isArray(confidence?.notes) || confidence.notes.length === 0
+      ? confidence?.reason || ''
+      : '';
+    const hotspots = Array.isArray(r?.hotspots) ? r.hotspots : [];
+    const aiTransformed = r?.ai_transformed_code;
+    const optimizedCode = aiTransformed?.available ? aiTransformed : null;
+    const optimizedByAi = Boolean(aiTransformed?.available);
     //const suggestions = Array.isArray(r?.suggestions) ? r.suggestions : [];
     const safeFilename = filename || getSafeFilename(data);
 
     return (
       <div data-filename={safeFilename}>
+        {/* Total Complexity */}
+        <div className="card" style={{
+          padding: '22px 24px',
+          marginBottom: '20px',
+          border: '1px solid var(--primary)',
+          background: '#f8fbff'
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '18px', alignItems: 'flex-start', flexWrap: 'wrap' }}>
+            <div style={{ minWidth: 0, flex: '1 1 320px' }}>
+              <div style={{ fontSize: '13px', color: 'var(--primary)', marginBottom: '8px', fontWeight: '700', textTransform: 'uppercase' }}>
+                Total Complexity
+              </div>
+              <div style={{ fontSize: '18px', fontWeight: '700', color: 'var(--dark)', lineHeight: '1.4', overflowWrap: 'anywhere' }}>
+                {overall.headline || `${time_complexity} time, ${displaySpace} space`}
+              </div>
+              <div style={{ fontSize: '12px', color: 'var(--gray)', marginTop: '8px', lineHeight: '1.5' }}>
+                {overall.memory_model || (
+                  hasDistinctAllocation
+                    ? `Space complexity is ${displaySpace}; total allocated/copied memory over the run is ${totalAllocation}.`
+                    : `Space complexity is ${displaySpace}.`
+                )}
+              </div>
+              {confidence && (
+                <div style={{ fontSize: '12px', color: 'var(--gray)', marginTop: '6px', lineHeight: '1.5' }}>
+                  Confidence: time {confidence.time || 'medium'}, space {confidence.space || 'medium'}
+                  {confidenceDetail ? ` - ${confidenceDetail}` : ''}
+                  {Array.isArray(confidence.notes) && confidence.notes.length > 0 ? ` — ${confidence.notes.join(' ')}` : ''}
+                </div>
+              )}
+            </div>
+            <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'center' }}>
+              <div>
+                <div style={{ fontSize: '11px', color: 'var(--gray)', fontWeight: '700', textTransform: 'uppercase', marginBottom: '4px' }}>
+                  Time
+                </div>
+                <ComplexityBadge complexity={overall.time || time_complexity} />
+              </div>
+              <div>
+                <div style={{ fontSize: '11px', color: 'var(--gray)', fontWeight: '700', textTransform: 'uppercase', marginBottom: '4px' }}>
+                  Space
+                </div>
+                <ComplexityBadge complexity={displaySpace} />
+              </div>
+              {totalAllocation && (
+                <div>
+                  <div style={{ fontSize: '11px', color: 'var(--gray)', fontWeight: '700', textTransform: 'uppercase', marginBottom: '4px' }}>
+                    Total Allocation
+                  </div>
+                  <ComplexityBadge complexity={totalAllocation} />
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
         {/* Metrics row */}
         <div style={{
           display: 'grid',
@@ -114,10 +184,20 @@ export default function Results() {
             <div style={{ fontSize: '13px', color: 'var(--gray)', marginBottom: '12px', fontWeight: '500' }}>
               Space Complexity
             </div>
-            <ComplexityBadge complexity={space_complexity} />
+            <ComplexityBadge complexity={displaySpace} />
             <div style={{ fontSize: '12px', color: 'var(--gray)', marginTop: '10px', lineHeight: '1.5' }}>
-              How memory usage grows as input size increases
+              {r.space_complexity_reason || 'How peak memory usage grows as input size increases'}
             </div>
+            {hasDistinctPeak && (
+              <div style={{ fontSize: '12px', color: 'var(--gray)', marginTop: '8px', lineHeight: '1.5' }}>
+                Peak live auxiliary memory: <strong style={{ color: 'var(--dark)' }}>{peakSpace}</strong>
+              </div>
+            )}
+            {hasDistinctAllocation && (
+              <div style={{ fontSize: '12px', color: 'var(--gray)', marginTop: '8px', lineHeight: '1.5' }}>
+                Total allocated/copied over the full run: <strong style={{ color: 'var(--dark)' }}>{totalAllocation}</strong>
+              </div>
+            )}
           </div>
 
           {/* Stats */}
@@ -257,7 +337,8 @@ export default function Results() {
                   ['Worst Operation', amortized.per_operation_worst],
                   ['Amortized Operation', amortized.amortized_per_operation],
                   ['Total Cost', amortized.total_for_n_ops],
-                ].map(([label, value]) => (
+                  ['Worst Total', amortized.worst_total_for_n_ops],
+                ].filter(([, value]) => value !== undefined && value !== null && value !== '').map(([label, value]) => (
                   <div key={label} style={{ background: 'white', border: '1px solid var(--border)', borderRadius: '8px', padding: '10px' }}>
                     <div style={{ fontSize: '11px', color: 'var(--gray)', fontWeight: '700', textTransform: 'uppercase', marginBottom: '4px' }}>
                       {label}
@@ -270,6 +351,41 @@ export default function Results() {
               </div>
               <p style={{ fontSize: '13px', color: 'var(--dark)', lineHeight: '1.6', margin: 0 }}>
                 {amortized.reason}
+              </p>
+            </div>
+          )}
+
+          {/* Memory Allocation Analysis */}
+          {allocation && (
+            <div className="card" style={{ border: '1px solid #d7c7ff', background: '#fbf9ff' }}>
+              <h3 style={{ fontSize: '16px', fontWeight: '600', marginBottom: '14px' }}>
+                Memory Allocation Pressure
+              </h3>
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+                gap: '12px',
+                marginBottom: '12px'
+              }}>
+                {[
+                  ['Pattern', allocation.pattern],
+                  ['Peak Live Space', allocation.peak_live_auxiliary_space],
+                  ['Total Allocated', allocation.total_allocated_space],
+                  ['Per Level', allocation.per_level_allocation],
+                  ['Levels', allocation.recursion_levels],
+                ].map(([label, value]) => (
+                  <div key={label} style={{ background: 'white', border: '1px solid var(--border)', borderRadius: '8px', padding: '10px' }}>
+                    <div style={{ fontSize: '11px', color: 'var(--gray)', fontWeight: '700', textTransform: 'uppercase', marginBottom: '4px' }}>
+                      {label}
+                    </div>
+                    <div style={{ fontSize: '13px', color: 'var(--dark)', fontWeight: '600', fontFamily: 'var(--font-code)', overflowWrap: 'anywhere' }}>
+                      {String(value || 'N/A')}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <p style={{ fontSize: '13px', color: 'var(--dark)', lineHeight: '1.6', margin: 0 }}>
+                {allocation.reason}
               </p>
             </div>
           )}
@@ -323,6 +439,46 @@ export default function Results() {
                   </p>
                 </div>
               )}
+            </div>
+          )}
+
+          {/* Hotspots */}
+          {hotspots.length > 0 && (
+            <div className="card">
+              <h3 style={{ fontSize: '16px', fontWeight: '600', marginBottom: '16px' }}>
+                Hot Code Sections
+              </h3>
+              {hotspots.map((hotspot, i) => (
+                <div key={i} style={{
+                  border: '1px solid var(--border)',
+                  borderRadius: '8px',
+                  padding: '12px',
+                  marginBottom: i < hotspots.length - 1 ? '12px' : 0
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap', marginBottom: '8px' }}>
+                    <span style={{ fontSize: '13px', fontWeight: '700', fontFamily: 'var(--font-code)' }}>
+                      {hotspot.function}() at line {hotspot.line}
+                    </span>
+                    <ComplexityBadge complexity={hotspot.complexity} />
+                  </div>
+                  <p style={{ fontSize: '13px', color: 'var(--gray)', lineHeight: '1.6', margin: '0 0 10px' }}>
+                    {hotspot.reason}
+                  </p>
+                  {hotspot.snippet && (
+                    <pre style={{
+                      margin: 0,
+                      padding: '12px',
+                      background: '#111827',
+                      color: '#e5e7eb',
+                      borderRadius: '8px',
+                      overflowX: 'auto',
+                      fontSize: '12px',
+                      lineHeight: '1.5',
+                      fontFamily: 'var(--font-code)'
+                    }}>{formatDisplayCode(hotspot.snippet)}</pre>
+                  )}
+                </div>
+              ))}
             </div>
           )}
 
@@ -459,22 +615,27 @@ export default function Results() {
 
         {/* Suggestions */}
         {/* Transformed Code */}
-        {r.transformed_code && r.transformed_code.available && (
+        {optimizedCode && optimizedCode.available && (
           <div className="card" style={{ marginBottom: '20px' }}>
             <h3 style={{ fontSize: '16px', fontWeight: '600', marginBottom: '4px' }}>
-              🔄 Optimized Version of Your Code
+              {optimizedByAi ? 'Grok Optimized Version of Your Code' : '🔄 Optimized Version of Your Code'}
             </h3>
             <p style={{ fontSize: '13px', color: 'var(--gray)', marginBottom: '12px' }}>
-              {r.transformed_code.description} —
+              {optimizedCode.description} —
               <span style={{ color: 'var(--danger)', fontWeight: '600' }}>
                 {' '}
-                {r.transformed_code.complexity_before}
+                {optimizedCode.complexity_before}
               </span>
               {' → '}
               <span style={{ color: 'var(--success)', fontWeight: '600' }}>
-                {r.transformed_code.complexity_after}
+                {optimizedCode.complexity_after}
               </span>
             </p>
+            {optimizedByAi && optimizedCode.notes && (
+              <p style={{ fontSize: '12px', color: 'var(--gray)', marginBottom: '12px', lineHeight: '1.5' }}>
+                {optimizedCode.notes}
+              </p>
+            )}
             <pre style={{
               background: '#1e1e2e',
               color: '#cdd6f4',
@@ -488,7 +649,7 @@ export default function Results() {
               tabSize: 2,
               margin: 0
             }}>
-              {formatDisplayCode(r.transformed_code.code)}
+              {formatDisplayCode(optimizedCode.code)}
             </pre>
           </div>
         )}
@@ -507,6 +668,18 @@ export default function Results() {
               }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
                   <h4 style={{ fontSize: '14px', fontWeight: '600' }}>{opt.title}</h4>
+                  {opt.ai_generated && (
+                    <span style={{
+                      background: 'var(--primary-light)',
+                      color: 'var(--primary)',
+                      padding: '3px 9px',
+                      borderRadius: '999px',
+                      fontSize: '11px',
+                      fontWeight: '700'
+                    }}>
+                      {opt.ai_discovered ? 'Grok discovered' : 'Grok generated'}
+                    </span>
+                  )}
                 </div>
                 <div style={{ display: 'flex', gap: '8px', marginBottom: '10px' }}>
                   <span style={{
@@ -537,6 +710,11 @@ export default function Results() {
                 <p style={{ fontSize: '13px', color: 'var(--gray)', marginBottom: '10px' }}>
                   <strong>Solution:</strong> {opt.solution}
                 </p>
+                {opt.ai_note && (
+                  <p style={{ fontSize: '12px', color: 'var(--gray)', marginBottom: '10px', lineHeight: '1.5' }}>
+                    <strong>{opt.ai_generated ? 'Grok note' : 'AI review'}:</strong> {opt.ai_note}
+                  </p>
+                )}
                 <pre style={{
                   background: '#1e1e2e',
                   color: '#cdd6f4',
@@ -563,6 +741,9 @@ export default function Results() {
   // Multi file result - FIXED with safe access
   const renderMultiResult = () => {
     const files = Array.isArray(result?.files) ? result.files : [];
+    const projectSummary = result?.project_summary || {};
+    const confidenceCounts = projectSummary.confidence_counts || {};
+    const needsReviewCount = (confidenceCounts.low || 0) + (confidenceCounts.medium || 0);
 
     return (
       <div>
@@ -578,6 +759,8 @@ export default function Results() {
             { label: 'Total Lines', value: result?.total_lines || 0, icon: '📝' },
             { label: 'Total Issues', value: result?.total_issues || 0, icon: '⚠️' },
             { label: 'Avg Rating', value: `${(result?.average_rating || 0).toFixed(1)}/10`, icon: '⭐' },
+            { label: 'Worst Time', value: projectSummary.worst_time_complexity || 'N/A', icon: 'O' },
+            { label: 'Needs Review', value: needsReviewCount, icon: '!' },
           ].map(({ label, value, icon }) => (
             <div key={label} className="card" style={{ textAlign: 'center', padding: '20px' }}>
               <div style={{ fontSize: '24px', marginBottom: '8px' }}>{icon}</div>

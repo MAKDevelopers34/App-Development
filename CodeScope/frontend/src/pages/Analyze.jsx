@@ -26,9 +26,10 @@ const splitParams = (raw = '') => {
 
 const languageFromFilename = (filename = '') => {
   const ext = filename.split('.').pop()?.toLowerCase();
-  if (['js', 'ts', 'jsx', 'tsx'].includes(ext)) return 'javascript';
+  if (['ts', 'tsx', 'mts', 'cts'].includes(ext)) return 'typescript';
+  if (['js', 'jsx', 'mjs', 'cjs'].includes(ext)) return 'javascript';
   if (ext === 'java') return 'java';
-  if (['cpp', 'cc', 'c'].includes(ext)) return 'cpp';
+  if (['cpp', 'cc', 'cxx', 'c++', 'hpp', 'hh', 'hxx', 'ipp', 'h', 'c'].includes(ext)) return 'cpp';
   return 'python';
 };
 
@@ -58,6 +59,14 @@ const parseParam = (raw, language) => {
     return { name, declaredType };
   }
 
+  if (language === 'typescript') {
+    const [namePart, ...typeParts] = cleaned.split(':');
+    const name = namePart.trim().replace(/^[.]+/, '');
+    const declaredType = typeParts.join(':').trim();
+    if (!name) return null;
+    return { name, declaredType };
+  }
+
   const arrayMatch = cleaned.match(/(\w+)\s*\[\s*\]$/);
   if (arrayMatch) {
     return {
@@ -79,13 +88,13 @@ const inferInputSchema = (code, filename) => {
   const language = languageFromFilename(filename);
   const patterns = language === 'python'
     ? [/def\s+(\w+)\s*\(([^)]*)\)/]
-    : language === 'javascript'
+    : ['javascript', 'typescript'].includes(language)
       ? [
-          /function\s*\*?\s+(\w+)\s*\(([^)]*)\)/,
-          /(?:const|let|var)\s+(\w+)\s*=\s*\(([^)]*)\)\s*=>/,
-          /(?:const|let|var)\s+(\w+)\s*=\s*([A-Za-z_]\w*)\s*=>/,
+          /function\s*\*?\s+(\w+)\s*\(([^)]*)\)\s*(?::\s*[^={]+)?/,
+          /(?:const|let|var)\s+(\w+)\s*=\s*\(([^)]*)\)\s*(?::\s*[^=]+)?=>/,
+          /(?:const|let|var)\s+(\w+)\s*=\s*([A-Za-z_]\w*(?:\s*:\s*[^=]+)?)\s*=>/,
         ]
-      : [/(?:public|private|protected)?\s*(?:static\s+)?[\w:<>\[\], ?&*]+\s+(\w+)\s*\(([^)]*)\)/];
+      : [/(?:public|private|protected)?\s*(?:static\s+)?[\w:<>\][, ?&*]+\s+(\w+)\s*\(([^)]*)\)/];
 
   for (const pattern of patterns) {
     const match = code.match(pattern);
@@ -146,15 +155,13 @@ export default function Analyze() {
 
   useEffect(() => {
     const trimmed = code.trim();
-    setBackendInputSchema(null);
     if (!trimmed) {
-      setSchemaLoading(false);
       return undefined;
     }
 
     let active = true;
-    setSchemaLoading(true);
     const timer = window.setTimeout(async () => {
+      if (active) setSchemaLoading(true);
       try {
         const response = await inferInputs(code, filename);
         if (active && response?.input_schema) {
@@ -290,7 +297,11 @@ export default function Analyze() {
                 <input
                   type="text"
                   value={filename}
-                  onChange={e => setFilename(e.target.value)}
+                  onChange={e => {
+                    setFilename(e.target.value);
+                    setBackendInputSchema(null);
+                    setSchemaLoading(Boolean(code.trim()));
+                  }}
                   placeholder="e.g. main.py, index.js, Solution.java"
                   style={{ marginBottom: '0' }}
                 />
@@ -301,7 +312,12 @@ export default function Analyze() {
                 </label>
                 <textarea
                   value={code}
-                  onChange={e => setCode(e.target.value)}
+                  onChange={e => {
+                    const nextCode = e.target.value;
+                    setCode(nextCode);
+                    setBackendInputSchema(null);
+                    setSchemaLoading(Boolean(nextCode.trim()));
+                  }}
                   placeholder={`# Paste your code here\ndef example(arr):\n    for i in range(len(arr)):\n        for j in range(len(arr)):\n            print(arr[i], arr[j])`}
                   rows={14}
                   style={{
