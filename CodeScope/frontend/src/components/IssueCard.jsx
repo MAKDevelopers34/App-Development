@@ -26,6 +26,9 @@ export default function IssueCard({ issue }) {
   };
 
   const style = getSeverityStyle(issue.severity);
+  const solution = issue.grok_solution;
+  const hasSolution = Boolean(solution?.code);
+  const formatCode = (code) => String(code || '').replace(/\r\n/g, '\n').replace(/\t/g, '  ').trim();
 
   return (
     <div style={{
@@ -84,6 +87,88 @@ export default function IssueCard({ issue }) {
         }}>
           {issue.message}
         </p>
+        {hasSolution && (
+          <div style={{
+            marginTop: '14px',
+            background: 'white',
+            border: '1px solid #b7dfbf',
+            borderRadius: '8px',
+            padding: '12px'
+          }}>
+            <div style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              gap: '10px',
+              flexWrap: 'wrap',
+              marginBottom: '8px'
+            }}>
+              <div>
+                <div style={{
+                  fontSize: '12px',
+                  fontWeight: '700',
+                  color: 'var(--success)',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.05em',
+                  marginBottom: '3px'
+                }}>
+                  Grok Verified Solution
+                </div>
+                <div style={{ fontSize: '13px', color: 'var(--dark)', fontWeight: '600' }}>
+                  {solution.title || 'Lower-complexity rewrite'}
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                {solution.complexity_before && (
+                  <span style={{
+                    fontSize: '11px',
+                    fontFamily: 'var(--font-code)',
+                    color: 'var(--danger)',
+                    background: '#fce8e6',
+                    borderRadius: '999px',
+                    padding: '3px 8px'
+                  }}>
+                    {solution.complexity_before}
+                  </span>
+                )}
+                {solution.complexity_after && (
+                  <span style={{
+                    fontSize: '11px',
+                    fontFamily: 'var(--font-code)',
+                    color: 'var(--success)',
+                    background: '#e6f4ea',
+                    borderRadius: '999px',
+                    padding: '3px 8px'
+                  }}>
+                    {solution.complexity_after}
+                  </span>
+                )}
+              </div>
+            </div>
+            {solution.description && (
+              <p style={{ fontSize: '12px', color: 'var(--gray)', lineHeight: '1.5', margin: '0 0 8px' }}>
+                {solution.description}
+              </p>
+            )}
+            <pre style={{
+              background: '#111827',
+              color: '#e5e7eb',
+              padding: '12px',
+              borderRadius: '8px',
+              fontSize: '12px',
+              overflowX: 'auto',
+              lineHeight: '1.5',
+              fontFamily: 'var(--font-code)',
+              whiteSpace: 'pre',
+              margin: 0
+            }}>{formatCode(solution.code)}</pre>
+            {solution.notes && (
+              <p style={{ fontSize: '11px', color: 'var(--gray)', lineHeight: '1.5', margin: '8px 0 0' }}>
+                {solution.notes}
+              </p>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

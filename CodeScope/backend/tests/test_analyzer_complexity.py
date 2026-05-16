@@ -939,6 +939,58 @@ function alreadyCheap(nums) {
         self.assertEqual(result["ai_transformed_code"]["code"], grok_code)
         self.assertFalse(result["transformed_code"]["available"])
 
+    def test_route_attaches_grok_solution_to_issue_card_payload(self):
+        code = """function grow(n, arr = []) {
+    if (n <= 0) return arr.length;
+
+    arr.push(n);
+
+    return grow(n - 1, arr) + grow(n - 1, arr);
+}
+"""
+        grok_code = """function grow(n, arr = []) {
+    const start = arr.length;
+    const pushes = Math.max(0, (2 ** n) - 1);
+    for (let i = 0; i < pushes; i++) arr.push(n - i);
+    return 2 ** n * start + pushes * (pushes + 1);
+}
+"""
+
+        def discovered_only(analysis_result, code_text, language):
+            self.assertEqual(analysis_result["optimizations"], [])
+            return [{
+                "title": "Grok collapsed repeated recursion",
+                "problem": "grow repeats the same recursive branch twice.",
+                "solution": "Replace the exponential call tree with a direct counted update.",
+                "complexity_before": "O(2^n)",
+                "complexity_after": "O(n)",
+                "example": grok_code,
+                "ai_generated": True,
+                "ai_discovered": True,
+                "source": "grok",
+                "function": "grow",
+                "ai_note": "Grok returned a lower-complexity rewrite and CodeScope accepted it.",
+            }]
+
+        with patch("app.routes.enhance_optimizations_with_ai", side_effect=discovered_only), \
+             patch("app.routes.get_ai_explanation", return_value={
+                 "available": True,
+                 "why_this_complexity": "grow has two recursive calls per level.",
+                 "real_world_analogy": "",
+                 "performance_impact": "",
+                 "top_optimization": "",
+             }):
+            result = _analyze_with_extras(code, "grow.js", {"n": 4})
+
+        self.assertTrue(result["issues"])
+        issue = result["issues"][0]
+        self.assertEqual(issue["message"], "Exponential recursion (O(2^n))")
+        self.assertIn("grok_solution", issue)
+        self.assertEqual(issue["grok_solution"]["code"], grok_code)
+        self.assertEqual(issue["grok_solution"]["complexity_before"], "O(2^n)")
+        self.assertEqual(issue["grok_solution"]["complexity_after"], "O(n)")
+        self.assertEqual(result["ai_transformed_code"]["code"], grok_code)
+
     def test_ai_rewrite_validation_rejects_changed_public_signature(self):
         original = """function hasDuplicate(nums) {
     for (let i = 0; i < nums.length; i++) {

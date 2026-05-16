@@ -93,6 +93,7 @@ export default function Results() {
     const aiTransformed = r?.ai_transformed_code;
     const optimizedCode = aiTransformed?.available ? aiTransformed : null;
     const optimizedByAi = Boolean(aiTransformed?.available);
+    const hasIssueGrokSolution = issues.some((issue) => Boolean(issue?.grok_solution?.code));
     //const suggestions = Array.isArray(r?.suggestions) ? r.suggestions : [];
     const safeFilename = filename || getSafeFilename(data);
 
@@ -615,7 +616,7 @@ export default function Results() {
 
         {/* Suggestions */}
         {/* Transformed Code */}
-        {optimizedCode && optimizedCode.available && (
+        {optimizedCode && optimizedCode.available && !hasIssueGrokSolution && (
           <div className="card" style={{ marginBottom: '20px' }}>
             <h3 style={{ fontSize: '16px', fontWeight: '600', marginBottom: '4px' }}>
               {optimizedByAi ? 'Grok Optimized Version of Your Code' : '🔄 Optimized Version of Your Code'}
@@ -655,7 +656,7 @@ export default function Results() {
         )}
 
         {/* Optimizations */}
-        {r.optimizations && r.optimizations.length > 0 && (
+        {r.optimizations && r.optimizations.length > 0 && !hasIssueGrokSolution && (
           <div className="card" style={{ marginBottom: '20px' }}>
             <h3 style={{ fontSize: '16px', fontWeight: '600', marginBottom: '16px' }}>
               💡 Optimization Suggestions
