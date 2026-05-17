@@ -70,6 +70,71 @@ class AnalyzerComplexityTests(unittest.TestCase):
         self.assertIn("input_schema", result)
         self.assertEqual(result["input_schema"]["function"], "two_sum")
         self.assertEqual(result["provided_inputs"]["target"], 2)
+        self.assertIn("semantic_analysis", result)
+        self.assertTrue(any(
+            item["title"] == "Concrete inputs are examples"
+            for item in result["semantic_analysis"]["items"]
+        ))
+
+    def test_semantic_analysis_flags_unknown_library_calls(self):
+        code = """def run(data):
+    return mystery_transform(data)
+"""
+
+        result = self.analyzer.analyze(code, "unknown.py")
+        semantic = result["semantic_analysis"]
+
+        self.assertEqual(result["time_complexity"], "O(unknown)")
+        self.assertEqual(semantic["confidence"], "low")
+        self.assertTrue(any(item["category"] == "libraries" and item["severity"] == "high" for item in semantic["items"]))
+        self.assertIn("mystery_transform", " ".join(str(item.get("evidence", "")) for item in semantic["items"]))
+
+    def test_semantic_analysis_flags_side_effects_and_input_mutation(self):
+        side_effect_code = """function send(items) {
+  console.log(items.length);
+  return fetch('/api');
+}
+"""
+        mutation_code = """#include <set>
+using namespace std;
+void multiErase(multiset<int>& s) {
+    while (!s.empty()) {
+        auto it = s.begin();
+        s.erase(it);
+    }
+}
+"""
+
+        side_effect = self.analyzer.analyze(side_effect_code, "send.js")["semantic_analysis"]
+        mutation = self.analyzer.analyze(mutation_code, "multiErase.cpp")["semantic_analysis"]
+
+        self.assertTrue(any(item["title"] == "Output side effect" for item in side_effect["items"]))
+        self.assertTrue(any(item["title"] == "Network side effect" for item in side_effect["items"]))
+        self.assertTrue(any(item["title"] == "Function mutates input state" for item in mutation["items"]))
+
+    def test_semantic_analysis_flags_runtime_models_for_streams_and_ordered_trees(self):
+        stream_code = """import java.util.*;
+public class Test {
+    public static long nested(List<Integer> list) {
+        return list.stream().flatMap(x -> list.stream().map(y -> x + y)).count();
+    }
+}
+"""
+        tree_code = """#include <set>
+using namespace std;
+void multiErase(multiset<int>& s) {
+    while (!s.empty()) {
+        auto it = s.begin();
+        s.erase(it);
+    }
+}
+"""
+
+        stream = self.analyzer.analyze(stream_code, "Test.java")["semantic_analysis"]
+        tree = self.analyzer.analyze(tree_code, "multiErase.cpp")["semantic_analysis"]
+
+        self.assertTrue(any(item["title"] == "Stream pipeline laziness matters" for item in stream["items"]))
+        self.assertTrue(any(item["title"] == "Ordered tree runtime model" for item in tree["items"]))
 
     def test_geometric_prefix_sum_is_linear(self):
         code = """def example2(n):
@@ -278,6 +343,46 @@ class AnalyzerComplexityTests(unittest.TestCase):
                 self.assertEqual(result["time_complexity"], expected_time)
                 self.assertEqual(result["space_complexity"], expected_space)
                 self.assertEqual(result["analysis_confidence"]["time"], "medium")
+
+    def test_javascript_reduce_spread_accumulator_counts_quadratic_copy_work(self):
+        code = """function reduceTrap(arr) {
+    return arr.reduce((acc, x) => {
+        return [...acc, x];
+    }, []);
+}
+"""
+
+        result = self.analyzer.analyze(code, "reduceTrap.js")
+        details = {item["function"]: item for item in result["function_complexity_details"]}
+
+        self.assertEqual(result["time_complexity"], "O(n²)")
+        self.assertEqual(result["space_complexity"], "O(n)")
+        self.assertEqual(result["memory_allocation_analysis"]["pattern"], "reduce_accumulator_copy")
+        self.assertEqual(result["overall_complexity"]["total_allocation"], "O(n²)")
+        self.assertEqual(details["reduceTrap"]["own_complexity"], "O(n²)")
+        self.assertIn("copies the growing accumulator", result["time_complexity_reason"])
+
+    def test_route_marks_reduce_spread_issue_without_manual_rewrite(self):
+        code = """function reduceTrap(arr) {
+    return arr.reduce((acc, x) => {
+        return [...acc, x];
+    }, []);
+}
+"""
+
+        def no_ai_rewrite(analysis_result, code_text, language):
+            return []
+
+        with patch("app.routes.enhance_optimizations_with_ai", side_effect=no_ai_rewrite):
+            result = _analyze_with_extras(code, "reduceTrap.js")
+
+        self.assertEqual(result["time_complexity"], "O(n²)")
+        self.assertEqual(result["space_complexity"], "O(n)")
+        self.assertTrue(result["issues"])
+        self.assertEqual(result["issues"][0]["message"], "reduce() copies the growing accumulator on every iteration")
+        self.assertIn("ai_solution_status", result["issues"][0])
+        self.assertFalse(result["ai_transformed_code"]["available"])
+        self.assertEqual(result["optimizations"], [])
 
     def test_typescript_json_stringified_subarray_set_is_cubic(self):
         code = """function jsonTrap(arr: number[]) {
@@ -776,10 +881,11 @@ def power(matrix, n):
             }]
         }
 
-        merged = _merge_ai_optimization_suggestions(optimizations, ai_payload)
+        merged = _merge_ai_optimization_suggestions(optimizations, ai_payload, provider="groq")
 
         self.assertTrue(merged[0]["ai_generated"])
-        self.assertEqual(merged[0]["source"], "grok")
+        self.assertEqual(merged[0]["source"], "groq")
+        self.assertEqual(merged[0]["source_label"], "Groq")
         self.assertEqual(merged[0]["complexity_after"], "O(n)")
         self.assertIn("hasDuplicate", merged[0]["example"])
         self.assertEqual(merged[0]["analyzer_example"], "// static generic strategy")
@@ -799,11 +905,13 @@ def power(matrix, n):
             }]
         }
 
-        merged = _merge_ai_optimization_suggestions([], ai_payload)
+        merged = _merge_ai_optimization_suggestions([], ai_payload, provider="groq")
 
         self.assertEqual(len(merged), 1)
         self.assertTrue(merged[0]["ai_generated"])
         self.assertTrue(merged[0]["ai_discovered"])
+        self.assertEqual(merged[0]["source"], "groq")
+        self.assertEqual(merged[0]["source_label"], "Groq")
         self.assertEqual(merged[0]["function"], "hasDuplicate")
         self.assertEqual(merged[0]["complexity_after"], "O(n)")
 
@@ -837,7 +945,7 @@ function alreadyCheap(nums) {
         self.assertIn('"function": "hasDuplicate"', prompt)
         self.assertIn('"snippet"', prompt)
 
-    def test_grok_discovery_rejects_non_grok_provider_for_rewrites(self):
+    def test_groq_discovery_accepts_verified_rewrites(self):
         code = """function hasDuplicate(nums) {
     for (let i = 0; i < nums.length; i++) {
         for (let j = i + 1; j < nums.length; j++) {
@@ -862,9 +970,12 @@ function alreadyCheap(nums) {
         }]}"""
 
         with patch("app.ai_explainer._call_ai_completion", return_value=(groq_payload, "groq")):
-            enhanced = enhance_optimizations_with_ai(result, code, "javascript")
+            enhanced = enhance_optimizations_with_ai({**result, "optimizations": []}, code, "javascript")
 
-        self.assertEqual(enhanced, result["optimizations"])
+        self.assertEqual(len(enhanced), 1)
+        self.assertTrue(enhanced[0]["ai_generated"])
+        self.assertEqual(enhanced[0]["source"], "groq")
+        self.assertEqual(enhanced[0]["source_label"], "Groq")
 
     def test_route_hides_analyzer_fallback_optimizations_when_grok_returns_none(self):
         code = """public class Test {
@@ -894,9 +1005,9 @@ function alreadyCheap(nums) {
         self.assertEqual(result["optimizations"], [])
         self.assertFalse(result["transformed_code"]["available"])
         self.assertFalse(result["ai_transformed_code"]["available"])
-        self.assertEqual(result["ai_transformed_code"]["source"], "grok_discovery")
+        self.assertEqual(result["ai_transformed_code"]["source"], "ai_discovery")
 
-    def test_route_shows_only_grok_discovered_optimization(self):
+    def test_route_uses_primary_groq_rewrite_once(self):
         code = """public class Test {
     public static int tricky(int n) {
         if (n <= 1) return 1;
@@ -919,7 +1030,7 @@ function alreadyCheap(nums) {
         def discovered_only(analysis_result, code_text, language):
             self.assertEqual(analysis_result["optimizations"], [])
             return [{
-                "title": "Grok collapsed repeated recursive calls",
+                "title": "Groq collapsed repeated recursive calls",
                 "problem": "tricky repeats the same recursive call inside the loop.",
                 "solution": "Call tricky(n / 2) once and multiply by n.",
                 "complexity_before": "O(n^((log n + 1)/2))",
@@ -927,19 +1038,91 @@ function alreadyCheap(nums) {
                 "example": grok_code,
                 "ai_generated": True,
                 "ai_discovered": True,
-                "source": "grok",
-                "ai_note": "Grok discovered this rewrite from the expensive function target.",
+                "source": "groq",
+                "source_label": "Groq",
+                "ai_note": "Groq discovered this rewrite from the expensive function target.",
             }]
 
         with patch("app.routes.enhance_optimizations_with_ai", side_effect=discovered_only):
             result = _analyze_with_extras(code, "Test.java", {"n": 16})
 
-        self.assertEqual(len(result["optimizations"]), 1)
-        self.assertEqual(result["optimizations"][0]["example"], grok_code)
+        self.assertEqual(result["optimizations"], [])
+        self.assertEqual(result["ai_transformed_code"]["source"], "groq")
+        self.assertEqual(result["ai_transformed_code"]["source_label"], "Groq")
         self.assertEqual(result["ai_transformed_code"]["code"], grok_code)
         self.assertFalse(result["transformed_code"]["available"])
 
-    def test_route_attaches_grok_solution_to_issue_card_payload(self):
+    def test_route_keeps_additional_distinct_groq_rewrites_only(self):
+        code = """function a(n) {
+    if (n <= 1) return 1;
+    return a(n - 1) + a(n - 1);
+}
+
+function b(n) {
+    let s = "";
+    for (let i = 0; i < n; i++) s += i;
+    return s;
+}
+"""
+        first_code = """function a(n) {
+    return Math.max(1, 2 ** n);
+}
+"""
+        second_code = """function b(n) {
+    const parts = [];
+    for (let i = 0; i < n; i++) parts.push(String(i));
+    return parts.join("");
+}
+"""
+
+        def two_rewrites(analysis_result, code_text, language):
+            return [
+                {
+                    "title": "Groq optimized a",
+                    "problem": "a repeats recursive work.",
+                    "solution": "Use direct computation.",
+                    "complexity_before": "O(2^n)",
+                    "complexity_after": "O(1)",
+                    "example": first_code,
+                    "ai_generated": True,
+                    "ai_discovered": True,
+                    "source": "groq",
+                    "source_label": "Groq",
+                },
+                {
+                    "title": "Groq optimized b",
+                    "problem": "b repeatedly copies strings.",
+                    "solution": "Collect parts and join once.",
+                    "complexity_before": "O(n²)",
+                    "complexity_after": "O(n)",
+                    "example": second_code,
+                    "ai_generated": True,
+                    "ai_discovered": True,
+                    "source": "groq",
+                    "source_label": "Groq",
+                },
+                {
+                    "title": "Duplicate Groq optimized a",
+                    "problem": "same duplicate rewrite.",
+                    "solution": "same duplicate rewrite.",
+                    "complexity_before": "O(2^n)",
+                    "complexity_after": "O(1)",
+                    "example": first_code,
+                    "ai_generated": True,
+                    "ai_discovered": True,
+                    "source": "groq",
+                    "source_label": "Groq",
+                },
+            ]
+
+        with patch("app.routes.enhance_optimizations_with_ai", side_effect=two_rewrites):
+            result = _analyze_with_extras(code, "two.js")
+
+        self.assertEqual(result["ai_transformed_code"]["code"], first_code)
+        self.assertEqual(len(result["optimizations"]), 1)
+        self.assertEqual(result["optimizations"][0]["example"], second_code)
+
+    def test_route_attaches_ai_solution_to_issue_card_payload(self):
         code = """function grow(n, arr = []) {
     if (n <= 0) return arr.length;
 
@@ -959,7 +1142,7 @@ function alreadyCheap(nums) {
         def discovered_only(analysis_result, code_text, language):
             self.assertEqual(analysis_result["optimizations"], [])
             return [{
-                "title": "Grok collapsed repeated recursion",
+                "title": "Groq collapsed repeated recursion",
                 "problem": "grow repeats the same recursive branch twice.",
                 "solution": "Replace the exponential call tree with a direct counted update.",
                 "complexity_before": "O(2^n)",
@@ -967,9 +1150,10 @@ function alreadyCheap(nums) {
                 "example": grok_code,
                 "ai_generated": True,
                 "ai_discovered": True,
-                "source": "grok",
+                "source": "groq",
+                "source_label": "Groq",
                 "function": "grow",
-                "ai_note": "Grok returned a lower-complexity rewrite and CodeScope accepted it.",
+                "ai_note": "Groq returned a lower-complexity rewrite and CodeScope accepted it.",
             }]
 
         with patch("app.routes.enhance_optimizations_with_ai", side_effect=discovered_only), \
@@ -985,10 +1169,12 @@ function alreadyCheap(nums) {
         self.assertTrue(result["issues"])
         issue = result["issues"][0]
         self.assertEqual(issue["message"], "Exponential recursion (O(2^n))")
-        self.assertIn("grok_solution", issue)
-        self.assertEqual(issue["grok_solution"]["code"], grok_code)
-        self.assertEqual(issue["grok_solution"]["complexity_before"], "O(2^n)")
-        self.assertEqual(issue["grok_solution"]["complexity_after"], "O(n)")
+        self.assertIn("ai_solution", issue)
+        self.assertEqual(issue["ai_solution"]["source"], "groq")
+        self.assertEqual(issue["ai_solution"]["source_label"], "Groq")
+        self.assertEqual(issue["ai_solution"]["code"], grok_code)
+        self.assertEqual(issue["ai_solution"]["complexity_before"], "O(2^n)")
+        self.assertEqual(issue["ai_solution"]["complexity_after"], "O(n)")
         self.assertEqual(result["ai_transformed_code"]["code"], grok_code)
 
     def test_ai_rewrite_validation_rejects_changed_public_signature(self):
@@ -1550,6 +1736,106 @@ class Example {
         self.assertEqual(result["space_complexity"], "O(n)")
         self.assertIn("tree lookup", result["time_complexity_reason"].lower())
 
+    def test_cpp_multiset_drain_loop_counts_tree_erase_and_container_space(self):
+        code = """#include <set>
+using namespace std;
+
+void multiErase(multiset<int>& s) {
+    while (!s.empty()) {
+        auto it = s.begin();
+        s.erase(it);
+    }
+}
+"""
+
+        result = self.analyzer.analyze(code, "multiErase.cpp")
+        details = {item["function"]: item for item in result["function_complexity_details"]}
+
+        self.assertEqual(result["time_complexity"], "O(n log n)")
+        self.assertEqual(result["space_complexity"], "O(n)")
+        self.assertEqual(result["memory_allocation_analysis"]["pattern"], "ordered_tree_drain")
+        self.assertEqual(result["memory_allocation_analysis"]["auxiliary_space"], "O(1)")
+        self.assertIn("ordered tree container", result["time_complexity_reason"])
+        self.assertIn("O(1) extra auxiliary", result["space_complexity_reason"])
+        self.assertEqual(details["multiErase"]["own_complexity"], "O(n log n)")
+
+    def test_java_treeset_drain_loop_counts_tree_remove_and_container_space(self):
+        code = """import java.util.*;
+class Example {
+    void drain(TreeSet<Integer> set) {
+        while (!set.isEmpty()) {
+            set.remove(set.first());
+        }
+    }
+}
+"""
+
+        result = self.analyzer.analyze(code, "Example.java")
+        details = {item["function"]: item for item in result["function_complexity_details"]}
+
+        self.assertEqual(result["time_complexity"], "O(n log n)")
+        self.assertEqual(result["space_complexity"], "O(n)")
+        self.assertEqual(result["memory_allocation_analysis"]["pattern"], "ordered_tree_drain")
+        self.assertEqual(details["drain"]["own_complexity"], "O(n log n)")
+
+    def test_java_nested_stream_flatmap_count_is_quadratic_and_lazy_space(self):
+        code = """import java.util.*;
+
+public class Test {
+    public static long nested(List<Integer> list) {
+        return list.stream()
+            .flatMap(x -> list.stream().map(y -> x + y))
+            .count();
+    }
+}
+"""
+
+        result = self.analyzer.analyze(code, "Test.java")
+        details = {item["function"]: item for item in result["function_complexity_details"]}
+
+        self.assertEqual(result["time_complexity"], "O(n²)")
+        self.assertEqual(result["space_complexity"], "O(n)")
+        self.assertEqual(result["memory_allocation_analysis"]["pattern"], "java_nested_stream_pipeline")
+        self.assertEqual(result["memory_allocation_analysis"]["auxiliary_space"], "O(1)")
+        self.assertIn("Nested Java Stream pipeline", result["time_complexity_reason"])
+        self.assertIn("count() consumes", result["space_complexity_reason"])
+        self.assertEqual(details["nested"]["own_complexity"], "O(n²)")
+
+    def test_java_nested_stream_collect_materializes_quadratic_output(self):
+        code = """import java.util.*;
+
+public class Test {
+    public static List<Integer> pairs(List<Integer> list) {
+        return list.stream()
+            .flatMap(x -> list.stream().map(y -> x + y))
+            .collect(java.util.stream.Collectors.toList());
+    }
+}
+"""
+
+        result = self.analyzer.analyze(code, "Test.java")
+
+        self.assertEqual(result["time_complexity"], "O(n²)")
+        self.assertEqual(result["space_complexity"], "O(n²)")
+        self.assertEqual(result["memory_allocation_analysis"]["pattern"], "java_nested_stream_pipeline")
+        self.assertEqual(result["memory_allocation_analysis"]["auxiliary_space"], "O(n²)")
+
+    def test_java_stream_sorted_pipeline_is_n_log_n(self):
+        code = """import java.util.*;
+
+public class Test {
+    public static long sortedCount(List<Integer> list) {
+        return list.stream().sorted().count();
+    }
+}
+"""
+
+        result = self.analyzer.analyze(code, "Test.java")
+
+        self.assertEqual(result["time_complexity"], "O(n log n)")
+        self.assertEqual(result["space_complexity"], "O(n)")
+        self.assertEqual(result["memory_allocation_analysis"]["pattern"], "java_stream_sorted")
+
     def test_java_treemap_update_inside_linear_recursion_adds_log_factor(self):
         code = """import java.util.*;
 
@@ -1601,6 +1887,67 @@ public class Test {
         self.assertEqual(result["suggestions"], [])
         self.assertEqual(result["ai_explanation"]["top_optimization"], "")
         self.assertFalse(result["transformed_code"]["available"])
+        self.assertFalse(result["ai_transformed_code"]["available"])
+
+    def test_route_strips_nested_loop_static_advice_and_marks_missing_ai_solution(self):
+        code = """function jsonTrap(arr: number[]) {
+    const set = new Set<string>();
+
+    for (let i = 0; i < arr.length; i++) {
+        for (let j = i; j < arr.length; j++) {
+            const sub = arr.slice(i, j);
+            set.add(JSON.stringify(sub));
+        }
+    }
+}
+"""
+
+        def no_ai_rewrite(analysis_result, code_text, language):
+            return []
+
+        with patch("app.routes.enhance_optimizations_with_ai", side_effect=no_ai_rewrite):
+            result = _analyze_with_extras(code, "jsonTrap.ts")
+
+        self.assertEqual(result["time_complexity"], "O(n³)")
+        self.assertTrue(result["issues"])
+        issue = result["issues"][0]
+        self.assertEqual(issue["message"], "Nested linear loops")
+        self.assertIn("ai_solution_status", issue)
+        self.assertFalse(result["ai_transformed_code"]["available"])
+
+    def test_route_strips_repeated_dfs_static_advice_and_keeps_ai_status(self):
+        code = """import java.util.*;
+
+public class Test {
+    static void dfs(int node, List<List<Integer>> g, boolean[] vis) {
+        if (vis[node]) return;
+        vis[node] = true;
+
+        for (int nei : g.get(node)) {
+            dfs(nei, g, vis);
+        }
+    }
+
+    static void run(List<List<Integer>> g, int n) {
+        for (int i = 0; i < n; i++) {
+            dfs(i, g, new boolean[n]);
+        }
+    }
+}
+"""
+
+        def no_ai_rewrite(analysis_result, code_text, language):
+            return []
+
+        with patch("app.routes.enhance_optimizations_with_ai", side_effect=no_ai_rewrite):
+            result = _analyze_with_extras(code, "Test.java")
+
+        self.assertEqual(result["time_complexity"], "O(V * (V + E))")
+        self.assertEqual(result["space_complexity"], "O(V)")
+        self.assertTrue(result["issues"])
+        issue = result["issues"][0]
+        self.assertEqual(issue["message"], "Repeated DFS from All Nodes (O(V * (V + E)))")
+        self.assertIn("ai_solution_status", issue)
         self.assertFalse(result["ai_transformed_code"]["available"])
 
     def test_java_hashmap_loop_reports_average_and_collision_nuance(self):
@@ -1978,6 +2325,27 @@ def strassen(A, B):
         self.assertEqual(result["recurrence_analysis"]["division_factors"], [2, 3])
         self.assertAlmostEqual(result["recurrence_analysis"]["akra_bazzi_exponent"], 0.7879, places=3)
 
+    def test_typescript_mixed_halving_and_quarter_recursion_uses_akra_bazzi(self):
+        code = """function insane(n: number): number {
+    if (n <= 1) return 1;
+
+    return insane(Math.floor(n / 2)) +
+           insane(Math.floor(n / 2)) +
+           insane(Math.floor(n / 4));
+}
+"""
+
+        result = self.analyzer.analyze(code, "insane.ts")
+        details = {item["function"]: item for item in result["function_complexity_details"]}
+
+        self.assertEqual(result["time_complexity"], "O(n^1.272)")
+        self.assertEqual(result["space_complexity"], "O(log n)")
+        self.assertEqual(result["recurrence_analysis"]["method"], "Akra-Bazzi")
+        self.assertEqual(result["recurrence_analysis"]["division_factors"], [2, 2, 4])
+        self.assertAlmostEqual(result["recurrence_analysis"]["akra_bazzi_exponent"], 1.2716, places=3)
+        self.assertEqual(details["insane"]["own_complexity"], "O(n^1.272)")
+        self.assertIn("T(n/4)", result["time_complexity_reason"])
+
     def test_balanced_mid_partition_recursion_is_linear_not_exponential(self):
         code = """def tricky_bs(arr, l, r):
     if l > r:
@@ -2095,6 +2463,39 @@ def run_all_nodes(graph):
         self.assertIn("fresh visited set", result["time_complexity_reason"])
         self.assertEqual(result["optimizations"][0]["complexity_after"], "O(V + E)")
         self.assertTrue(result["transformed_code"]["available"])
+
+    def test_java_repeated_dfs_with_fresh_boolean_visited_repeats_graph_work(self):
+        code = """import java.util.*;
+
+public class Test {
+    static void dfs(int node, List<List<Integer>> g, boolean[] vis) {
+        if (vis[node]) return;
+        vis[node] = true;
+
+        for (int nei : g.get(node)) {
+            dfs(nei, g, vis);
+        }
+    }
+
+    static void run(List<List<Integer>> g, int n) {
+        for (int i = 0; i < n; i++) {
+            dfs(i, g, new boolean[n]);
+        }
+    }
+}
+"""
+
+        result = self.analyzer.analyze(code, "Test.java")
+        details = {item["function"]: item for item in result["function_complexity_details"]}
+
+        self.assertEqual(result["time_complexity"], "O(V * (V + E))")
+        self.assertEqual(result["space_complexity"], "O(V)")
+        self.assertEqual(result["memory_allocation_analysis"]["pattern"], "repeated_dfs_fresh_visited")
+        self.assertEqual(result["overall_complexity"]["total_allocation"], "O(V²)")
+        self.assertEqual(details["dfs"]["own_complexity"], "O(V + E)")
+        self.assertEqual(details["run"]["effective_complexity"], "O(V * (V + E))")
+        self.assertEqual(details["run"]["calls"][0]["multiplier"], "O(V)")
+        self.assertIn("fresh visited array/set", details["run"]["reason"])
 
     def test_javascript_generator_mixed_recurrence_is_exponential(self):
         code = r"""function* js_4_gen(n) {

@@ -1,4 +1,4 @@
-export default function IssueCard({ issue }) {
+export default function IssueCard({ issue, hideSolution = false }) {
   const getSeverityStyle = (severity) => {
     switch (severity) {
       case 'high':
@@ -26,9 +26,10 @@ export default function IssueCard({ issue }) {
   };
 
   const style = getSeverityStyle(issue.severity);
-  const solution = issue.grok_solution;
-  const hasSolution = Boolean(solution?.code);
+  const solution = issue.ai_solution;
+  const hasSolution = Boolean(solution?.code) && !hideSolution;
   const formatCode = (code) => String(code || '').replace(/\r\n/g, '\n').replace(/\t/g, '  ').trim();
+  const providerLabel = solution?.source_label || 'AI';
 
   return (
     <div style={{
@@ -112,7 +113,7 @@ export default function IssueCard({ issue }) {
                   letterSpacing: '0.05em',
                   marginBottom: '3px'
                 }}>
-                  Grok Verified Solution
+                  {providerLabel} Verified Solution
                 </div>
                 <div style={{ fontSize: '13px', color: 'var(--dark)', fontWeight: '600' }}>
                   {solution.title || 'Lower-complexity rewrite'}
@@ -167,6 +168,20 @@ export default function IssueCard({ issue }) {
                 {solution.notes}
               </p>
             )}
+          </div>
+        )}
+        {!hasSolution && issue.ai_solution_status && (
+          <div style={{
+            marginTop: '10px',
+            background: 'white',
+            border: '1px solid var(--border)',
+            borderRadius: '8px',
+            padding: '10px 12px',
+            fontSize: '12px',
+            color: 'var(--gray)',
+            lineHeight: '1.5'
+          }}>
+            {issue.ai_solution_status}
           </div>
         )}
       </div>

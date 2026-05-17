@@ -79,6 +79,7 @@ export default function Results() {
     const concrete = r?.concrete_analysis;
     const inputEffect = r?.input_effect_analysis;
     const amortized = r?.amortized_analysis;
+    const semantic = r?.semantic_analysis;
     const allocation = r?.memory_allocation_analysis;
     const displaySpace = overall.space || space_complexity;
     const peakSpace = overall.peak_space || displaySpace;
@@ -93,7 +94,6 @@ export default function Results() {
     const aiTransformed = r?.ai_transformed_code;
     const optimizedCode = aiTransformed?.available ? aiTransformed : null;
     const optimizedByAi = Boolean(aiTransformed?.available);
-    const hasIssueGrokSolution = issues.some((issue) => Boolean(issue?.grok_solution?.code));
     //const suggestions = Array.isArray(r?.suggestions) ? r.suggestions : [];
     const safeFilename = filename || getSafeFilename(data);
 
@@ -321,6 +321,54 @@ export default function Results() {
             </div>
           )}
 
+          {/* Semantic Assumptions */}
+          {semantic?.available && (
+            <div className="card" style={{ border: '1px solid #f5d08a', background: '#fffaf0' }}>
+              <h3 style={{ fontSize: '16px', fontWeight: '600', marginBottom: '10px' }}>
+                Assumptions & Semantic Risks
+              </h3>
+              <p style={{ fontSize: '13px', color: 'var(--dark)', lineHeight: '1.6', margin: '0 0 12px' }}>
+                {semantic.summary}
+              </p>
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+                gap: '10px'
+              }}>
+                {(semantic.items || []).slice(0, 8).map((item, i) => (
+                  <div key={`${item.category || 'item'}-${i}`} style={{
+                    background: 'white',
+                    border: '1px solid var(--border)',
+                    borderRadius: '8px',
+                    padding: '10px'
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', marginBottom: '5px' }}>
+                      <span style={{ fontSize: '12px', fontWeight: '700', color: 'var(--dark)' }}>
+                        {item.title || item.category}
+                      </span>
+                      <span style={{
+                        fontSize: '10px',
+                        fontWeight: '700',
+                        textTransform: 'uppercase',
+                        color: item.severity === 'high' ? 'var(--danger)' : item.severity === 'medium' ? '#b06000' : 'var(--gray)'
+                      }}>
+                        {item.severity || 'info'}
+                      </span>
+                    </div>
+                    <p style={{ fontSize: '12px', color: 'var(--gray)', lineHeight: '1.5', margin: 0 }}>
+                      {item.message}
+                    </p>
+                    {item.evidence && (
+                      <div style={{ fontSize: '11px', color: 'var(--gray)', marginTop: '6px', fontFamily: 'var(--font-code)', overflowWrap: 'anywhere' }}>
+                        {String(item.evidence)}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Amortized Analysis */}
           {amortized && (
             <div className="card" style={{ border: '1px solid #b7dfbf', background: '#f6fff8' }}>
@@ -371,10 +419,11 @@ export default function Results() {
                 {[
                   ['Pattern', allocation.pattern],
                   ['Peak Live Space', allocation.peak_live_auxiliary_space],
+                  ['Auxiliary Extra', allocation.auxiliary_space],
                   ['Total Allocated', allocation.total_allocated_space],
                   ['Per Level', allocation.per_level_allocation],
                   ['Levels', allocation.recursion_levels],
-                ].map(([label, value]) => (
+                ].filter(([, value]) => value !== undefined && value !== null && value !== '').map(([label, value]) => (
                   <div key={label} style={{ background: 'white', border: '1px solid var(--border)', borderRadius: '8px', padding: '10px' }}>
                     <div style={{ fontSize: '11px', color: 'var(--gray)', fontWeight: '700', textTransform: 'uppercase', marginBottom: '4px' }}>
                       {label}
@@ -609,17 +658,17 @@ export default function Results() {
               ⚠️ Issues Found ({issues.length})
             </h3>
             {issues.map((issue, i) => (
-              <IssueCard key={i} issue={issue} />
+              <IssueCard key={i} issue={issue} hideSolution={Boolean(optimizedCode?.available)} />
             ))}
           </div>
         )}
 
         {/* Suggestions */}
         {/* Transformed Code */}
-        {optimizedCode && optimizedCode.available && !hasIssueGrokSolution && (
+        {optimizedCode && optimizedCode.available && (
           <div className="card" style={{ marginBottom: '20px' }}>
             <h3 style={{ fontSize: '16px', fontWeight: '600', marginBottom: '4px' }}>
-              {optimizedByAi ? 'Grok Optimized Version of Your Code' : '🔄 Optimized Version of Your Code'}
+              {optimizedByAi ? `${optimizedCode.source_label || 'AI'} Optimized Version of Your Code` : '🔄 Optimized Version of Your Code'}
             </h3>
             <p style={{ fontSize: '13px', color: 'var(--gray)', marginBottom: '12px' }}>
               {optimizedCode.description} —
@@ -656,7 +705,7 @@ export default function Results() {
         )}
 
         {/* Optimizations */}
-        {r.optimizations && r.optimizations.length > 0 && !hasIssueGrokSolution && (
+        {r.optimizations && r.optimizations.length > 0 && (
           <div className="card" style={{ marginBottom: '20px' }}>
             <h3 style={{ fontSize: '16px', fontWeight: '600', marginBottom: '16px' }}>
               💡 Optimization Suggestions
@@ -678,7 +727,7 @@ export default function Results() {
                       fontSize: '11px',
                       fontWeight: '700'
                     }}>
-                      {opt.ai_discovered ? 'Grok discovered' : 'Grok generated'}
+                      {opt.ai_discovered ? `${opt.source_label || 'AI'} discovered` : `${opt.source_label || 'AI'} generated`}
                     </span>
                   )}
                 </div>
@@ -713,7 +762,7 @@ export default function Results() {
                 </p>
                 {opt.ai_note && (
                   <p style={{ fontSize: '12px', color: 'var(--gray)', marginBottom: '10px', lineHeight: '1.5' }}>
-                    <strong>{opt.ai_generated ? 'Grok note' : 'AI review'}:</strong> {opt.ai_note}
+                    <strong>{opt.ai_generated ? `${opt.source_label || 'AI'} note` : 'AI review'}:</strong> {opt.ai_note}
                   </p>
                 )}
                 <pre style={{

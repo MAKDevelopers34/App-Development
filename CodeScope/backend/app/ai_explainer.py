@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 GROQ_API_KEY = os.getenv('GROQ_API_KEY', '')
-GROQ_MODEL = os.getenv('GROQ_MODEL', 'llama3-8b-8192')
+GROQ_MODEL = os.getenv('GROQ_MODEL', 'llama-3.1-8b-instant')
 GROK_API_KEY = os.getenv('GROK_API_KEY') or os.getenv('XAI_API_KEY', '')
 GROK_MODEL = os.getenv('GROK_MODEL', 'grok-3-mini')
 GROK_API_BASE = os.getenv('GROK_API_BASE', 'https://api.x.ai/v1/chat/completions')
@@ -89,7 +89,7 @@ def get_ai_optimized_code(analysis_result, code, language):
 
     return {
         'available': False,
-        'reason': 'Grok did not return a same-behavior lower-complexity rewrite, so no optimized code is shown.',
+        'reason': 'The configured AI provider did not return a same-behavior lower-complexity rewrite, so no optimized code is shown.',
         'source': 'fallback'
     }
 
@@ -116,7 +116,7 @@ def enhance_optimizations_with_ai(analysis_result, code, language):
             content, provider = ai_response
         else:
             content, provider = ai_response, 'configured_ai'
-        if provider != 'grok':
+        if provider not in ('grok', 'groq'):
             return optimizations
         if content:
             parsed = _parse_ai_json(content)
@@ -126,6 +126,7 @@ def enhance_optimizations_with_ai(analysis_result, code, language):
                 language=language,
                 discovery_targets=discovery_targets,
                 original_code=code,
+                provider=provider,
             )
     except Exception as e:
         _log_ai_error(f'AI optimization-suggestion error: {e}')
@@ -181,13 +182,14 @@ def _build_ai_prompt(analysis_result, code, language):
     concrete = analysis_result.get('concrete_analysis')
     input_effect = analysis_result.get('input_effect_analysis')
     allocation = analysis_result.get('memory_allocation_analysis')
+    semantic = analysis_result.get('semantic_analysis')
     overall = analysis_result.get('overall_complexity')
     space_reason = analysis_result.get('space_complexity_reason', '')
     optimizations = analysis_result.get('optimizations') or []
     issues = analysis_result.get('issues') or []
     function_details = analysis_result.get('function_complexity_details') or []
 
-    return f"""You are CodeScope's Grok-powered explanation layer. Write the explanation that appears in the CodeScope app for this exact {language} code.
+    return f"""You are CodeScope's AI-powered explanation layer. Write the explanation that appears in the CodeScope app for this exact {language} code.
 
 CodeScope's analyzer is the source of truth. Do not recalculate, override, simplify, or "correct" any analyzer-owned Big-O value. Your job is to turn the analyzer facts into a clear, code-specific explanation that feels tailored to the user's pasted code. You are not the detector; you are the professional explanation writer.
 
@@ -206,6 +208,7 @@ ANALYSIS RESULTS:
 - Space Complexity: {analysis_result.get('space_complexity')}
 - Space Complexity Reason: {space_reason}
 - Memory Allocation Analysis: {json.dumps(allocation, ensure_ascii=False) if allocation else 'None'}
+- Semantic Assumptions/Risks: {json.dumps(semantic, ensure_ascii=False) if semantic else 'None'}
 - Performance Rating: {analysis_result.get('rating')}/10
 - Issues Found: {len(issues)}
 - Reason: {analysis_result.get('time_complexity_reason', '')}
@@ -230,6 +233,7 @@ Rules:
 - Never replace CodeScope's time_complexity, space_complexity, own_complexity, or effective_complexity with your own guess.
 - If Overall Complexity Summary exists, use it as the top-level answer.
 - If Memory Allocation Analysis exists, distinguish reported space complexity from peak live space and total allocated/copied memory. Do not call total allocation "peak space".
+- If Semantic Assumptions/Risks exist, mention important runtime input, library, side-effect, or intended-behavior assumptions without changing the analyzer's Big-O.
 - If Total Complexity Headline exists, keep the same facts in why_this_complexity and performance_impact.
 - Use Function Complexity Details when explaining multi-function code.
 - Treat Top Optimization Data as the only safe source for modified-code advice; do not invent replacement code.
@@ -438,7 +442,7 @@ def _build_ai_optimization_prompt(analysis_result, code, language, optimizations
 
 ORIGINAL CODE:
 ```{language}
-{code[:6000]}
+{code[:12000]}
 ```
 
 ANALYZER FACTS:
@@ -507,7 +511,10 @@ def _merge_ai_optimization_suggestions(
     language=None,
     discovery_targets=None,
     original_code=None,
+    provider='ai',
 ):
+    provider = provider or 'ai'
+    provider_label = _provider_label(provider)
     items = ai_payload.get('optimizations') if isinstance(ai_payload, dict) else ai_payload
     if not isinstance(items, list):
         items = []
@@ -552,7 +559,8 @@ def _merge_ai_optimization_suggestions(
             updated['analyzer_example'] = opt.get('example')
             updated['example'] = code
             updated['ai_generated'] = True
-            updated['source'] = 'grok'
+            updated['source'] = provider
+            updated['source_label'] = provider_label
             updated['title'] = str(ai_item.get('title') or opt.get('title') or 'AI Optimized Alternative')
             updated['problem'] = str(ai_item.get('problem') or opt.get('problem') or '')
             updated['solution'] = str(ai_item.get('solution') or opt.get('solution') or '')
@@ -605,7 +613,7 @@ def _merge_ai_optimization_suggestions(
             if not validation.get('valid'):
                 continue
             merged.append({
-                'title': str(item.get('title') or 'Grok Discovered Optimized Alternative'),
+                'title': str(item.get('title') or f'{provider_label} Discovered Optimized Alternative'),
                 'problem': str(item.get('problem') or ''),
                 'solution': str(item.get('solution') or ''),
                 'complexity_before': before,
@@ -613,12 +621,22 @@ def _merge_ai_optimization_suggestions(
                 'example': code,
                 'ai_generated': True,
                 'ai_discovered': True,
-                'source': 'grok',
+                'source': provider,
+                'source_label': provider_label,
                 'function': function or item.get('function'),
-                'ai_note': str(item.get('notes') or 'Grok independently discovered this lower-complexity rewrite from the function facts.'),
+                'ai_note': str(item.get('notes') or f'{provider_label} independently discovered this lower-complexity rewrite from the function facts.'),
                 'validation': validation,
             })
     return merged
+
+
+def _provider_label(provider):
+    provider = str(provider or '').lower()
+    if provider == 'groq':
+        return 'Groq'
+    if provider == 'grok':
+        return 'Grok'
+    return 'AI'
 
 
 def _validate_ai_rewrite_complexity(
@@ -1317,13 +1335,13 @@ def _extract_json_payload(content):
 
 def _get_fallback_explanation(analysis_result, code, language):
     """
-    Generic analyzer-fact explanation when Grok/API is not available.
+    Generic analyzer-fact explanation when the configured AI/API is not available.
     """
     fallback = _build_generic_fact_explanation(analysis_result, code, language)
     fallback['source'] = 'analyzer_fallback'
     fallback['available'] = True
     fallback['fact_locked'] = True
-    fallback['reason'] = 'Grok/configured AI was unavailable, so CodeScope used analyzer-owned facts.'
+    fallback['reason'] = 'Configured AI was unavailable, so CodeScope used analyzer-owned facts.'
     return fallback
 
 
@@ -2084,7 +2102,7 @@ def _build_function_explanation_prompt(function_details, call_chain_report, lang
         if isinstance(function_details, dict)
         else list(function_details or [])
     )
-    return f"""You are writing CodeScope's Grok-powered Per-Function Complexity Breakdown for this {language} code.
+    return f"""You are writing CodeScope's AI-powered Per-Function Complexity Breakdown for this {language} code.
 
 CodeScope's analyzer already detected all complexity values. Do not recalculate, rename, simplify, upgrade, or downgrade any Big-O. Your only job is to make each function explanation specific, professional, and helpful for the user's exact code. You are the explanation layer, not the detector.
 

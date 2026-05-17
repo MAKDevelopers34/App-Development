@@ -362,6 +362,9 @@ class CodeAnalyzer:
         )
         amortized = self.explain_amortized_complexity(code, language)
         recurrence_analysis = self._build_recurrence_analysis(time_result)
+        semantic_analysis = self.analyze_semantic_assumptions(
+            code, language, input_schema, concrete_inputs, time_result, memory_analysis
+        )
 
         result = {
             'language': language,
@@ -379,6 +382,7 @@ class CodeAnalyzer:
             'function_complexity_details': list(self.last_func_complexity_details.values()),
             'memory_allocation_analysis': memory_analysis,
             'analysis_confidence': self._analysis_confidence_summary(code, language, time_result),
+            'semantic_analysis': semantic_analysis,
             'overall_complexity': self.build_overall_complexity_summary(
                 time_result['complexity'], space, memory_analysis
             ),
@@ -865,6 +869,11 @@ class CodeAnalyzer:
             return {'complexity': self._alpha(), 'reason': 'path compression and union by rank'}
         if re.search(r'parent\s*\[[^\]]+\]\s*=\s*find\s*\(\s*parent\s*\[', body):
             return {'complexity': self._alpha(), 'reason': 'path compression'}
+        if self._looks_like_graph_dfs_function(name, body, full_code, language):
+            return {
+                'complexity': 'O(V + E)',
+                'reason': 'DFS graph traversal visits reachable vertices once and scans outgoing edges with a shared visited structure'
+            }
         binary_search = self.detect_binary_search_pattern(body, language)
         if binary_search.get('detected'):
             return binary_search
@@ -899,8 +908,14 @@ class CodeAnalyzer:
             return {'complexity': self._tuple_to_string(('n_log2', 1)), 'reason': 'sorted(left + right) at each merge'}
         if self.detect_recursive_ordered_map_access(full_code, language).get('detected') and re.search(rf'\b{name}\s*\([^)]*(?:-\s*1|\+\s*1)', body):
             return {'complexity': 'O(n log n)', 'reason': 'TreeMap/tree-map update in linear recursion'}
+        line = self._find_function_line(full_code, name, language)
+        function_context = self._function_snippet(full_code, line, max_lines=30)
+        ordered_tree_drain = self.detect_ordered_tree_drain(function_context or body, language)
+        if ordered_tree_drain.get('detected'):
+            return ordered_tree_drain
         for detector in (
             self.detect_ordered_map_access,
+            self.detect_ordered_tree_drain,
             self.detect_hash_table_access,
             self.detect_binary_search_pattern,
             self.detect_priority_queue_operations,
@@ -911,6 +926,8 @@ class CodeAnalyzer:
             self.detect_nested_key_count,
             self.detect_materialized_subarray_serialization,
             self.detect_bitmask_subset_enumeration,
+            self.detect_reduce_accumulator_copy,
+            self.detect_java_stream_pipeline,
             self.detect_implicit_iteration_complexity,
         ):
             detected = detector(body, language)
@@ -963,6 +980,15 @@ class CodeAnalyzer:
         return complexities
 
     def _apply_function_effective_overrides(self, code, language, complexities):
+        repeated_dfs = self._repeated_fresh_graph_search_info(code, 'dfs')
+        if repeated_dfs:
+            callee = repeated_dfs.get('callee')
+            caller = repeated_dfs.get('caller')
+            if callee in complexities:
+                complexities[callee] = 'O(V + E)'
+            if caller in complexities:
+                complexities[caller] = 'O(V * (V + E))'
+
         for name in self._function_names(code, language):
             body = self._extract_function_body(code, name, language)
             if self._looks_like_matrix_power_recursion(name, body, complexities):
@@ -970,12 +996,19 @@ class CodeAnalyzer:
 
     def _build_function_complexity_details(self, code, language, own_complexities, effective_complexities):
         details = {}
+        repeated_dfs = self._repeated_fresh_graph_search_info(code, 'dfs')
         for name in self._function_names(code, language):
             body = self._extract_function_body(code, name, language)
             own = own_complexities.get(name, 'O(1)')
             effective = effective_complexities.get(name, own)
             reason = self._function_complexity_reason(name, body, own, effective, effective_complexities, code, language)
             calls = self._function_call_summaries(body, effective_complexities, current_func=name)
+            if repeated_dfs and name == repeated_dfs.get('caller'):
+                calls = [{
+                    'function': repeated_dfs.get('callee', 'dfs'),
+                    'multiplier': 'O(V)',
+                    'complexity': 'O(V + E)',
+                }]
             line = self._find_function_line(code, name, language)
             details[name] = {
                 'function': name,
@@ -1060,8 +1093,16 @@ class CodeAnalyzer:
         return summaries
 
     def _function_complexity_reason(self, name, body, own, effective, effective_complexities, full_code='', language='typescript'):
+        repeated_dfs = self._repeated_fresh_graph_search_info(full_code or body, 'dfs')
+        if repeated_dfs and name == repeated_dfs.get('caller'):
+            return (
+                'The outer loop creates a fresh visited array/set for each start vertex, '
+                'so DFS can rescan up to V vertices and E edges for every start.'
+            )
         special = self._function_special_time_result(name, body, full_code or body, language or 'typescript')
         if special:
+            if 'DFS graph traversal' in special.get('reason', ''):
+                return special['reason']
             if 'front insertion' in special.get('reason', '').lower():
                 return 'Front insertion shifts existing elements on each loop iteration.'
             if 'Immutable string concatenation' in special.get('reason', ''):
@@ -1369,12 +1410,42 @@ class CodeAnalyzer:
 
     def _recursive_division_factors(self, func_name, body):
         factors = []
-        for args in re.findall(rf'\b{func_name}\s*\(([^()]*)\)', body):
+        for args in self._recursive_call_argument_lists(func_name, body):
             first_arg = args.split(',', 1)[0].strip()
             factor = self._division_factor_from_expr(first_arg)
             if factor:
                 factors.append(factor)
         return factors
+
+    def _recursive_call_argument_lists(self, func_name, body):
+        args_list = []
+        pattern = re.compile(rf'\b{re.escape(func_name)}\s*\(')
+        for match in pattern.finditer(body):
+            start = match.end()
+            depth = 1
+            index = start
+            quote = None
+            escape = False
+            while index < len(body):
+                char = body[index]
+                if quote:
+                    if escape:
+                        escape = False
+                    elif char == '\\':
+                        escape = True
+                    elif char == quote:
+                        quote = None
+                elif char in ('"', "'", '`'):
+                    quote = char
+                elif char == '(':
+                    depth += 1
+                elif char == ')':
+                    depth -= 1
+                    if depth == 0:
+                        args_list.append(body[start:index])
+                        break
+                index += 1
+        return args_list
 
     def _division_factor_from_expr(self, expr):
         shift = re.search(r'>>\s*(\d+)', expr)
@@ -3110,26 +3181,103 @@ class CodeAnalyzer:
         return loop_count >= 3 and has_2d_product and updates_2d_result and matrix_names
 
     def _looks_like_repeated_fresh_graph_search(self, code, search_name='dfs'):
-        compact = re.sub(r'\s+', ' ', code)
-        fresh_seen = (
-            r'(?:set\s*\(\s*\)|new\s+Set\s*\(\s*\)|'
-            r'new\s+HashSet(?:\s*<[^>]*>)?\s*\(\s*\))'
-        )
-        search_call_with_fresh_seen = rf'\b{search_name}\s*\([^)]*{fresh_seen}[^)]*\)'
-        graph_loop = (
-            r'(?:for\s+\w+\s+in\s+(?:graph|adj|adjacency)\b[^:]*:?|'
-            r'for\s*\([^)]*(?:graph|adj|adjacency)[^)]*\)\s*\{?)'
-        )
-        if re.search(rf'{graph_loop}.{{0,800}}{search_call_with_fresh_seen}', compact, re.IGNORECASE):
-            return True
+        return bool(self._repeated_fresh_graph_search_info(code, search_name))
 
-        fresh_seen_assignment = rf'\b(?:visited|seen)\s*=\s*{fresh_seen}'
-        call_with_seen_name = rf'\b{search_name}\s*\([^)]*\b(?:visited|seen)\b[^)]*\)'
-        return bool(re.search(
-            rf'{graph_loop}.{{0,800}}{fresh_seen_assignment}.{{0,800}}{call_with_seen_name}',
+    def _repeated_fresh_graph_search_info(self, code, search_name='dfs'):
+        if not code:
+            return None
+        compact = re.sub(r'\s+', ' ', code)
+        if not re.search(rf'\b{search_name}\s*\(', compact, re.IGNORECASE):
+            return None
+        if not re.search(
+            r'\b(?:graph|adj|adjacency|neighbor|neighbour|List\s*<\s*List|g\s*\.get|visited|seen|vis)\b',
             compact,
             re.IGNORECASE
+        ):
+            return None
+
+        fresh_seen = (
+            r'(?:set\s*\(\s*\)|new\s+Set\s*\(\s*\)|'
+            r'new\s+HashSet(?:\s*<[^>]*>)?\s*\(\s*\)|'
+            r'new\s+boolean\s*\[[^\]]+\]|new\s+bool\s*\[[^\]]+\]|'
+            r'new\s+Array\s*\([^)]+\)\s*\.fill\s*\(\s*false\s*\)|'
+            r'Array\s*\([^)]+\)\s*\.fill\s*\(\s*false\s*\)|'
+            r'Collections\.nCopies\s*\([^)]+\)|'
+            r'(?:std::)?vector\s*<\s*bool\s*>\s*\([^)]+\))'
+        )
+        search_call_with_fresh_seen = rf'\b{search_name}\s*\([^;{{}}]*{fresh_seen}[^;{{}}]*\)'
+        loop_header = r'(?:for\s+\w+\s+in\s+\w+\s*:|for\s*\([^)]*\)\s*\{?|for\s*\([^)]*:[^)]*\)\s*\{?)'
+
+        caller = self._find_repeated_search_caller(code, search_name, fresh_seen)
+        if re.search(rf'{loop_header}.{{0,900}}{search_call_with_fresh_seen}', compact, re.IGNORECASE | re.DOTALL):
+            return {'caller': caller, 'callee': search_name}
+
+        fresh_seen_assignment = (
+            rf'(?:\b(?:visited|seen|vis)\s*=\s*{fresh_seen}|'
+            rf'\bboolean\s*\[\]\s+(?:visited|seen|vis)\s*=\s*{fresh_seen}|'
+            rf'\b(?:Set|HashSet)(?:\s*<[^>]*>)?\s+(?:visited|seen|vis)\s*=\s*{fresh_seen}|'
+            rf'\b(?:std::)?vector\s*<\s*bool\s*>\s+(?:visited|seen|vis)\s*\([^)]+\))'
+        )
+        call_with_seen_name = rf'\b{search_name}\s*\([^;{{}}]*\b(?:visited|seen|vis)\b[^;{{}}]*\)'
+        if re.search(
+            rf'{loop_header}.{{0,900}}{fresh_seen_assignment}.{{0,900}}{call_with_seen_name}',
+            compact,
+            re.IGNORECASE | re.DOTALL
+        ):
+            return {'caller': caller, 'callee': search_name}
+        return None
+
+    def _find_repeated_search_caller(self, code, search_name, fresh_seen_pattern):
+        func_names = self._function_names(code, self.detect_language(code))
+        call_with_fresh_seen = rf'\b{search_name}\s*\([^;{{}}]*{fresh_seen_pattern}[^;{{}}]*\)'
+        assignment_then_call = (
+            rf'(?:\b(?:visited|seen|vis)\s*=|'
+            rf'\bboolean\s*\[\]\s+(?:visited|seen|vis)\s*=|'
+            rf'\b(?:Set|HashSet)(?:\s*<[^>]*>)?\s+(?:visited|seen|vis)\s*=|'
+            rf'\b(?:std::)?vector\s*<\s*bool\s*>\s+(?:visited|seen|vis)\s*\()'
+            rf'.{{0,600}}\b{search_name}\s*\([^;{{}}]*\b(?:visited|seen|vis)\b[^;{{}}]*\)'
+        )
+        for name in func_names:
+            if name == search_name:
+                continue
+            body = self._extract_function_body(code, name, self.detect_language(code))
+            compact_body = re.sub(r'\s+', ' ', body)
+            has_loop = bool(re.search(r'(?:for\s+\w+\s+in\s+\w+\s*:|for\s*\([^)]*\))', compact_body, re.IGNORECASE))
+            if not has_loop:
+                continue
+            if re.search(call_with_fresh_seen, compact_body, re.IGNORECASE | re.DOTALL):
+                return name
+            if re.search(assignment_then_call, compact_body, re.IGNORECASE | re.DOTALL):
+                return name
+        return None
+
+    def _looks_like_graph_dfs_function(self, name, body, full_code='', language='unknown'):
+        if not name or not body:
+            return False
+        if not re.search(rf'\b{name}\s*\(', body):
+            return False
+        has_visited_guard = bool(re.search(
+            r'(?:visited|seen|vis)\s*(?:\.contains\s*\(|\.has\s*\(|\[)|'
+            r'\b(?:visited|seen|vis)\.add\s*\(|'
+            r'\b(?:visited|seen|vis)\s*\[[^\]]+\]\s*=\s*true',
+            body,
+            re.IGNORECASE
         ))
+        has_adjacency_loop = bool(re.search(
+            r'for\s+(?:\w+\s+)?\w+\s+in\s+\w+\s*\[[^\]]+\]|'
+            r'for\s*\([^)]*:\s*\w+\.get\s*\([^)]+\)\s*\)|'
+            r'for\s*\([^)]*of\s+\w+\s*\[[^\]]+\][^)]*\)|'
+            r'for\s*\([^)]*:\s*\w+\s*\[[^\]]+\]\s*\)|'
+            r'\b(?:graph|adj|adjacency|g)\s*(?:\.get\s*\(|\[[^\]]+\])',
+            body,
+            re.IGNORECASE
+        ))
+        graph_context = bool(re.search(
+            r'\b(?:graph|adj|adjacency|neighbor|neighbour|List\s*<\s*List|vector\s*<\s*vector|g\s*\.get)\b',
+            f'{full_code}\n{body}',
+            re.IGNORECASE
+        ))
+        return has_visited_guard and has_adjacency_loop and graph_context
 
     def _looks_like_permutation_backtracking(self, code):
         code_lower = code.lower()
@@ -4034,6 +4182,100 @@ class CodeAnalyzer:
             return self._cubic()
         return f'O(n^{power})'
 
+    def detect_reduce_accumulator_copy(self, code, language):
+        if not self._is_javascript_like(language):
+            return {'detected': False}
+        if '.reduce' not in code:
+            return {'detected': False}
+
+        compact = re.sub(r'\s+', ' ', code)
+        accumulator_names = set()
+        for pattern in (
+            r'\.reduce\s*\(\s*\(?\s*([A-Za-z_$][\w$]*)\s*,',
+            r'\.reduce\s*\(\s*function\s*\(\s*([A-Za-z_$][\w$]*)\s*,',
+        ):
+            accumulator_names.update(re.findall(pattern, compact))
+
+        for acc in accumulator_names:
+            escaped = re.escape(acc)
+            copies_growing_accumulator = bool(re.search(
+                rf'(?:\[\s*\.\.\.\s*{escaped}\b|\{{\s*\.\.\.\s*{escaped}\b|'
+                rf'\b{escaped}\s*\.\s*concat\s*\(|'
+                rf'Object\.assign\s*\(\s*\{{\s*\}}\s*,\s*{escaped}\b|'
+                rf'Array\.from\s*\(\s*{escaped}\b)',
+                compact
+            ))
+            if copies_growing_accumulator:
+                return {
+                    'detected': True,
+                    'pattern': 'reduce_accumulator_copy',
+                    'complexity': self._quadratic(),
+                    'space': 'O(n)',
+                    'total_allocation': self._quadratic(),
+                    'reason': (
+                        'reduce() copies the growing accumulator on each iteration; '
+                        '0+1+2+...+n copied elements gives quadratic work'
+                    )
+                }
+
+        return {'detected': False}
+
+    def detect_java_stream_pipeline(self, code, language):
+        if language != 'java':
+            return {'detected': False}
+        if not re.search(r'\.(?:stream|parallelStream)\s*\(', code):
+            return {'detected': False}
+
+        compact = re.sub(r'\s+', ' ', code)
+        stream_count = len(re.findall(r'\.(?:stream|parallelStream)\s*\(', compact))
+        materializes = bool(re.search(
+            r'\.(?:collect|toList|toArray)\s*\(|Collectors\.(?:toList|toSet|toMap|groupingBy)',
+            compact
+        ))
+        sorted_stage = bool(re.search(r'\.sorted\s*\(', compact))
+        nested_stream = bool(
+            stream_count >= 2 and re.search(r'\.flatMap(?:ToInt|ToLong|ToDouble)?\s*\(', compact)
+        )
+        callback_nested_scan = bool(re.search(
+            r'\.(?:map|filter|flatMap|anyMatch|allMatch|noneMatch)\s*\([^;]*->[^;]*'
+            r'(?:\.(?:stream|parallelStream)\s*\(|\.contains\s*\(|\.indexOf\s*\()',
+            compact
+        ))
+
+        if nested_stream or callback_nested_scan:
+            return {
+                'detected': True,
+                'pattern': 'java_nested_stream_pipeline',
+                'complexity': self._quadratic(),
+                'space': self._quadratic() if materializes else 'O(n)',
+                'auxiliary_space': self._quadratic() if materializes else 'O(1)',
+                'total_allocation': self._quadratic() if materializes else 'O(n)',
+                'reason': (
+                    'Nested Java Stream pipeline: an outer stream drives an inner stream/linear scan, '
+                    'so it processes O(n²) element pairs'
+                )
+            }
+
+        if sorted_stage:
+            return {
+                'detected': True,
+                'pattern': 'java_stream_sorted',
+                'complexity': 'O(n log n)',
+                'space': 'O(n)',
+                'auxiliary_space': 'O(n)',
+                'reason': 'Java Stream sorted() buffers and sorts the stream elements'
+            }
+
+        return {
+            'detected': True,
+            'pattern': 'java_stream_pipeline',
+            'complexity': 'O(n)',
+            'space': 'O(n)' if materializes else 'O(n)',
+            'auxiliary_space': 'O(n)' if materializes else 'O(1)',
+            'total_allocation': 'O(n)',
+            'reason': 'Java Stream pipeline performs an implicit linear traversal of the input collection'
+        }
+
     def detect_implicit_iteration_complexity(self, code, language):
         if language == 'python':
             if re.search(r'\[[^\]]*\bfor\b[^\]]*\bfor\b[^\]]*\]', code, re.DOTALL):
@@ -4062,6 +4304,9 @@ class CodeAnalyzer:
                     'reason': 'Membership test over a sequence may scan O(n) elements'
                 }
         if self._is_javascript_like(language):
+            reduce_copy = self.detect_reduce_accumulator_copy(code, language)
+            if reduce_copy.get('detected'):
+                return reduce_copy
             if re.search(r'\.(?:map|filter|slice|concat)\s*\(|\[\s*\.\.\.', code):
                 return {
                     'detected': True, 'complexity': 'O(n)', 'space': 'O(n)',
@@ -4356,6 +4601,40 @@ class CodeAnalyzer:
             'reason': 'Ordered map/tree lookup inside loop adds an O(log n) factor'
         }
 
+    def detect_ordered_tree_drain(self, code, language):
+        compact = re.sub(r'\s+', ' ', code)
+        has_ordered_tree = bool(re.search(
+            r'\b(?:std::)?(?:multi)?set\s*<|\b(?:std::)?(?:multi)?map\s*<|'
+            r'\b(?:multiset|set|multimap|map)\s*<|\bTreeSet\b|\bTreeMap\b',
+            compact
+        ))
+        if not has_ordered_tree or not re.search(r'\bwhile\s*\(', compact):
+            return {'detected': False}
+
+        cpp_drain = bool(re.search(
+            r'while\s*\(\s*!\s*\w+\.empty\s*\(\s*\)\s*\).*?'
+            r'(?:\.begin\s*\(\s*\).*?)?\.erase\s*\(',
+            compact,
+            re.IGNORECASE
+        ))
+        java_drain = bool(re.search(
+            r'while\s*\(\s*!\s*\w+\.isEmpty\s*\(\s*\)\s*\).*?'
+            r'\.(?:remove|pollFirst|pollLast|firstEntry|pollFirstEntry|pollLastEntry)\s*\(',
+            compact,
+            re.IGNORECASE
+        ))
+        if not cpp_drain and not java_drain:
+            return {'detected': False}
+
+        return {
+            'detected': True,
+            'pattern': 'ordered_tree_drain',
+            'complexity': 'O(n log n)',
+            'space': 'O(n)',
+            'auxiliary_space': 'O(1)',
+            'reason': 'Draining an ordered tree container removes n nodes; each erase/remove is modeled as O(log n), and the container stores O(n) input elements'
+        }
+
     def detect_recursive_ordered_map_access(self, code, language):
         compact = re.sub(r'\s+', ' ', code)
         if not re.search(r'\bTreeMap\b|\bTreeSet\b|\bstd::map\b|\bstd::set\b|\bmap\s*<', compact):
@@ -4530,6 +4809,41 @@ class CodeAnalyzer:
                     'string content across all subarrays is O(n³)'
                 )
             }
+        ordered_tree_drain = self.detect_ordered_tree_drain(code, language)
+        if ordered_tree_drain.get('detected'):
+            return {
+                'pattern': 'ordered_tree_drain',
+                'peak_live_auxiliary_space': ordered_tree_drain.get('space', 'O(n)'),
+                'total_allocated_space': ordered_tree_drain.get('space', 'O(n)'),
+                'auxiliary_space': ordered_tree_drain.get('auxiliary_space', 'O(1)'),
+                'reason': (
+                    'The ordered tree container holds O(n) input nodes while the drain loop uses '
+                    'only O(1) extra iterator/scalar storage'
+                )
+            }
+        java_stream = self.detect_java_stream_pipeline(code, language)
+        if java_stream.get('detected'):
+            return {
+                'pattern': java_stream.get('pattern', 'java_stream_pipeline'),
+                'peak_live_auxiliary_space': java_stream.get('space', 'O(n)'),
+                'total_allocated_space': java_stream.get('total_allocation', java_stream.get('space', 'O(n)')),
+                'auxiliary_space': java_stream.get('auxiliary_space', 'O(1)'),
+                'reason': (
+                    'Java Stream pipelines hide iteration inside fluent calls; lazy terminals such as count() '
+                    'avoid materializing all mapped results, while collect()/toList() retains the output'
+                )
+            }
+        reduce_copy = self.detect_reduce_accumulator_copy(code, language)
+        if reduce_copy.get('detected'):
+            return {
+                'pattern': 'reduce_accumulator_copy',
+                'peak_live_auxiliary_space': reduce_copy.get('space', 'O(n)'),
+                'total_allocated_space': reduce_copy.get('total_allocation', self._quadratic()),
+                'reason': (
+                    'reduce() returns a fresh copied accumulator on every step; peak live output is linear, '
+                    'but cumulative copied/allocated array entries are quadratic'
+                )
+            }
         immutable_concat = self.detect_immutable_string_concat(code, language)
         if immutable_concat.get('detected'):
             return {
@@ -4615,6 +4929,18 @@ class CodeAnalyzer:
             return 'Set stores serialized subarrays: O(n²) entries with up to O(n) characters each, so worst-case auxiliary space is O(n³)'
         if pattern == 'repeated_dfs_fresh_visited':
             return 'Peak visited set and recursion stack are O(V), while repeated fresh visited sets allocate O(V²) total entries over all starts'
+        if pattern == 'reduce_accumulator_copy':
+            return 'Peak returned accumulator space is O(n), but copying the growing accumulator inside reduce() allocates O(n²) total array entries'
+        if pattern == 'ordered_tree_drain':
+            return 'The ordered tree container itself holds O(n) elements; the drain loop uses only O(1) extra auxiliary variables'
+        if pattern == 'java_nested_stream_pipeline':
+            if memory_analysis.get('auxiliary_space') == 'O(1)':
+                return 'The input list holds O(n) elements; count() consumes the nested streams lazily, so extra pipeline space is O(1)'
+            return 'Nested Java streams materialize O(n²) output when collected into a list/array/map'
+        if pattern == 'java_stream_sorted':
+            return 'Java Stream sorted() buffers elements for sorting, using O(n) space'
+        if pattern == 'java_stream_pipeline':
+            return 'The input collection holds O(n) elements; the stream pipeline itself uses only small iterator state unless it collects output'
         if pattern == 'immutable_string_concat_loop':
             return 'Peak final string space is O(n), but repeated immutable concatenation allocates O(n²) total copied characters'
         if pattern == 'bulk_allocation':
@@ -4702,6 +5028,181 @@ class CodeAnalyzer:
 
         reason = 'Matched explicit loops, recursion, or known patterns.'
         return {'time': 'high', 'space': 'high', 'reason': reason, 'notes': [reason]}
+
+    def analyze_semantic_assumptions(self, code, language, input_schema=None, concrete_inputs=None, time_result=None, memory_analysis=None):
+        items = []
+        input_schema = input_schema or {}
+        time_result = time_result or {}
+        memory_analysis = memory_analysis or {}
+
+        parameters = input_schema.get('parameters') or []
+        if parameters:
+            names = ', '.join(p.get('name', '') for p in parameters if p.get('name'))
+            if concrete_inputs:
+                items.append({
+                    'category': 'runtime_inputs',
+                    'severity': 'info',
+                    'title': 'Concrete inputs are examples',
+                    'message': 'Provided values are used for concrete estimates; symbolic Big-O still describes growth when inputs vary.',
+                    'evidence': names,
+                })
+            else:
+                items.append({
+                    'category': 'runtime_inputs',
+                    'severity': 'medium',
+                    'title': 'Input constraints not provided',
+                    'message': 'Big-O assumes input-sized parameters can grow according to their detected roles. Tighter constraints can lower the effective bound.',
+                    'evidence': names,
+                })
+        else:
+            items.append({
+                'category': 'runtime_inputs',
+                'severity': 'low',
+                'title': 'No analyzable parameters detected',
+                'message': 'The analyzer uses code structure only because no public input parameters were detected.',
+                'evidence': input_schema.get('reason', ''),
+            })
+
+        unknown_calls = self._unknown_call_names(code, language)
+        if unknown_calls:
+            preview = ', '.join(unknown_calls[:6])
+            suffix = '...' if len(unknown_calls) > 6 else ''
+            items.append({
+                'category': 'libraries',
+                'severity': 'high',
+                'title': 'Unknown library/helper calls',
+                'message': 'Calls without known local definitions or built-in complexity models can hide additional runtime or allocation cost.',
+                'evidence': f'{preview}{suffix}',
+            })
+
+        for item in self._library_semantic_items(code, language, time_result):
+            items.append(item)
+        for item in self._side_effect_semantic_items(code, language):
+            items.append(item)
+
+        if memory_analysis.get('total_allocated_space') and memory_analysis.get('total_allocated_space') != memory_analysis.get('peak_live_auxiliary_space'):
+            items.append({
+                'category': 'memory_model',
+                'severity': 'info',
+                'title': 'Peak memory differs from allocation churn',
+                'message': 'Total allocated/copied memory is cumulative over the run and is not the same as peak live space.',
+                'evidence': f"peak={memory_analysis.get('peak_live_auxiliary_space')}, total={memory_analysis.get('total_allocated_space')}",
+            })
+
+        confidence = 'high'
+        if any(item['severity'] == 'high' for item in items):
+            confidence = 'low'
+        elif any(item['severity'] == 'medium' for item in items):
+            confidence = 'medium'
+
+        return {
+            'available': True,
+            'confidence': confidence,
+            'items': items,
+            'summary': self._semantic_summary(confidence, items),
+        }
+
+    def _semantic_summary(self, confidence, items):
+        if confidence == 'high':
+            return 'No major semantic blockers were detected; the Big-O is based on visible code and known runtime models.'
+        if confidence == 'medium':
+            return 'Some input or runtime assumptions affect how the Big-O should be interpreted.'
+        return 'Unknown library/helper behavior or side effects may change the real cost beyond the visible code.'
+
+    def _library_semantic_items(self, code, language, time_result):
+        compact = re.sub(r'\s+', ' ', code)
+        items = []
+        if re.search(r'\.sort\s*\(|\bsorted\s*\(|Arrays\.sort|Collections\.sort|\bsort\s*\(', compact):
+            items.append({
+                'category': 'libraries',
+                'severity': 'medium',
+                'title': 'Sort complexity is runtime/library dependent',
+                'message': 'The analyzer uses the language runtime model for built-in sorting; constants and auxiliary space can vary by implementation and data type.',
+                'evidence': 'sort/sorted call',
+            })
+        if re.search(r'\b(?:HashMap|HashSet|unordered_map|unordered_set|new\s+Map\s*\(|new\s+Set\s*\()', compact):
+            items.append({
+                'category': 'libraries',
+                'severity': 'medium',
+                'title': 'Hash table cost depends on collisions',
+                'message': 'Reported hash-table bounds separate average/amortized behavior from collision-heavy worst cases when the pattern is visible.',
+                'evidence': 'hash table usage',
+            })
+        if re.search(r'\b(?:TreeMap|TreeSet|(?:std::)?(?:multi)?(?:map|set)\s*<)', compact):
+            items.append({
+                'category': 'libraries',
+                'severity': 'info',
+                'title': 'Ordered tree runtime model',
+                'message': 'Ordered map/set operations are modeled with logarithmic tree costs unless a more specific standard guarantee is required.',
+                'evidence': 'ordered tree container',
+            })
+        if re.search(r'\.(?:stream|parallelStream)\s*\(', compact):
+            items.append({
+                'category': 'libraries',
+                'severity': 'medium',
+                'title': 'Stream pipeline laziness matters',
+                'message': 'Java Stream cost depends on terminal operations: count() can be lazy, while collect()/toList()/toArray() materialize output.',
+                'evidence': 'Java Stream pipeline',
+            })
+        if time_result.get('complexity') == 'O(unknown)':
+            items.append({
+                'category': 'libraries',
+                'severity': 'high',
+                'title': 'Complexity unknown',
+                'message': 'A required operation does not have a known local or library complexity model.',
+                'evidence': time_result.get('reason', ''),
+            })
+        return items
+
+    def _side_effect_semantic_items(self, code, language):
+        compact = re.sub(r'\s+', ' ', code)
+        checks = [
+            (r'\bprint\s*\(|System\.out\.|console\.', 'io', 'Output side effect', 'Printing/logging cost depends on output size and runtime sink.'),
+            (r'\bopen\s*\(|\bFiles\.|FileInputStream|FileOutputStream|fs\.|readFile|writeFile', 'io', 'File I/O side effect', 'File I/O can dominate CPU Big-O and depends on external storage.'),
+            (r'\bfetch\s*\(|axios\.|requests\.|HttpClient|URLConnection|socket', 'io', 'Network side effect', 'Network calls have external latency and payload costs outside pure algorithmic Big-O.'),
+            (r'executeQuery|executeUpdate|PreparedStatement|Statement\s*\(|sqlite|cursor\.execute', 'io', 'Database side effect', 'Database queries depend on indexes, query plans, data volume, and remote latency.'),
+            (r'\bThread\b|synchronized|CompletableFuture|async\s+|await\s+', 'concurrency', 'Concurrency/runtime scheduling', 'Parallel or asynchronous execution can change wall-clock behavior without changing total work.'),
+            (r'\b(?:random|Math\.random|Random\s*\(|time\.time|System\.currentTimeMillis|Date\s*\()', 'runtime', 'Runtime-dependent value', 'Random/time-dependent branches can make behavior input-distribution dependent.'),
+        ]
+        items = []
+        for pattern, category, title, message in checks:
+            if re.search(pattern, compact, re.IGNORECASE):
+                items.append({
+                    'category': category,
+                    'severity': 'medium',
+                    'title': title,
+                    'message': message,
+                    'evidence': pattern,
+                })
+
+        if self._mutates_input_parameters(code, language):
+            items.append({
+                'category': 'intended_behavior',
+                'severity': 'medium',
+                'title': 'Function mutates input state',
+                'message': 'Same-behavior optimizations must preserve mutations and observable side effects, not only return values.',
+                'evidence': 'input container mutation',
+            })
+        return items
+
+    def _mutates_input_parameters(self, code, language):
+        signature = self._primary_function_signature(code, language)
+        if not signature:
+            return False
+        param_names = [p.get('name') for p in signature.get('params', []) if p.get('name')]
+        if not param_names:
+            return False
+        compact = re.sub(r'\s+', ' ', code)
+        mutators = (
+            r'(?:append|extend|insert|remove|pop|clear|sort|reverse|add|delete|set|put|erase|push|splice)'
+        )
+        for name in param_names:
+            escaped = re.escape(name)
+            if re.search(rf'\b{escaped}\s*\.\s*{mutators}\s*\(', compact):
+                return True
+            if re.search(rf'\b{escaped}\s*\[[^\]]+\]\s*(?:=|\+=|-=|\+\+|--)', compact):
+                return True
+        return False
 
     def _dynamic_construct_confidence_notes(self, code, language):
         checks = [
@@ -4841,6 +5342,7 @@ class CodeAnalyzer:
         for detector in (
             self.detect_recursive_ordered_map_access,
             self.detect_ordered_map_access,
+            self.detect_ordered_tree_drain,
             self.detect_hash_table_access,
             self.detect_binary_search_pattern,
             self.detect_priority_queue_operations,
@@ -4851,6 +5353,8 @@ class CodeAnalyzer:
             self.detect_nested_key_count,
             self.detect_materialized_subarray_serialization,
             self.detect_bitmask_subset_enumeration,
+            self.detect_reduce_accumulator_copy,
+            self.detect_java_stream_pipeline,
             self.detect_implicit_iteration_complexity,
         ):
             detected = detector(code, language)
@@ -4943,6 +5447,7 @@ class CodeAnalyzer:
             self.detect_recursive_shared_collection_growth,
             self.detect_recursive_ordered_map_access,
             self.detect_ordered_map_access,
+            self.detect_ordered_tree_drain,
             self.detect_hash_table_access,
             self.detect_binary_search_pattern,
             self.detect_priority_queue_operations,
@@ -4953,6 +5458,8 @@ class CodeAnalyzer:
             self.detect_nested_key_count,
             self.detect_materialized_subarray_serialization,
             self.detect_bitmask_subset_enumeration,
+            self.detect_reduce_accumulator_copy,
+            self.detect_java_stream_pipeline,
             self.detect_implicit_iteration_complexity,
             self.detect_mutable_container_growth,
         ):
@@ -5060,6 +5567,19 @@ class CodeAnalyzer:
             issues.append({
                 'line': 1, 'type': 'performance', 'severity': 'high',
                 'message': 'Repeated front insertion shifts existing elements each time'
+            })
+
+        if self.detect_reduce_accumulator_copy(code, language).get('detected'):
+            issues.append({
+                'line': 1, 'type': 'performance', 'severity': 'high',
+                'message': 'reduce() copies the growing accumulator on every iteration'
+            })
+
+        java_stream = self.detect_java_stream_pipeline(code, language)
+        if java_stream.get('detected') and java_stream.get('pattern') == 'java_nested_stream_pipeline':
+            issues.append({
+                'line': 1, 'type': 'performance', 'severity': 'high',
+                'message': 'Nested Java Stream pipeline performs repeated inner scans'
             })
 
         for name in self._function_names(code, language):

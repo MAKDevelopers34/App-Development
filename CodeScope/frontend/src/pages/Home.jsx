@@ -24,8 +24,8 @@ export default function Home() {
     },
     {
       icon: '🤖',
-      title: 'Verified Grok Rewrites',
-      description: 'Show optimized code only when Grok returns a same-behavior rewrite that CodeScope re-analyzes as lower complexity.'
+      title: 'Verified AI Rewrites',
+      description: 'Show optimized code only when Groq/Grok returns a same-behavior rewrite that CodeScope re-analyzes as lower complexity.'
     },
     {
       icon: '📄',
@@ -39,7 +39,7 @@ export default function Home() {
   const steps = [
     { step: '01', title: 'Upload Your Code', description: 'Paste code, upload a ZIP file, or enter a GitHub URL' },
     { step: '02', title: 'Instant Analysis', description: 'Our engine analyzes complexity, detects issues and bottlenecks' },
-    { step: '03', title: 'Get Results', description: 'View detailed reports, confidence notes, hotspots, and verified Grok rewrites when available' },
+    { step: '03', title: 'Get Results', description: 'View detailed reports, confidence notes, hotspots, and verified AI rewrites when available' },
   ];
 
   return (
@@ -86,7 +86,7 @@ export default function Home() {
             lineHeight: '1.7'
           }}>
             Upload your code via ZIP, GitHub URL, or paste directly.
-            Get instant Big-O analysis, performance rating, confidence notes, and verified Grok rewrites when available.
+            Get instant Big-O analysis, performance rating, confidence notes, and verified AI rewrites when available.
           </p>
 
           <div style={{ display: 'flex', gap: '14px', justifyContent: 'center', flexWrap: 'wrap' }}>

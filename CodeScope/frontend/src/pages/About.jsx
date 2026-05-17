@@ -53,7 +53,7 @@ export default function About() {
             Every developer writes code, but not everyone understands how efficient that code is.
             CodeScope makes algorithm analysis accessible to everyone — students, professionals,
             and teams. By uploading your code, you get instant feedback on time complexity,
-            space complexity, confidence notes, and Grok-generated rewrites only when a verified lower-complexity alternative is available.
+            space complexity, confidence notes, and AI-generated rewrites only when a verified lower-complexity alternative is available.
             All completely free.
           </p>
         </div>
