@@ -14,7 +14,8 @@ from app.ai_explainer import (
     _validate_ai_rewrite_complexity,
 )
 from app.github_fetcher import SUPPORTED_EXTENSIONS as GITHUB_SUPPORTED_EXTENSIONS
-from app.routes import SUPPORTED_CODE_EXTENSIONS, _analyze_with_extras, _build_batch_summary
+from app.report_generator import generate_pdf_report
+from app.routes import SUPPORTED_CODE_EXTENSIONS, _analyze_with_extras, _build_batch_summary, _should_skip_batch_path
 
 
 class AnalyzerComplexityTests(unittest.TestCase):
@@ -1356,6 +1357,100 @@ function b(n) {
         self.assertEqual(summary["worst_time_complexity"], "O(n²)")
         self.assertGreaterEqual(summary["confidence_counts"]["medium"], 1)
         self.assertTrue(any(item["filename"] == "slow.py" for item in summary["high_complexity_files"]))
+
+    def test_batch_summary_builds_cross_file_project_intelligence(self):
+        source_files = [
+            {
+                "filename": "app/main.py",
+                "code": """from services.slow import slow
+
+def run(n):
+    return slow(n)
+""",
+            },
+            {
+                "filename": "app/services/slow.py",
+                "code": """def slow(n):
+    total = 0
+    for i in range(n):
+        for j in range(n):
+            total += i + j
+    return total
+""",
+            },
+        ]
+        results = [
+            {
+                "filename": item["filename"],
+                "result": self.analyzer.analyze(item["code"], item["filename"]),
+            }
+            for item in source_files
+        ]
+
+        summary = _build_batch_summary(results, "github", source_files)
+        project = summary["project_intelligence"]
+
+        self.assertTrue(project["available"])
+        self.assertEqual(project["file_count"], 2)
+        self.assertTrue(any(
+            edge["from"] == "app/main.py" and edge["to"] == "app/services/slow.py"
+            for edge in project["dependency_edges"]
+        ))
+        self.assertTrue(any(call["symbol"] == "slow" for call in project["cross_file_calls"]))
+        self.assertTrue(any(
+            item["filename"] == "app/services/slow.py" and item["complexity"] == self.analyzer._quadratic()
+            for item in project["bottlenecks"]
+        ))
+        self.assertTrue(any(
+            path["entrypoint"] == "app/main.py" and path["bottleneck_file"] == "app/services/slow.py"
+            for path in project["critical_paths"]
+        ))
+
+    def test_batch_zip_skips_vendor_and_generated_paths(self):
+        self.assertTrue(_should_skip_batch_path("project/node_modules/pkg/index.js"))
+        self.assertTrue(_should_skip_batch_path("project/dist/bundle.js"))
+        self.assertTrue(_should_skip_batch_path("project/.hidden.py"))
+        self.assertFalse(_should_skip_batch_path("project/src/index.ts"))
+
+    def test_pdf_report_accepts_project_intelligence_summary(self):
+        analysis_data = {
+            "total_files": 1,
+            "total_lines": 3,
+            "total_issues": 0,
+            "average_rating": 9,
+            "project_summary": {
+                "project_intelligence": {
+                    "available": True,
+                    "summary": "Resolved one dependency edge.",
+                    "project_confidence": "high",
+                    "dependency_edges": [{"from": "main.py", "to": "slow.py"}],
+                    "cross_file_calls": [{"symbol": "slow"}],
+                    "bottlenecks": [{
+                        "filename": "slow.py",
+                        "function": "slow",
+                        "complexity": "O(n²)",
+                        "called_by_count": 1,
+                    }],
+                    "critical_paths": [{
+                        "entrypoint": "main.py",
+                        "bottleneck_file": "slow.py",
+                        "bottleneck_function": "slow",
+                        "complexity": "O(n²)",
+                        "path": ["main.py", "slow.py"],
+                    }],
+                    "cycles": [],
+                    "limitations": ["Static project graph limit."],
+                }
+            },
+            "files": [{
+                "filename": "main.py",
+                "result": self.analyzer.analyze("def main(n):\n    return n\n", "main.py"),
+            }],
+        }
+
+        pdf = generate_pdf_report(analysis_data, "github")
+
+        self.assertGreater(len(pdf), 1000)
 
     def test_union_find_structure_is_inverse_ackermann_without_name_hints(self):
         code = """parent = {}

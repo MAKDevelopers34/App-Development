@@ -794,6 +794,14 @@ export default function Results() {
     const projectSummary = result?.project_summary || {};
     const confidenceCounts = projectSummary.confidence_counts || {};
     const needsReviewCount = (confidenceCounts.low || 0) + (confidenceCounts.medium || 0);
+    const projectIntel = projectSummary.project_intelligence || {};
+    const dependencyEdges = Array.isArray(projectIntel.dependency_edges) ? projectIntel.dependency_edges : [];
+    const crossFileCalls = Array.isArray(projectIntel.cross_file_calls) ? projectIntel.cross_file_calls : [];
+    const bottlenecks = Array.isArray(projectIntel.bottlenecks) ? projectIntel.bottlenecks : [];
+    const criticalPaths = Array.isArray(projectIntel.critical_paths) ? projectIntel.critical_paths : [];
+    const cycles = Array.isArray(projectIntel.cycles) ? projectIntel.cycles : [];
+    const entrypoints = Array.isArray(projectIntel.entrypoint_candidates) ? projectIntel.entrypoint_candidates : [];
+    const limitations = Array.isArray(projectIntel.limitations) ? projectIntel.limitations : [];
 
     return (
       <div>
@@ -819,6 +827,194 @@ export default function Results() {
             </div>
           ))}
         </div>
+
+        {/* Project Intelligence */}
+        {projectIntel.available ? (
+          <div className="card" style={{ marginBottom: '20px', border: '1px solid var(--primary)', background: '#f8fbff' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px', flexWrap: 'wrap', marginBottom: '14px' }}>
+              <div style={{ minWidth: 0, flex: '1 1 320px' }}>
+                <h3 style={{ fontSize: '16px', fontWeight: '600', marginBottom: '6px' }}>
+                  Project Intelligence
+                </h3>
+                <p style={{ fontSize: '13px', color: 'var(--gray)', lineHeight: '1.6', margin: 0 }}>
+                  {projectIntel.summary}
+                </p>
+              </div>
+              <div style={{
+                border: '1px solid var(--border)',
+                background: 'white',
+                borderRadius: '8px',
+                padding: '10px 12px',
+                minWidth: '150px'
+              }}>
+                <div style={{ fontSize: '11px', color: 'var(--gray)', fontWeight: '700', textTransform: 'uppercase', marginBottom: '4px' }}>
+                  Project Confidence
+                </div>
+                <div style={{
+                  fontSize: '14px',
+                  fontWeight: '700',
+                  color: projectIntel.project_confidence === 'high' ? 'var(--success)' : projectIntel.project_confidence === 'low' ? 'var(--danger)' : '#b06000',
+                  textTransform: 'capitalize'
+                }}>
+                  {projectIntel.project_confidence || 'medium'}
+                </div>
+              </div>
+            </div>
+
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
+              gap: '10px',
+              marginBottom: '16px'
+            }}>
+              {[
+                ['Dependency Edges', dependencyEdges.length],
+                ['Cross-File Calls', crossFileCalls.length],
+                ['Bottlenecks', bottlenecks.length],
+                ['Critical Paths', criticalPaths.length],
+                ['Cycles', cycles.length],
+                ['Entrypoints', entrypoints.length],
+              ].map(([label, value]) => (
+                <div key={label} style={{ background: 'white', border: '1px solid var(--border)', borderRadius: '8px', padding: '10px' }}>
+                  <div style={{ fontSize: '18px', fontWeight: '700', color: 'var(--primary)' }}>{value}</div>
+                  <div style={{ fontSize: '11px', color: 'var(--gray)', marginTop: '2px' }}>{label}</div>
+                </div>
+              ))}
+            </div>
+
+            {bottlenecks.length > 0 && (
+              <div style={{ marginBottom: '14px' }}>
+                <div style={{ fontSize: '12px', fontWeight: '700', color: 'var(--dark)', textTransform: 'uppercase', marginBottom: '8px' }}>
+                  Project Bottlenecks
+                </div>
+                {bottlenecks.slice(0, 5).map((item, i) => (
+                  <div key={`${item.filename}-${item.function}-${i}`} style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'minmax(160px, 1fr) auto',
+                    gap: '10px',
+                    alignItems: 'center',
+                    padding: '9px 0',
+                    borderTop: i === 0 ? 'none' : '1px solid var(--border)'
+                  }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: '13px', fontWeight: '700', color: 'var(--dark)', overflowWrap: 'anywhere' }}>
+                        {item.function}() in {item.filename}
+                      </div>
+                      <div style={{ fontSize: '12px', color: 'var(--gray)', marginTop: '3px', overflowWrap: 'anywhere' }}>
+                        Referenced by {item.called_by_count || 0} file(s)
+                        {item.called_by_files?.length ? `: ${item.called_by_files.join(', ')}` : ''}
+                      </div>
+                    </div>
+                    <ComplexityBadge complexity={item.complexity || 'O(unknown)'} />
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {criticalPaths.length > 0 && (
+              <div style={{ marginBottom: '14px' }}>
+                <div style={{ fontSize: '12px', fontWeight: '700', color: 'var(--dark)', textTransform: 'uppercase', marginBottom: '8px' }}>
+                  Critical Paths
+                </div>
+                {criticalPaths.slice(0, 5).map((item, i) => (
+                  <div key={`${item.entrypoint}-${item.bottleneck_file}-${i}`} style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'minmax(160px, 1fr) auto',
+                    gap: '10px',
+                    alignItems: 'center',
+                    padding: '9px 0',
+                    borderTop: i === 0 ? 'none' : '1px solid var(--border)'
+                  }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: '13px', fontWeight: '700', color: 'var(--dark)', overflowWrap: 'anywhere' }}>
+                        {item.entrypoint} -&gt; {item.bottleneck_function}() in {item.bottleneck_file}
+                      </div>
+                      <div style={{ fontSize: '12px', color: 'var(--gray)', marginTop: '3px', overflowWrap: 'anywhere' }}>
+                        {(item.path || []).join(' -> ')}
+                      </div>
+                    </div>
+                    <ComplexityBadge complexity={item.complexity || 'O(unknown)'} />
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {(dependencyEdges.length > 0 || crossFileCalls.length > 0) && (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '14px', marginBottom: '14px' }}>
+                {dependencyEdges.length > 0 && (
+                  <div>
+                    <div style={{ fontSize: '12px', fontWeight: '700', color: 'var(--dark)', textTransform: 'uppercase', marginBottom: '8px' }}>
+                      Dependencies
+                    </div>
+                    {dependencyEdges.slice(0, 6).map((edge, i) => (
+                      <div key={`${edge.from}-${edge.to}-${i}`} style={{ fontSize: '12px', color: 'var(--gray)', lineHeight: '1.5', marginBottom: '6px', overflowWrap: 'anywhere' }}>
+                        <strong style={{ color: 'var(--dark)' }}>{edge.from}</strong> -&gt; {edge.to}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {crossFileCalls.length > 0 && (
+                  <div>
+                    <div style={{ fontSize: '12px', fontWeight: '700', color: 'var(--dark)', textTransform: 'uppercase', marginBottom: '8px' }}>
+                      Cross-File Calls
+                    </div>
+                    {crossFileCalls.slice(0, 6).map((call, i) => (
+                      <div key={`${call.from_file}-${call.to_file}-${call.symbol}-${i}`} style={{ fontSize: '12px', color: 'var(--gray)', lineHeight: '1.5', marginBottom: '6px', overflowWrap: 'anywhere' }}>
+                        <strong style={{ color: 'var(--dark)' }}>{call.symbol}()</strong>: {call.from_file} -&gt; {call.to_file}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {(entrypoints.length > 0 || cycles.length > 0) && (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '14px', marginBottom: '14px' }}>
+                {entrypoints.length > 0 && (
+                  <div>
+                    <div style={{ fontSize: '12px', fontWeight: '700', color: 'var(--dark)', textTransform: 'uppercase', marginBottom: '8px' }}>
+                      Entrypoint Candidates
+                    </div>
+                    {entrypoints.slice(0, 5).map((item, i) => (
+                      <div key={`${item.filename}-${i}`} style={{ fontSize: '12px', color: 'var(--gray)', lineHeight: '1.5', marginBottom: '6px', overflowWrap: 'anywhere' }}>
+                        <strong style={{ color: 'var(--dark)' }}>{item.filename}</strong> - {item.reason}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {cycles.length > 0 && (
+                  <div>
+                    <div style={{ fontSize: '12px', fontWeight: '700', color: 'var(--dark)', textTransform: 'uppercase', marginBottom: '8px' }}>
+                      Dependency Cycles
+                    </div>
+                    {cycles.slice(0, 4).map((cycle, i) => (
+                      <div key={`cycle-${i}`} style={{ fontSize: '12px', color: 'var(--gray)', lineHeight: '1.5', marginBottom: '6px', overflowWrap: 'anywhere' }}>
+                        {cycle.join(' -> ')} -&gt; {cycle[0]}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {limitations.length > 0 && (
+              <p style={{ fontSize: '12px', color: 'var(--gray)', lineHeight: '1.6', margin: 0 }}>
+                {limitations.slice(0, 2).join(' ')}
+              </p>
+            )}
+          </div>
+        ) : projectIntel.summary ? (
+          <div className="card" style={{ marginBottom: '20px', border: '1px solid var(--border)', background: '#fbfcff' }}>
+            <h3 style={{ fontSize: '16px', fontWeight: '600', marginBottom: '8px' }}>
+              Project Intelligence
+            </h3>
+            <p style={{ fontSize: '13px', color: 'var(--gray)', lineHeight: '1.6', margin: 0 }}>
+              {projectIntel.summary}
+            </p>
+          </div>
+        ) : null}
 
         {/* File selector */}
         <div className="card" style={{ marginBottom: '20px' }}>

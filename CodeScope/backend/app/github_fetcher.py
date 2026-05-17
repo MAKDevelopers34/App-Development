@@ -18,6 +18,11 @@ SUPPORTED_EXTENSIONS = [
 ]
 MAX_GITHUB_FILES = 20
 MAX_SOURCE_BYTES = 250 * 1024
+SKIP_FOLDERS = {
+    'node_modules', '.git', '.hg', '.svn', '__pycache__', '.pytest_cache',
+    '.mypy_cache', 'venv', '.venv', 'env', 'dist', 'build', '.next',
+    'coverage', 'target', 'out', '.idea', '.vscode',
+}
 
 def parse_github_url(url):
     """
@@ -71,10 +76,7 @@ def get_all_files(owner, repo, path='', files=None, max_files=MAX_GITHUB_FILES):
                 if ext in SUPPORTED_EXTENSIONS and item.get('size', 0) <= MAX_SOURCE_BYTES:
                     files.append(item)
             elif item['type'] == 'dir':
-                # Skip common non-code folders
-                skip_folders = ['node_modules', '.git', '__pycache__', 
-                               'venv', 'dist', 'build', '.next']
-                if item['name'] not in skip_folders:
+                if item['name'] not in SKIP_FOLDERS:
                     get_all_files(owner, repo, item['path'], files, max_files)
 
         return files
@@ -89,7 +91,7 @@ def fetch_file_content(download_url):
     Downloads and returns the content of a single file
     """
     try:
-        response = requests.get(download_url, timeout=10)
+        response = requests.get(download_url, headers=get_headers(), timeout=10)
         if response.status_code == 200:
             if len(response.content) > MAX_SOURCE_BYTES:
                 return None

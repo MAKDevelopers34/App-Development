@@ -9,13 +9,20 @@ from app.ai_explainer import (
 import zipfile
 import io
 import os
+import posixpath
 import re
+from collections import defaultdict
 
 main = Blueprint('main', __name__)
 
 MAX_ZIP_BYTES = 8 * 1024 * 1024
 MAX_SOURCE_BYTES = 250 * 1024
 MAX_BATCH_FILES = 30
+BATCH_SKIP_DIRS = {
+    '.git', '.hg', '.svn', '__pycache__', '.pytest_cache', '.mypy_cache',
+    'node_modules', 'venv', '.venv', 'env', 'dist', 'build', '.next',
+    'coverage', 'target', 'out', '.idea', '.vscode',
+}
 SUPPORTED_CODE_EXTENSIONS = [
     '.py', '.pyw',
     '.js', '.jsx', '.mjs', '.cjs',
@@ -204,7 +211,17 @@ def _ai_provider_label(source):
     return 'AI'
 
 
-def _build_batch_summary(results, source='batch'):
+PROJECT_SKIP_CALLS = {
+    'if', 'for', 'while', 'switch', 'catch', 'return', 'throw', 'new', 'delete',
+    'print', 'println', 'len', 'range', 'int', 'str', 'list', 'dict', 'set',
+    'tuple', 'sorted', 'type', 'isinstance', 'append', 'push', 'pop', 'map',
+    'filter', 'reduce', 'forEach', 'flatMap', 'stream', 'count', 'size',
+    'length', 'console', 'log', 'Math', 'Array', 'Object', 'String', 'Number',
+    'Boolean', 'System', 'out', 'printf', 'scanf', 'cin', 'cout', 'main',
+}
+
+
+def _build_batch_summary(results, source='batch', source_files=None):
     analyzer = CodeAnalyzer()
     complexities = [
         item.get('result', {}).get('time_complexity')
@@ -264,7 +281,554 @@ def _build_batch_summary(results, source='batch'):
             'max_source_bytes_per_file': MAX_SOURCE_BYTES,
             'note': 'Batch analysis summarizes selected supported files; dependency and cross-repo runtime behavior may still need review.',
         },
+        'project_intelligence': _build_project_intelligence(results, source_files or [], analyzer, source),
     }
+
+
+def _build_project_intelligence(results, source_files, analyzer=None, source='batch'):
+    analyzer = analyzer or CodeAnalyzer()
+    result_by_file = {
+        _normalize_project_path(item.get('filename', '')): item.get('result') or {}
+        for item in results or []
+    }
+    files = []
+    for item in source_files or []:
+        filename = _normalize_project_path(item.get('filename', ''))
+        code = item.get('code') or ''
+        if not filename or not code.strip():
+            continue
+        result = result_by_file.get(filename, {})
+        files.append(_extract_project_file_profile(filename, code, result, analyzer))
+
+    max_files = MAX_BATCH_FILES if source == 'zip' else MAX_GITHUB_FILES if source == 'github' else None
+    if not files:
+        return {
+            'available': False,
+            'summary': 'Project graph unavailable because source text was not supplied to the project summarizer.',
+            'project_confidence': 'low',
+            'dependency_edges': [],
+            'cross_file_calls': [],
+            'bottlenecks': [],
+            'cycles': [],
+            'entrypoint_candidates': [],
+            'limitations': [
+                'Per-file complexity facts are still available, but cross-file imports and calls were not resolved.',
+            ],
+        }
+
+    modules_by_file = {item['filename']: item for item in files}
+    module_lookup = defaultdict(list)
+    class_lookup = defaultdict(list)
+    basename_lookup = defaultdict(list)
+    symbol_lookup = defaultdict(list)
+
+    for item in files:
+        basename_lookup[posixpath.basename(item['filename']).lower()].append(item)
+        for key in item['module_keys']:
+            module_lookup[key.lower()].append(item)
+        for class_name in item['classes']:
+            class_lookup[class_name.lower()].append(item)
+            symbol_lookup[class_name.lower()].append(item)
+        for function in item['functions']:
+            symbol_lookup[function.lower()].append(item)
+
+    dependency_edges = []
+    unresolved_refs = []
+    edge_keys = set()
+    for item in files:
+        for ref in item['references']:
+            target = _resolve_project_reference(item, ref, module_lookup, class_lookup, basename_lookup, modules_by_file)
+            if not target or target['filename'] == item['filename']:
+                if _is_external_project_reference(ref):
+                    continue
+                unresolved_refs.append({
+                    'filename': item['filename'],
+                    'reference': ref.get('raw') or ref.get('target') or '',
+                    'kind': ref.get('kind', 'reference'),
+                })
+                continue
+            key = (item['filename'], target['filename'], ref.get('kind', 'reference'), ref.get('raw', ''))
+            if key in edge_keys:
+                continue
+            edge_keys.add(key)
+            dependency_edges.append({
+                'from': item['filename'],
+                'to': target['filename'],
+                'type': ref.get('kind', 'reference'),
+                'evidence': ref.get('evidence') or ref.get('raw') or '',
+            })
+
+    direct_deps = defaultdict(set)
+    inbound = defaultdict(set)
+    for edge in dependency_edges:
+        direct_deps[edge['from']].add(edge['to'])
+        inbound[edge['to']].add(edge['from'])
+
+    cross_file_calls = _resolve_cross_file_calls(files, symbol_lookup, direct_deps)
+    for call in cross_file_calls:
+        direct_deps[call['from_file']].add(call['to_file'])
+        inbound[call['to_file']].add(call['from_file'])
+
+    cycles = _find_project_cycles(direct_deps)
+    bottlenecks = _project_bottlenecks(files, inbound, analyzer)
+    entrypoints = _project_entrypoint_candidates(files, inbound)
+    critical_paths = _project_critical_paths(entrypoints, bottlenecks, direct_deps)
+
+    unresolved_count = len(unresolved_refs)
+    low_confidence_count = sum(
+        1 for item in results or []
+        if (item.get('result') or {}).get('analysis_confidence', {}).get('time') in ('low', 'medium')
+    )
+    project_confidence = _project_confidence(
+        files, dependency_edges, unresolved_count, low_confidence_count, max_files, len(results or [])
+    )
+
+    summary = (
+        f"Resolved {len(dependency_edges)} direct dependency edge(s), "
+        f"{len(cross_file_calls)} cross-file symbol call(s), "
+        f"{len(bottlenecks)} project bottleneck(s), {len(critical_paths)} critical path(s), "
+        f"and {len(cycles)} cycle(s)."
+    )
+
+    return {
+        'available': True,
+        'summary': summary,
+        'project_confidence': project_confidence,
+        'file_count': len(files),
+        'dependency_edges': dependency_edges[:40],
+        'cross_file_calls': cross_file_calls[:30],
+        'bottlenecks': bottlenecks[:10],
+        'critical_paths': critical_paths[:8],
+        'cycles': cycles[:8],
+        'entrypoint_candidates': entrypoints[:8],
+        'unresolved_references': unresolved_refs[:12],
+        'modules': [
+            {
+                'filename': item['filename'],
+                'language': item['language'],
+                'functions': item['functions'][:10],
+                'classes': item['classes'][:10],
+                'inbound_count': len(inbound.get(item['filename'], set())),
+                'outbound_count': len(direct_deps.get(item['filename'], set())),
+                'worst_complexity': item['result'].get('time_complexity', 'O(unknown)'),
+            }
+            for item in files
+        ][:30],
+        'limitations': [
+            'Static project graph resolves direct imports/includes and unique symbol calls; dynamic imports, reflection, dependency injection, framework routing, generated code, macros, and build configuration can change real runtime behavior.',
+            'Project-level Big-O is a composition guide. CodeScope keeps per-file and per-function complexity as the source of truth unless runtime entrypoints and input constraints are known.',
+            f"Batch limit: analyzed at most {max_files or 'all selected'} file(s), with {MAX_SOURCE_BYTES // 1024} KB maximum source text per file.",
+        ],
+    }
+
+
+def _extract_project_file_profile(filename, code, result, analyzer):
+    language = result.get('language') or analyzer.detect_language(code, filename)
+    functions = [
+        str(item.get('function'))
+        for item in result.get('function_complexity_details') or []
+        if item.get('function')
+    ]
+    if not functions:
+        functions = analyzer._function_names(code, language)
+    functions = _unique_preserve(functions)
+    classes = _extract_class_names(code, language)
+    references = _extract_project_references(filename, code, language)
+    calls = _extract_project_calls(code, language)
+    return {
+        'filename': filename,
+        'code': code,
+        'language': language,
+        'functions': functions,
+        'classes': classes,
+        'references': references,
+        'calls': calls,
+        'module_keys': _module_keys_for_file(filename),
+        'result': result or {},
+    }
+
+
+def _normalize_project_path(path):
+    path = str(path or '').replace('\\', '/').strip()
+    path = re.sub(r'/+', '/', path)
+    path = path.lstrip('/')
+    normalized = posixpath.normpath(path) if path else ''
+    return '' if normalized == '.' else normalized
+
+
+def _module_keys_for_file(filename):
+    normalized = _normalize_project_path(filename)
+    no_ext = posixpath.splitext(normalized)[0]
+    parts = [part for part in no_ext.split('/') if part]
+    keys = set()
+    if no_ext:
+        keys.add(no_ext.replace('/', '.'))
+        keys.add(no_ext)
+    for index in range(len(parts)):
+        suffix = parts[index:]
+        if suffix:
+            keys.add('.'.join(suffix))
+            keys.add('/'.join(suffix))
+    if parts:
+        keys.add(parts[-1])
+    return sorted(keys)
+
+
+def _extract_class_names(code, language):
+    if language == 'java':
+        pattern = r'\b(?:public\s+|private\s+|protected\s+)?(?:abstract\s+|final\s+)?(?:class|interface|enum)\s+([A-Za-z_]\w*)'
+    elif language in ('cpp', 'c'):
+        pattern = r'\b(?:class|struct)\s+([A-Za-z_]\w*)'
+    else:
+        pattern = r'\bclass\s+([A-Za-z_]\w*)'
+    return _unique_preserve(re.findall(pattern, code))
+
+
+def _extract_project_references(filename, code, language):
+    refs = []
+    if language == 'python':
+        for match in re.finditer(r'^\s*from\s+([.\w]+)\s+import\s+([^#\n]+)', code, re.MULTILINE):
+            raw_module = match.group(1).lstrip('.')
+            imported = [part.strip().split(' as ')[0] for part in match.group(2).split(',')]
+            refs.append({
+                'kind': 'python_import',
+                'target': raw_module,
+                'symbols': [name for name in imported if name and name != '*'],
+                'raw': match.group(0).strip(),
+                'evidence': match.group(0).strip(),
+            })
+        for match in re.finditer(r'^\s*import\s+([^#\n]+)', code, re.MULTILINE):
+            for raw in match.group(1).split(','):
+                module = raw.strip().split(' as ')[0].strip()
+                if module:
+                    refs.append({
+                        'kind': 'python_import',
+                        'target': module,
+                        'symbols': [],
+                        'raw': raw.strip(),
+                        'evidence': match.group(0).strip(),
+                    })
+    elif language in ('javascript', 'typescript'):
+        patterns = [
+            r'\bimport\b[^;\n]*?\bfrom\s+[\'"]([^\'"]+)[\'"]',
+            r'\bimport\s*\(\s*[\'"]([^\'"]+)[\'"]\s*\)',
+            r'\brequire\s*\(\s*[\'"]([^\'"]+)[\'"]\s*\)',
+            r'\bexport\b[^;\n]*?\bfrom\s+[\'"]([^\'"]+)[\'"]',
+        ]
+        for pattern in patterns:
+            for match in re.finditer(pattern, code):
+                refs.append({
+                    'kind': 'js_import',
+                    'target': match.group(1),
+                    'symbols': [],
+                    'raw': match.group(1),
+                    'evidence': _line_for_index(code, match.start()),
+                })
+    elif language == 'java':
+        for match in re.finditer(r'^\s*import\s+(?:static\s+)?([\w.]+)(?:\.\*)?\s*;', code, re.MULTILINE):
+            target = match.group(1)
+            refs.append({
+                'kind': 'java_import',
+                'target': target,
+                'symbols': [target.split('.')[-1]],
+                'raw': target,
+                'evidence': match.group(0).strip(),
+            })
+    elif language in ('cpp', 'c'):
+        for match in re.finditer(r'^\s*#\s*include\s+"([^"]+)"', code, re.MULTILINE):
+            refs.append({
+                'kind': 'cpp_include',
+                'target': match.group(1),
+                'symbols': [],
+                'raw': match.group(1),
+                'evidence': match.group(0).strip(),
+            })
+    return refs
+
+
+def _extract_project_calls(code, language):
+    calls = set()
+    for match in re.finditer(r'\b([A-Za-z_]\w*)\s*\(', code):
+        name = match.group(1)
+        prefix = code[max(0, match.start() - 16):match.start()]
+        if name in PROJECT_SKIP_CALLS:
+            continue
+        if re.search(r'\b(def|function|class|interface|enum|struct|if|for|while|switch|catch)\s*$', prefix):
+            continue
+        calls.add(name)
+    if language == 'java':
+        for class_name, method_name in re.findall(r'\b([A-Z]\w*)\s*\.\s*([A-Za-z_]\w*)\s*\(', code):
+            calls.add(f'{class_name}.{method_name}')
+    return sorted(calls)
+
+
+def _line_for_index(code, index):
+    start = code.rfind('\n', 0, index) + 1
+    end = code.find('\n', index)
+    if end == -1:
+        end = len(code)
+    return code[start:end].strip()
+
+
+def _resolve_project_reference(item, ref, module_lookup, class_lookup, basename_lookup, modules_by_file):
+    target = str(ref.get('target') or '').strip()
+    kind = ref.get('kind', '')
+    if not target:
+        return None
+
+    if kind == 'js_import' and not target.startswith('.'):
+        candidates = module_lookup.get(target.lower(), [])
+        if len(candidates) == 1:
+            return candidates[0]
+    if kind in ('js_import', 'cpp_include') and (target.startswith('.') or kind == 'cpp_include'):
+        resolved = _resolve_relative_project_path(item['filename'], target, modules_by_file)
+        if resolved:
+            return modules_by_file.get(resolved)
+        basename = posixpath.basename(target).lower()
+        matches = basename_lookup.get(basename, [])
+        return matches[0] if len(matches) == 1 else None
+
+    candidates = module_lookup.get(target.lower(), [])
+    if len(candidates) == 1:
+        return candidates[0]
+
+    short_symbol = target.split('.')[-1].lower()
+    class_candidates = class_lookup.get(short_symbol, [])
+    if len(class_candidates) == 1:
+        return class_candidates[0]
+
+    for symbol in ref.get('symbols') or []:
+        class_candidates = class_lookup.get(str(symbol).lower(), [])
+        if len(class_candidates) == 1:
+            return class_candidates[0]
+
+    if candidates:
+        same_dir = posixpath.dirname(item['filename'])
+        local = [candidate for candidate in candidates if posixpath.dirname(candidate['filename']) == same_dir]
+        return local[0] if len(local) == 1 else None
+    return None
+
+
+def _resolve_relative_project_path(current_file, target, modules_by_file):
+    base_dir = posixpath.dirname(current_file)
+    raw = target.strip()
+    joined = posixpath.normpath(posixpath.join(base_dir, raw))
+    candidates = [joined]
+    root, ext = posixpath.splitext(joined)
+    if not ext:
+        for extension in SUPPORTED_CODE_EXTENSIONS:
+            candidates.append(root + extension)
+        for extension in SUPPORTED_CODE_EXTENSIONS:
+            candidates.append(posixpath.join(root, 'index' + extension))
+    return next((candidate for candidate in candidates if candidate in modules_by_file), None)
+
+
+def _is_external_project_reference(ref):
+    kind = ref.get('kind', '')
+    target = str(ref.get('target') or '').strip()
+    if kind == 'js_import':
+        return not target.startswith(('.', '/'))
+    if kind == 'python_import':
+        first = target.split('.')[0]
+        return first in {
+            'abc', 'argparse', 'asyncio', 'bisect', 'collections', 'copy',
+            'csv', 'dataclasses', 'datetime', 'decimal', 'functools', 'heapq',
+            'io', 'itertools', 'json', 'math', 'os', 'pathlib', 'random', 're',
+            'sys', 'time', 'typing', 'unittest',
+        }
+    if kind == 'java_import':
+        return target.startswith(('java.', 'javax.', 'jakarta.', 'org.junit.', 'org.slf4j.'))
+    return False
+
+
+def _resolve_cross_file_calls(files, symbol_lookup, direct_deps):
+    calls = []
+    seen = set()
+    for item in files:
+        current = item['filename']
+        local_symbols = {name.lower() for name in item['functions'] + item['classes']}
+        for raw_call in item['calls']:
+            if '.' in raw_call:
+                class_name, method_name = raw_call.split('.', 1)
+                candidates = symbol_lookup.get(class_name.lower(), [])
+                symbol = raw_call
+            else:
+                candidates = symbol_lookup.get(raw_call.lower(), [])
+                symbol = raw_call
+                if raw_call.lower() in local_symbols:
+                    continue
+            targets = [candidate for candidate in candidates if candidate['filename'] != current]
+            if len(targets) != 1:
+                continue
+            target = targets[0]
+            if direct_deps.get(current) and target['filename'] not in direct_deps[current]:
+                continue
+            key = (current, target['filename'], symbol)
+            if key in seen:
+                continue
+            seen.add(key)
+            calls.append({
+                'from_file': current,
+                'to_file': target['filename'],
+                'symbol': symbol,
+                'evidence': f'{symbol}()',
+            })
+    return calls
+
+
+def _find_project_cycles(adjacency):
+    cycles = []
+    seen = set()
+
+    def visit(node, path):
+        if len(path) > 16:
+            return
+        for nxt in sorted(adjacency.get(node, set())):
+            if nxt in path:
+                cycle = path[path.index(nxt):]
+                if len(cycle) > 1:
+                    key = tuple(sorted(cycle))
+                    if key not in seen:
+                        seen.add(key)
+                        cycles.append(cycle)
+                continue
+            visit(nxt, path + [nxt])
+
+    for node in sorted(adjacency):
+        visit(node, [node])
+        if len(cycles) >= 8:
+            break
+    return cycles[:8]
+
+
+def _project_critical_paths(entrypoints, bottlenecks, adjacency):
+    bottleneck_by_file = defaultdict(list)
+    for item in bottlenecks or []:
+        bottleneck_by_file[item.get('filename')].append(item)
+
+    paths = []
+    for entry in entrypoints or []:
+        start = entry.get('filename')
+        if not start:
+            continue
+        queue = [(start, [start])]
+        visited = set()
+        while queue and len(paths) < 8:
+            node, path = queue.pop(0)
+            if node in visited and node != start:
+                continue
+            visited.add(node)
+            for bottleneck in bottleneck_by_file.get(node, []):
+                paths.append({
+                    'entrypoint': start,
+                    'bottleneck_file': node,
+                    'bottleneck_function': bottleneck.get('function', 'file scope'),
+                    'complexity': bottleneck.get('complexity', 'O(unknown)'),
+                    'path': path,
+                })
+                if len(paths) >= 8:
+                    break
+            if len(paths) >= 8:
+                break
+            for nxt in sorted(adjacency.get(node, set())):
+                if nxt not in path:
+                    queue.append((nxt, path + [nxt]))
+    return paths
+
+
+def _project_bottlenecks(files, inbound, analyzer):
+    quadratic_rank = analyzer._complexity_rank(analyzer._parse_complexity_string('O(nÂ²)'))
+    items = []
+    for item in files:
+        result = item['result']
+        file_rank = analyzer._complexity_rank(analyzer._parse_complexity_string(result.get('time_complexity', 'O(unknown)')))
+        for detail in result.get('function_complexity_details') or []:
+            complexity = detail.get('effective_complexity') or detail.get('complexity') or detail.get('own_complexity')
+            rank = analyzer._complexity_rank(analyzer._parse_complexity_string(complexity or 'O(unknown)'))
+            if rank >= quadratic_rank:
+                items.append({
+                    'filename': item['filename'],
+                    'function': detail.get('function') or 'file scope',
+                    'complexity': complexity,
+                    'called_by_count': len(inbound.get(item['filename'], set())),
+                    'called_by_files': sorted(inbound.get(item['filename'], set()))[:5],
+                    'reason': detail.get('reason') or result.get('time_complexity_reason', ''),
+                    '_rank': rank,
+                })
+        if file_rank >= quadratic_rank and not any(entry['filename'] == item['filename'] for entry in items):
+            items.append({
+                'filename': item['filename'],
+                'function': 'file scope',
+                'complexity': result.get('time_complexity', 'O(unknown)'),
+                'called_by_count': len(inbound.get(item['filename'], set())),
+                'called_by_files': sorted(inbound.get(item['filename'], set()))[:5],
+                'reason': result.get('time_complexity_reason', ''),
+                '_rank': file_rank,
+            })
+
+    items.sort(key=lambda entry: (entry['_rank'], entry['called_by_count']), reverse=True)
+    for entry in items:
+        entry.pop('_rank', None)
+    return items
+
+
+def _project_entrypoint_candidates(files, inbound):
+    candidates = []
+    for item in files:
+        filename = item['filename']
+        code = item['code']
+        basename = posixpath.basename(filename).lower()
+        reason = ''
+        if re.search(r'if\s+__name__\s*==\s*[\'"]__main__[\'"]', code):
+            reason = 'Python __main__ guard'
+        elif re.search(r'public\s+static\s+void\s+main\s*\(', code):
+            reason = 'Java main method'
+        elif re.search(r'\bint\s+main\s*\(', code):
+            reason = 'C/C++ main function'
+        elif basename in ('main.js', 'main.ts', 'index.js', 'index.ts', 'app.js', 'app.ts', 'server.js', 'server.ts', 'cli.js', 'cli.ts'):
+            reason = 'conventional JavaScript/TypeScript entry filename'
+        elif not inbound.get(filename):
+            reason = 'no resolved inbound project dependencies'
+        if reason:
+            candidates.append({'filename': filename, 'reason': reason})
+    candidates.sort(key=lambda item: 0 if 'main' in item['reason'].lower() or 'entry' in item['reason'].lower() else 1)
+    return candidates
+
+
+def _project_confidence(files, dependency_edges, unresolved_count, low_confidence_count, max_files, analyzed_count):
+    if not files:
+        return 'low'
+    if unresolved_count > max(2, len(files)) or low_confidence_count > max(1, len(files) // 3):
+        return 'medium'
+    if max_files and analyzed_count >= max_files:
+        return 'medium'
+    if len(files) > 1 and not dependency_edges:
+        return 'medium'
+    return 'high'
+
+
+def _unique_preserve(values):
+    seen = set()
+    output = []
+    for value in values:
+        if not value:
+            continue
+        key = str(value)
+        if key in seen:
+            continue
+        seen.add(key)
+        output.append(key)
+    return output
+
+
+def _should_skip_batch_path(filename):
+    normalized = _normalize_project_path(filename)
+    parts = [part for part in normalized.split('/') if part]
+    if not parts:
+        return True
+    if parts[-1].startswith('.'):
+        return True
+    return any(part in BATCH_SKIP_DIRS for part in parts)
 
 
 # ─── Health check ───────────────────────────────────────────
@@ -344,15 +908,16 @@ def analyze_zip():
         zip_buffer = io.BytesIO(file_bytes)
 
         results = []
+        source_files = []
         with zipfile.ZipFile(zip_buffer, 'r') as zip_ref:
             for info in zip_ref.infolist():
                 if len(results) >= MAX_BATCH_FILES:
                     break
-                filename = info.filename
+                filename = _normalize_project_path(info.filename)
+                if _should_skip_batch_path(filename):
+                    continue
                 ext = os.path.splitext(filename)[1].lower()
                 if ext not in SUPPORTED_CODE_EXTENSIONS:
-                    continue
-                if filename.startswith('.') or '/__pycache__/' in filename:
                     continue
                 if info.file_size > MAX_SOURCE_BYTES:
                     continue
@@ -366,6 +931,7 @@ def analyze_zip():
                         result = _analyze_with_extras(code, filename)
 
                         results.append({'filename': filename, 'result': result})
+                        source_files.append({'filename': filename, 'code': code})
 
                     except UnicodeDecodeError:
                         continue
@@ -384,7 +950,7 @@ def analyze_zip():
             'total_lines': total_lines,
             'total_issues': all_issues,
             'average_rating': avg_rating,
-            'project_summary': _build_batch_summary(results, 'zip'),
+            'project_summary': _build_batch_summary(results, 'zip', source_files),
             'files': results
         })
 
@@ -409,10 +975,12 @@ def analyze_github():
             return jsonify({'error': 'Could not fetch code from GitHub'}), 400
 
         results = []
+        source_files = []
         for file in files:
             result = _analyze_with_extras(file['code'], file['filename'])
 
             results.append({'filename': file['filename'], 'result': result})
+            source_files.append({'filename': file['filename'], 'code': file['code']})
 
         avg_rating = round(
             sum(r['result']['rating'] for r in results) / len(results))
@@ -426,7 +994,7 @@ def analyze_github():
             'total_lines': total_lines,
             'total_issues': all_issues,
             'average_rating': avg_rating,
-            'project_summary': _build_batch_summary(results, 'github'),
+            'project_summary': _build_batch_summary(results, 'github', source_files),
             'files': results
         })
 

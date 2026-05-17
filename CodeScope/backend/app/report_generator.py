@@ -6,6 +6,7 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, Tabl
 from reportlab.lib.enums import TA_CENTER, TA_LEFT
 import io
 import datetime
+from html import escape
 
 # ─── Colors ─────────────────────────────────────────────────
 PRIMARY     = HexColor('#1a73e8')
@@ -137,6 +138,14 @@ def generate_pdf_report(analysis_data, report_type='code'):
         elements.append(summary_table)
         elements.append(Spacer(1, 0.15 * inch))
 
+        project_summary = analysis_data.get('project_summary') or {}
+        _add_project_intelligence_report(
+            elements,
+            project_summary.get('project_intelligence') or {},
+            heading_style,
+            normal_style
+        )
+
         for file_data in files:
             elements.append(Paragraph(
                 f"File: {file_data['filename']}", heading_style))
@@ -148,6 +157,72 @@ def generate_pdf_report(analysis_data, report_type='code'):
     doc.build(elements)
     buffer.seek(0)
     return buffer.getvalue()
+
+
+def _add_project_intelligence_report(elements, project, heading_style, normal_style):
+    if not project:
+        return
+
+    elements.append(Paragraph('Project Intelligence', heading_style))
+    summary = project.get('summary') or 'Project intelligence was not available for this batch.'
+    confidence = project.get('project_confidence') or 'unknown'
+    elements.append(Paragraph(
+        f"<b>Confidence:</b> {escape(str(confidence)).title()}<br/>{escape(str(summary))}",
+        normal_style
+    ))
+
+    metrics_data = [
+        ['Metric', 'Count'],
+        ['Dependency Edges', str(len(project.get('dependency_edges') or []))],
+        ['Cross-File Calls', str(len(project.get('cross_file_calls') or []))],
+        ['Project Bottlenecks', str(len(project.get('bottlenecks') or []))],
+        ['Critical Paths', str(len(project.get('critical_paths') or []))],
+        ['Dependency Cycles', str(len(project.get('cycles') or []))],
+    ]
+    metrics_table = Table(metrics_data, colWidths=[3.0 * inch, 3.0 * inch])
+    metrics_table.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), PRIMARY),
+        ('TEXTCOLOR', (0,0), (-1,0), HexColor('#ffffff')),
+        ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0,0), (-1,-1), 9),
+        ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ('ROWBACKGROUNDS', (0,1), (-1,-1), [LIGHT_GRAY, HexColor('#ffffff')]),
+        ('GRID', (0,0), (-1,-1), 0.5, BORDER),
+    ]))
+    elements.append(metrics_table)
+    elements.append(Spacer(1, 0.12 * inch))
+
+    bottlenecks = project.get('bottlenecks') or []
+    if bottlenecks:
+        elements.append(Paragraph('<b>Top Project Bottlenecks</b>', normal_style))
+        for item in bottlenecks[:5]:
+            text = (
+                f"{item.get('function', 'file scope')}() in {item.get('filename', 'unknown')} "
+                f"- {item.get('complexity', 'O(unknown)')}; referenced by "
+                f"{item.get('called_by_count', 0)} file(s)."
+            )
+            elements.append(Paragraph(escape(text), normal_style))
+
+    critical_paths = project.get('critical_paths') or []
+    if critical_paths:
+        elements.append(Paragraph('<b>Critical Paths</b>', normal_style))
+        for item in critical_paths[:5]:
+            path = ' -> '.join(item.get('path') or [])
+            text = (
+                f"{item.get('entrypoint', 'entrypoint')} reaches "
+                f"{item.get('bottleneck_function', 'file scope')}() in "
+                f"{item.get('bottleneck_file', 'unknown')} at {item.get('complexity', 'O(unknown)')}: {path}"
+            )
+            elements.append(Paragraph(escape(text), normal_style))
+
+    limitations = project.get('limitations') or []
+    if limitations:
+        elements.append(Paragraph('<b>Project-Level Limits</b>', normal_style))
+        for item in limitations[:2]:
+            elements.append(Paragraph(escape(str(item)), normal_style))
+
+    elements.append(Spacer(1, 0.15 * inch))
 
 
 def _add_single_file_report(elements, result, filename, heading_style, normal_style):
