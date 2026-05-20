@@ -1,11 +1,24 @@
 import axios from 'axios';
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:5000';
+export const API_BASE_URL = (
+  import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:5000'
+).replace(/\/+$/, '');
 
 const api = axios.create({
   baseURL: API_BASE_URL,
   timeout: 120000,
 });
+
+export const getApiErrorMessage = (err) => {
+  const backendError = err.response?.data?.error;
+  if (backendError) return backendError;
+
+  if (err.response?.status) {
+    return `Backend request failed with HTTP ${err.response.status} at ${API_BASE_URL}. Check the API Gateway route/method forwarding.`;
+  }
+
+  return `Could not reach the backend at ${API_BASE_URL}. Check VITE_API_BASE_URL and make sure the API is deployed.`;
+};
 
 // ─── Analyze pasted code ────────────────────────────────────
 export const analyzeCode = async (code, filename = 'code.py', concreteInputs = '') => {
