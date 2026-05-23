@@ -976,13 +976,22 @@ def _should_skip_batch_path(filename):
 def home():
     return jsonify({
         'status': 'CodeScope API is running',
-        'version': '2.0.0',
+        'version': '2.0.1',
         'endpoints': [
             '/api/analyze/code',
             '/api/analyze/inputs',
             '/api/analyze/zip',
             '/api/analyze/github'
         ]
+    })
+
+
+@main.route('/health', methods=['GET'])
+def health():
+    return jsonify({
+        'status': 'ok',
+        'service': 'codescope-api',
+        'version': '2.0.1',
     })
 
 
