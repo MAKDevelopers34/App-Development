@@ -5,6 +5,8 @@ from app.ai_explainer import (
     enhance_optimizations_with_ai,
     get_ai_explanation,
     get_function_level_explanations,
+    reset_ai_budget,
+    start_ai_budget,
 )
 import zipfile
 import io
@@ -39,6 +41,7 @@ def _analyze_with_extras(code, filename, concrete_inputs=None):
     language = result.get('language', 'unknown')
     result['issues'] = [_issue_problem_only(issue) for issue in (result.get('issues') or [])]
 
+    ai_budget_token = start_ai_budget()
     ai_discovery_result = {
         **result,
         'optimizations': [],
@@ -110,6 +113,7 @@ def _analyze_with_extras(code, filename, concrete_inputs=None):
         local_analyzer.last_func_complexity_details,
         code
     )
+    reset_ai_budget(ai_budget_token)
 
     return result
 

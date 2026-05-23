@@ -2074,7 +2074,7 @@ public class Test {
         self.assertIn("Hash table access", details["collide"]["reason"])
         self.assertTrue(any("power-of-two" in issue["message"] for issue in result["issues"]))
 
-    def test_java_hashset_collide_comment_reports_collision_worst_case(self):
+    def test_java_hashset_collide_comment_does_not_change_code_complexity(self):
         code = """import java.util.*;
 
 public class Test {
@@ -2093,13 +2093,13 @@ public class Test {
         self.assertEqual(result["time_complexity"], "O(n)")
         self.assertEqual(result["space_complexity"], "O(n)")
         self.assertIn("treeifies", result["time_complexity_reason"])
-        self.assertIn("collision-heavy total time is O(n log n)", result["time_complexity_reason"])
+        self.assertNotIn("collision-heavy total time", result["time_complexity_reason"])
         self.assertEqual(result["amortized_analysis"]["amortized_per_operation"], "O(1)")
-        self.assertEqual(result["amortized_analysis"]["per_operation_worst"], "O(log n)")
-        self.assertEqual(result["amortized_analysis"]["worst_total_for_n_ops"], "O(n log n)")
+        self.assertEqual(result["amortized_analysis"]["per_operation_worst"], "O(1)")
+        self.assertEqual(result["amortized_analysis"]["worst_total_for_n_ops"], "O(n)")
         self.assertIn("worstHash", details)
         self.assertEqual(details["worstHash"]["own_complexity"], "O(n)")
-        self.assertTrue(any("collision-heavy Java hash buckets" in issue["message"] for issue in result["issues"]))
+        self.assertFalse(any("collision-heavy Java hash buckets" in issue["message"] for issue in result["issues"]))
 
     def test_cpp_unordered_map_collision_attack_reports_average_and_worst(self):
         code = r"""#include <unordered_map>

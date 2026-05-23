@@ -4650,6 +4650,8 @@ class CodeAnalyzer:
 
     def detect_hash_table_access(self, code, language):
         compact = re.sub(r'\s+', ' ', code)
+        code_only = self._strip_inline_comments(code)
+        compact_code = re.sub(r'\s+', ' ', code_only)
         has_hash = bool(re.search(r'\bHashMap\b|\bHashSet\b|\bunordered_map\b|\bunordered_set\b|\bnew\s+Map\s*\(', compact))
         if not has_hash or not re.search(r'\b(?:for|while)\b', compact):
             return {'detected': False}
@@ -4657,8 +4659,8 @@ class CodeAnalyzer:
         average = self._polynomial_complexity(depth)
         space = self._polynomial_complexity(depth)
         collision_hint = bool(re.search(
-            r'\*\s*(?:16|1000003)|crafted|collid(?:e|es|ed|ing|ion|ions)?|cluster',
-            compact,
+            r'\*\s*(?:16|1000003)|\bhashCode\s*\([^)]*\)\s*\{[^}]*return\s+(?:0|1|true|false|null)\s*;',
+            compact_code,
             re.IGNORECASE
         ))
         if re.search(r'\bunordered_map\b|\bunordered_set\b', compact) and collision_hint:
@@ -4691,6 +4693,12 @@ class CodeAnalyzer:
             'detected': True, 'complexity': average, 'space': space,
             'reason': 'Hash table access inside the loop is O(1) average/amortized; Java HashMap treeifies long buckets'
         }
+
+    def _strip_inline_comments(self, code):
+        code = re.sub(r'/\*.*?\*/', '', code, flags=re.DOTALL)
+        code = re.sub(r'//.*', '', code)
+        code = re.sub(r'#.*', '', code)
+        return code
 
     def _looks_like_recursive_slice_partition(self, func_name, body):
         return bool(re.search(rf'\b{func_name}\s*\([^)]*\.slice\s*\(', body)) and bool(re.search(r'\.slice\s*\(', body))
@@ -5605,21 +5613,18 @@ class CodeAnalyzer:
                 })
 
         hash_access = self.detect_hash_table_access(code, language)
+        code_only = self._strip_inline_comments(code)
         if hash_access.get('detected') and 'worst' in hash_access.get('complexity', ''):
             issues.insert(0, {
                 'line': 1, 'type': 'performance', 'severity': 'medium',
                 'message': 'crafted/adversarial hash keys can trigger collision-heavy worst-case behavior'
             })
-        elif hash_access.get('detected') and re.search(r'\*\s*16|cluster', code, re.IGNORECASE):
+        elif hash_access.get('detected') and re.search(r'\*\s*16', code_only, re.IGNORECASE):
             issues.append({
                 'line': 1, 'type': 'performance', 'severity': 'low',
                 'message': 'power-of-two key patterns can cause hash bucket clustering'
             })
-        elif hash_access.get('detected') and hash_access.get('collision_worst_total') and re.search(
-            r'collid(?:e|es|ed|ing|ion|ions)?|crafted',
-            code,
-            re.IGNORECASE
-        ):
+        elif hash_access.get('detected') and hash_access.get('collision_worst_total'):
             issues.append({
                 'line': 1, 'type': 'performance', 'severity': 'low',
                 'message': (
