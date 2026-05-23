@@ -19,13 +19,13 @@ GROK_API_BASE = os.getenv('GROK_API_BASE', 'https://api.x.ai/v1/chat/completions
 AI_EXPLAINER_PROVIDER = os.getenv('AI_EXPLAINER_PROVIDER', 'auto').lower()
 AI_EXPLAINER_DEBUG = os.getenv('AI_EXPLAINER_DEBUG', '').lower() in ('1', 'true', 'yes')
 try:
-    AI_REQUEST_TIMEOUT_SECONDS = max(1.0, min(20.0, float(os.getenv('AI_REQUEST_TIMEOUT_SECONDS', '12'))))
+    AI_REQUEST_TIMEOUT_SECONDS = max(1.0, min(12.0, float(os.getenv('AI_REQUEST_TIMEOUT_SECONDS', '8'))))
 except ValueError:
-    AI_REQUEST_TIMEOUT_SECONDS = 12.0
+    AI_REQUEST_TIMEOUT_SECONDS = 8.0
 try:
-    AI_TOTAL_TIMEOUT_SECONDS = max(5.0, min(25.0, float(os.getenv('AI_TOTAL_TIMEOUT_SECONDS', '24'))))
+    AI_TOTAL_TIMEOUT_SECONDS = max(5.0, min(18.0, float(os.getenv('AI_TOTAL_TIMEOUT_SECONDS', '16'))))
 except ValueError:
-    AI_TOTAL_TIMEOUT_SECONDS = 24.0
+    AI_TOTAL_TIMEOUT_SECONDS = 16.0
 
 _AI_DEADLINE = ContextVar('AI_DEADLINE', default=None)
 

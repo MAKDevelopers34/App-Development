@@ -2415,6 +2415,79 @@ void f(int n) {
                 self.assertEqual(result["time_complexity"], "O(n log n)")
                 self.assertEqual(result["space_complexity"], "O(n)")
 
+    def test_cpp_huffman_priority_queue_is_not_misread_as_cubic_or_fake_while_function(self):
+        code = r"""#include <iostream>
+#include <queue>
+#include <vector>
+#include <unordered_map>
+using namespace std;
+
+struct Node {
+    char data;
+    int freq;
+    Node* left;
+    Node* right;
+    Node(char data, int freq) {
+        this->data = data;
+        this->freq = freq;
+        left = right = nullptr;
+    }
+};
+
+struct Compare {
+    bool operator()(Node* a, Node* b) {
+        return a->freq > b->freq;
+    }
+};
+
+void generateCodes(Node* root, string code, unordered_map<char, string>& huffmanCode) {
+    if (root == nullptr)
+        return;
+    if (!root->left && !root->right) {
+        huffmanCode[root->data] = code;
+    }
+    generateCodes(root->left, code + "0", huffmanCode);
+    generateCodes(root->right, code + "1", huffmanCode);
+}
+
+int main() {
+    vector<char> chars = {'A', 'B', 'C', 'D', 'E', 'F'};
+    vector<int> freq = {5, 9, 12, 13, 16, 45};
+    priority_queue<Node*, vector<Node*>, Compare> pq;
+    for (int i = 0; i < chars.size(); i++) {
+        pq.push(new Node(chars[i], freq[i]));
+    }
+    // Build Huffman Tree
+    while (pq.size() > 1) {
+        Node* left = pq.top();
+        pq.pop();
+        Node* right = pq.top();
+        pq.pop();
+        Node* merged = new Node('$', left->freq + right->freq);
+        merged->left = left;
+        merged->right = right;
+        pq.push(merged);
+    }
+    Node* root = pq.top();
+    unordered_map<char, string> huffmanCode;
+    generateCodes(root, "", huffmanCode);
+    for (auto pair : huffmanCode) {
+        cout << pair.first << " : " << pair.second << endl;
+    }
+    return 0;
+}
+"""
+
+        result = self.analyzer.analyze(code, "huffman.cpp")
+        details = {item["function"]: item for item in result["function_complexity_details"]}
+
+        self.assertEqual(result["time_complexity"], "O(n log n)")
+        self.assertEqual(result["space_complexity"], "O(n)")
+        self.assertIn("main", details)
+        self.assertEqual(details["main"]["effective_complexity"], "O(n log n)")
+        self.assertNotIn("while", details)
+        self.assertNotIn(("main", "O(n³)"), [(h["function"], h["complexity"]) for h in result["hotspots"]])
+
     def test_cpp_vector_string_memo_recursion_reports_conservative_average_and_collision_worst(self):
         code = r"""#include <bits/stdc++.h>
 using namespace std;

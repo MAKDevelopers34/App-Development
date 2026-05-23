@@ -272,6 +272,8 @@ class CodeAnalyzer:
         if line_end == -1:
             line_end = len(code)
         line = code[line_start:line_end].strip()
+        if '\n' in match.group(0):
+            return True
         if language in ('cpp', 'c', 'java', 'unknown'):
             if '=' in match.group(0):
                 return True
@@ -909,6 +911,12 @@ class CodeAnalyzer:
             return {'complexity': self._tuple_to_string(('n_log2', 1)), 'reason': 'sorted(left + right) at each merge'}
         if self.detect_recursive_ordered_map_access(full_code, language).get('detected') and re.search(rf'\b{name}\s*\([^)]*(?:-\s*1|\+\s*1)', body):
             return {'complexity': 'O(n log n)', 'reason': 'TreeMap/tree-map update in linear recursion'}
+        known_algorithm = self.detect_known_algorithm(full_code)
+        if known_algorithm.get('algorithm') == 'Huffman Coding' and re.search(r'\bpriority_queue\s*<|\bpq\.(?:push|pop)\s*\(', body):
+            return {
+                'complexity': 'O(n log n)',
+                'reason': 'Huffman tree construction uses a min-heap: n insertions/extractions at O(log n)'
+            }
         line = self._find_function_line(full_code, name, language)
         function_context = self._function_snippet(full_code, line, max_lines=30, language=language, func_name=name)
         ordered_tree_drain = self.detect_ordered_tree_drain(function_context or body, language)
