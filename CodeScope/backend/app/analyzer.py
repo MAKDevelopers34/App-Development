@@ -4656,7 +4656,11 @@ class CodeAnalyzer:
         depth = self._loop_depth_hint(code)
         average = self._polynomial_complexity(depth)
         space = self._polynomial_complexity(depth)
-        collision_hint = bool(re.search(r'\*\s*(?:16|1000003)|crafted|collision|cluster', compact, re.IGNORECASE))
+        collision_hint = bool(re.search(
+            r'\*\s*(?:16|1000003)|crafted|collid(?:e|es|ed|ing|ion|ions)?|cluster',
+            compact,
+            re.IGNORECASE
+        ))
         if re.search(r'\bunordered_map\b|\bunordered_set\b', compact) and collision_hint:
             worst = self._polynomial_complexity(max(2, depth * 2))
             return {
@@ -5610,6 +5614,18 @@ class CodeAnalyzer:
             issues.append({
                 'line': 1, 'type': 'performance', 'severity': 'low',
                 'message': 'power-of-two key patterns can cause hash bucket clustering'
+            })
+        elif hash_access.get('detected') and hash_access.get('collision_worst_total') and re.search(
+            r'collid(?:e|es|ed|ing|ion|ions)?|crafted',
+            code,
+            re.IGNORECASE
+        ):
+            issues.append({
+                'line': 1, 'type': 'performance', 'severity': 'low',
+                'message': (
+                    'collision-heavy Java hash buckets can raise total time to '
+                    f'{hash_access["collision_worst_total"]}'
+                )
             })
 
         for i, line in enumerate(lines, 1):
