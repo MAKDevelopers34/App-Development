@@ -1,6 +1,7 @@
 import ast
 import re
 import math
+import textwrap
 from collections import defaultdict, deque
 
 
@@ -909,7 +910,7 @@ class CodeAnalyzer:
         if self.detect_recursive_ordered_map_access(full_code, language).get('detected') and re.search(rf'\b{name}\s*\([^)]*(?:-\s*1|\+\s*1)', body):
             return {'complexity': 'O(n log n)', 'reason': 'TreeMap/tree-map update in linear recursion'}
         line = self._find_function_line(full_code, name, language)
-        function_context = self._function_snippet(full_code, line, max_lines=30)
+        function_context = self._function_snippet(full_code, line, max_lines=30, language=language, func_name=name)
         ordered_tree_drain = self.detect_ordered_tree_drain(function_context or body, language)
         if ordered_tree_drain.get('detected'):
             return ordered_tree_drain
@@ -1018,7 +1019,7 @@ class CodeAnalyzer:
                 'reason': reason,
                 'calls': calls,
                 'line': line,
-                'snippet': self._function_snippet(code, line),
+                'snippet': self._function_snippet(code, line, language=language, func_name=name),
             }
         return details
 
@@ -1034,12 +1035,94 @@ class CodeAnalyzer:
                 return line_number
         return 1
 
-    def _function_snippet(self, code, start_line, max_lines=18):
+    def _function_snippet(self, code, start_line, max_lines=18, language=None, func_name=None):
         lines = code.splitlines()
         if not lines:
             return ''
         start = max(0, (start_line or 1) - 1)
+        exact = self._exact_function_source(code, start, language, func_name)
+        if exact:
+            return textwrap.dedent(exact).strip()
         return '\n'.join(lines[start:start + max_lines]).strip()
+
+    def _exact_function_source(self, code, start_index, language=None, func_name=None):
+        if language == 'python':
+            python_source = self._python_function_source(code, start_index, func_name)
+            if python_source:
+                return python_source
+        if language in ('java', 'cpp', 'c', 'javascript', 'typescript'):
+            brace_source = self._brace_function_source(code, start_index)
+            if brace_source:
+                return brace_source
+        return self._indented_function_source(code, start_index, func_name)
+
+    def _python_function_source(self, code, start_index, func_name=None):
+        try:
+            tree = ast.parse(code)
+        except SyntaxError:
+            return ''
+        lines = code.splitlines()
+        target_line = start_index + 1
+        candidates = []
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if func_name and node.name != func_name:
+                continue
+            if node.lineno == target_line or (node.lineno <= target_line <= getattr(node, 'end_lineno', node.lineno)):
+                candidates.append(node)
+        if not candidates:
+            return ''
+        node = min(candidates, key=lambda item: getattr(item, 'end_lineno', item.lineno) - item.lineno)
+        end_line = getattr(node, 'end_lineno', node.lineno)
+        return '\n'.join(lines[node.lineno - 1:end_line])
+
+    def _brace_function_source(self, code, start_index):
+        lines = code.splitlines(True)
+        if not lines:
+            return ''
+        start_offset = sum(len(line) for line in lines[:start_index])
+        signature_end = code.find('\n', start_offset)
+        if signature_end == -1:
+            signature_end = len(code)
+        open_brace = code.find('{', start_offset)
+        if open_brace == -1 or open_brace > signature_end + 500:
+            return ''
+        depth = 0
+        for pos in range(open_brace, len(code)):
+            if code[pos] == '{':
+                depth += 1
+            elif code[pos] == '}':
+                depth -= 1
+                if depth == 0:
+                    end = pos + 1
+                    while end < len(code) and code[end] in ' \t;':
+                        end += 1
+                    return code[start_offset:end]
+        return ''
+
+    def _indented_function_source(self, code, start_index, func_name=None):
+        lines = code.splitlines()
+        if start_index < 0 or start_index >= len(lines):
+            return ''
+        header = lines[start_index]
+        stripped_header = header.strip()
+        if not stripped_header:
+            return ''
+        if func_name and not re.search(rf'\b{re.escape(func_name)}\b', stripped_header):
+            return ''
+        base_indent = len(header) - len(header.lstrip())
+        end = start_index + 1
+        while end < len(lines):
+            stripped = lines[end].strip()
+            if not stripped:
+                end += 1
+                continue
+            indent = len(lines[end]) - len(lines[end].lstrip())
+            if indent <= base_indent:
+                break
+            end += 1
+        return '\n'.join(lines[start_index:end]).rstrip()
 
     def _build_hotspots(self, details):
         if isinstance(details, dict):
@@ -1047,14 +1130,24 @@ class CodeAnalyzer:
         else:
             detail_items = details or []
 
-        hotspots = []
+        candidates = []
         linear_rank = self._complexity_rank(self._parse_complexity_string('O(n)'))
         for detail in detail_items:
             complexity = detail.get('effective_complexity') or detail.get('complexity') or 'O(1)'
             rank = self._complexity_rank(self._parse_complexity_string(complexity))
             if complexity != 'O(unknown)' and rank <= linear_rank:
                 continue
-            hotspots.append({
+            own = detail.get('own_complexity') or detail.get('complexity') or complexity
+            own_rank = self._complexity_rank(self._parse_complexity_string(own))
+            calls = detail.get('calls') or []
+            has_repeated_expensive_call = any(
+                str(call.get('multiplier') or 'O(1)') != 'O(1)'
+                for call in calls
+                if isinstance(call, dict)
+            )
+            if own_rank <= linear_rank and not has_repeated_expensive_call:
+                continue
+            candidates.append({
                 'function': detail.get('function') or 'anonymous',
                 'line': detail.get('line') or 1,
                 'complexity': complexity,
@@ -1063,7 +1156,12 @@ class CodeAnalyzer:
                 '_rank': rank,
             })
 
-        hotspots.sort(key=lambda item: item['_rank'], reverse=True)
+        if not candidates:
+            return []
+
+        max_rank = max(item['_rank'] for item in candidates)
+        hotspots = [item for item in candidates if item['_rank'] == max_rank]
+        hotspots.sort(key=lambda item: item.get('line') or 0)
         for item in hotspots:
             item.pop('_rank', None)
         return hotspots[:10]

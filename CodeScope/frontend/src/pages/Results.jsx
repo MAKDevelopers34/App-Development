@@ -91,11 +91,92 @@ export default function Results() {
       ? confidence?.reason || ''
       : '';
     const hotspots = Array.isArray(r?.hotspots) ? r.hotspots : [];
+    const functionExplanations = Array.isArray(r?.function_explanations) ? r.function_explanations : [];
     const aiTransformed = r?.ai_transformed_code;
     const optimizedCode = aiTransformed?.available ? aiTransformed : null;
     const optimizedByAi = Boolean(aiTransformed?.available);
+    const optimizations = Array.isArray(r?.optimizations) ? r.optimizations : [];
+    const aiOptimizedFunctions = Array.isArray(r?.ai_optimized_functions) ? r.ai_optimized_functions : [];
     //const suggestions = Array.isArray(r?.suggestions) ? r.suggestions : [];
     const safeFilename = filename || getSafeFilename(data);
+
+    const escapeRegExp = (value = '') => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+    const normalizeAiSolution = (solution) => {
+      if (!solution) return null;
+      const code = solution.code || solution.example;
+      if (!code) return null;
+      return {
+        ...solution,
+        code,
+        source_label: solution.source_label || solution.source || 'AI',
+      };
+    };
+
+    const normalizeCodeForCompare = (code = '') => String(code).replace(/\r\n/g, '\n').trim();
+
+    const aiRewriteCandidates = [
+      optimizedCode,
+      ...aiOptimizedFunctions,
+      ...optimizations.filter(opt => opt?.ai_generated && (opt?.example || opt?.code)),
+    ].map(normalizeAiSolution).filter(Boolean);
+
+    const getHotspotAiSolution = (hotspot) => {
+      const direct = normalizeAiSolution(hotspot?.ai_solution);
+      if (direct) return direct;
+
+      const functionName = String(hotspot?.function || '').trim();
+      const functionPattern = functionName
+        ? new RegExp(`\\b${escapeRegExp(functionName)}\\s*\\(`, 'i')
+        : null;
+
+      return aiRewriteCandidates.find(candidate => {
+        const candidateFunction = String(candidate.function || '').trim();
+        if (functionName && candidateFunction && candidateFunction.toLowerCase() === functionName.toLowerCase()) return true;
+        if (functionPattern?.test(candidate.code || '')) return true;
+        const metadata = `${candidate.title || ''} ${candidate.problem || ''} ${candidate.solution || ''} ${candidate.description || ''}`;
+        return functionName && metadata.toLowerCase().includes(functionName.toLowerCase());
+      }) || null;
+    };
+
+    const getFunctionAiSolution = (fn) => {
+      const direct = normalizeAiSolution(fn?.ai_solution);
+      if (direct) return direct;
+
+      const functionName = String(fn?.function || '').trim();
+      if (!functionName) return null;
+      const functionPattern = new RegExp(`\\b${escapeRegExp(functionName)}\\s*\\(`, 'i');
+
+      return aiRewriteCandidates.find(candidate => {
+        const candidateFunction = String(candidate.function || '').trim();
+        if (candidateFunction && candidateFunction.toLowerCase() === functionName.toLowerCase()) return true;
+        if (functionPattern.test(candidate.code || '')) return true;
+        return false;
+      }) || null;
+    };
+
+    const hotspotAiSolutions = hotspots.map(hotspot => getHotspotAiSolution(hotspot));
+    const hotspotFunctionNames = new Set(
+      hotspots
+        .map(hotspot => String(hotspot?.function || '').trim().toLowerCase())
+        .filter(Boolean)
+    );
+    const lowerFunctionExplanations = hotspotFunctionNames.size > 0
+      ? functionExplanations.filter(fn => !hotspotFunctionNames.has(String(fn?.function || '').trim().toLowerCase()))
+      : functionExplanations;
+    const lowerFunctionAiSolutions = lowerFunctionExplanations.map(fn => getFunctionAiSolution(fn));
+    const displayedAiCodeKeys = new Set(
+      [...hotspotAiSolutions, ...lowerFunctionAiSolutions]
+        .map(solution => normalizeCodeForCompare(solution?.code))
+        .filter(Boolean)
+    );
+    const optimizedCodeShownInFunctionSection = Boolean(
+      optimizedCode?.code && displayedAiCodeKeys.has(normalizeCodeForCompare(optimizedCode.code))
+    );
+    const visibleOptimizations = optimizations.filter(opt => {
+      const code = normalizeCodeForCompare(opt?.example || opt?.code);
+      return !code || !displayedAiCodeKeys.has(code);
+    });
 
     return (
       <div data-filename={safeFilename}>
@@ -498,37 +579,85 @@ export default function Results() {
               <h3 style={{ fontSize: '16px', fontWeight: '600', marginBottom: '16px' }}>
                 Hot Code Sections
               </h3>
-              {hotspots.map((hotspot, i) => (
-                <div key={i} style={{
-                  border: '1px solid var(--border)',
-                  borderRadius: '8px',
-                  padding: '12px',
-                  marginBottom: i < hotspots.length - 1 ? '12px' : 0
-                }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap', marginBottom: '8px' }}>
-                    <span style={{ fontSize: '13px', fontWeight: '700', fontFamily: 'var(--font-code)' }}>
-                      {hotspot.function}() at line {hotspot.line}
-                    </span>
-                    <ComplexityBadge complexity={hotspot.complexity} />
+              {hotspots.map((hotspot, i) => {
+                const hotspotAiSolution = hotspotAiSolutions[i];
+                return (
+                  <div key={i} style={{
+                    border: '1px solid var(--border)',
+                    borderRadius: '8px',
+                    padding: '12px',
+                    marginBottom: i < hotspots.length - 1 ? '12px' : 0
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap', marginBottom: '8px' }}>
+                      <span style={{ fontSize: '13px', fontWeight: '700', fontFamily: 'var(--font-code)' }}>
+                        {hotspot.function}() at line {hotspot.line}
+                      </span>
+                      <ComplexityBadge complexity={hotspot.complexity} />
+                    </div>
+                    <p style={{ fontSize: '13px', color: 'var(--gray)', lineHeight: '1.6', margin: '0 0 10px' }}>
+                      {hotspot.reason}
+                    </p>
+                    {hotspot.snippet && (
+                      <pre style={{
+                        margin: 0,
+                        padding: '12px',
+                        background: '#111827',
+                        color: '#e5e7eb',
+                        borderRadius: '8px',
+                        overflowX: 'auto',
+                        fontSize: '12px',
+                        lineHeight: '1.5',
+                        fontFamily: 'var(--font-code)'
+                      }}>{formatDisplayCode(hotspot.snippet)}</pre>
+                    )}
+                    {hotspotAiSolution && (
+                      <div style={{
+                        marginTop: '12px',
+                        border: '1px solid #b7dfbf',
+                        background: '#f6fff8',
+                        borderRadius: '8px',
+                        padding: '12px'
+                      }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', flexWrap: 'wrap', marginBottom: '8px' }}>
+                          <div>
+                            <div style={{ fontSize: '12px', fontWeight: '800', color: 'var(--success)', textTransform: 'uppercase', marginBottom: '3px' }}>
+                              {hotspotAiSolution.source_label || 'AI'} Modified Code
+                            </div>
+                            <div style={{ fontSize: '13px', color: 'var(--dark)', lineHeight: '1.5' }}>
+                              {hotspotAiSolution.description || hotspotAiSolution.solution || hotspotAiSolution.title || 'Verified lower-complexity rewrite.'}
+                            </div>
+                          </div>
+                          {(hotspotAiSolution.complexity_before || hotspotAiSolution.complexity_after) && (
+                            <div style={{ fontSize: '12px', fontWeight: '700', whiteSpace: 'nowrap' }}>
+                              <span style={{ color: 'var(--danger)' }}>{hotspotAiSolution.complexity_before || hotspot.complexity}</span>
+                              <span style={{ color: 'var(--gray)', padding: '0 6px' }}>-&gt;</span>
+                              <span style={{ color: 'var(--success)' }}>{hotspotAiSolution.complexity_after || 'improved'}</span>
+                            </div>
+                          )}
+                        </div>
+                        {hotspotAiSolution.notes && (
+                          <p style={{ fontSize: '12px', color: 'var(--gray)', margin: '0 0 10px', lineHeight: '1.5' }}>
+                            {hotspotAiSolution.notes}
+                          </p>
+                        )}
+                        <pre style={{
+                          margin: 0,
+                          padding: '12px',
+                          background: '#102016',
+                          color: '#d9fbe5',
+                          borderRadius: '8px',
+                          overflowX: 'auto',
+                          fontSize: '12px',
+                          lineHeight: '1.5',
+                          fontFamily: 'var(--font-code)',
+                          whiteSpace: 'pre',
+                          tabSize: 2
+                        }}>{formatDisplayCode(hotspotAiSolution.code)}</pre>
+                      </div>
+                    )}
                   </div>
-                  <p style={{ fontSize: '13px', color: 'var(--gray)', lineHeight: '1.6', margin: '0 0 10px' }}>
-                    {hotspot.reason}
-                  </p>
-                  {hotspot.snippet && (
-                    <pre style={{
-                      margin: 0,
-                      padding: '12px',
-                      background: '#111827',
-                      color: '#e5e7eb',
-                      borderRadius: '8px',
-                      overflowX: 'auto',
-                      fontSize: '12px',
-                      lineHeight: '1.5',
-                      fontFamily: 'var(--font-code)'
-                    }}>{formatDisplayCode(hotspot.snippet)}</pre>
-                  )}
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
 
@@ -570,83 +699,146 @@ export default function Results() {
           )}
 
           {/* Per Function Explanations */}
-          {r.function_explanations && r.function_explanations.length > 0 && (
+          {lowerFunctionExplanations.length > 0 && (
             <div className="card">
               <h3 style={{ fontSize: '16px', fontWeight: '600', marginBottom: '16px' }}>
                 Per-Function Complexity Breakdown
               </h3>
-              {r.function_explanations.map((fn, i) => (
-                <div key={i} style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'minmax(120px, 180px) minmax(0, 1fr)',
-                  gap: '12px 16px',
-                  padding: '12px 0',
-                  borderBottom: i < r.function_explanations.length - 1 ? '1px solid var(--border)' : 'none'
-                }}>
-                  <code style={{
-                    background: 'var(--primary-light)',
-                    color: 'var(--primary)',
-                    padding: '3px 10px',
-                    borderRadius: '6px',
-                    fontSize: '13px',
-                    fontWeight: '600',
-                    whiteSpace: 'nowrap',
-                    maxWidth: '100%',
-                    overflowWrap: 'anywhere'
+              {lowerFunctionExplanations.map((fn, i) => {
+                const functionAiSolution = lowerFunctionAiSolutions[i];
+                return (
+                  <div key={i} style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'minmax(120px, 180px) minmax(0, 1fr)',
+                    gap: '12px 16px',
+                    padding: '12px 0',
+                    borderBottom: i < lowerFunctionExplanations.length - 1 ? '1px solid var(--border)' : 'none'
                   }}>
-                    {fn.function}()
-                  </code>
-                  <div style={{ flex: '1 1 220px', minWidth: 0 }}>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '6px' }}>
-                      <span style={{
-                        fontSize: '12px',
-                        fontWeight: '700',
-                        fontFamily: 'var(--font-code)',
-                        color: 'var(--dark)',
-                        background: '#f8fafc',
-                        border: '1px solid var(--border)',
-                        borderRadius: '999px',
-                        padding: '3px 8px'
-                      }}>
-                        own: {fn.own_complexity || fn.complexity}
-                      </span>
-                      {(fn.effective_complexity || fn.complexity) !== (fn.own_complexity || fn.complexity) && (
+                    <code style={{
+                      background: 'var(--primary-light)',
+                      color: 'var(--primary)',
+                      padding: '3px 10px',
+                      borderRadius: '6px',
+                      fontSize: '13px',
+                      fontWeight: '600',
+                      whiteSpace: 'nowrap',
+                      maxWidth: '100%',
+                      overflowWrap: 'anywhere'
+                    }}>
+                      {fn.function}()
+                    </code>
+                    <div style={{ flex: '1 1 220px', minWidth: 0 }}>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '6px' }}>
                         <span style={{
                           fontSize: '12px',
                           fontWeight: '700',
                           fontFamily: 'var(--font-code)',
-                          color: 'var(--danger)',
-                          background: '#fce8e6',
-                          border: '1px solid #f6b8b3',
+                          color: 'var(--dark)',
+                          background: '#f8fafc',
+                          border: '1px solid var(--border)',
                           borderRadius: '999px',
                           padding: '3px 8px'
                         }}>
-                          effective: {fn.effective_complexity || fn.complexity}
+                          own: {fn.own_complexity || fn.complexity}
                         </span>
-                      )}
-                    </div>
-                    <p style={{ fontSize: '13px', color: 'var(--gray)', lineHeight: '1.6', overflowWrap: 'anywhere', margin: 0 }}>
-                      {fn.explanation}
-                    </p>
-                    {fn.calls && fn.calls.length > 0 && (
-                      <div style={{ marginTop: '8px', display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-                        {fn.calls.map((call, callIndex) => (
-                          <span key={callIndex} style={{
-                            fontSize: '11px',
+                        {(fn.effective_complexity || fn.complexity) !== (fn.own_complexity || fn.complexity) && (
+                          <span style={{
+                            fontSize: '12px',
+                            fontWeight: '700',
                             fontFamily: 'var(--font-code)',
-                            color: 'var(--primary)',
-                            background: 'var(--primary-light)',
+                            color: 'var(--danger)',
+                            background: '#fce8e6',
+                            border: '1px solid #f6b8b3',
                             borderRadius: '999px',
                             padding: '3px 8px'
                           }}>
-                            calls {call.function}() {call.multiplier && call.multiplier !== 'O(1)' ? `x ${call.multiplier}` : ''}{' -> '}{call.complexity}
+                            effective: {fn.effective_complexity || fn.complexity}
                           </span>
-                        ))}
+                        )}
                       </div>
-                    )}
+                      <p style={{ fontSize: '13px', color: 'var(--gray)', lineHeight: '1.6', overflowWrap: 'anywhere', margin: 0 }}>
+                        {fn.explanation}
+                      </p>
+                      {fn.calls && fn.calls.length > 0 && (
+                        <div style={{ marginTop: '8px', display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                          {fn.calls.map((call, callIndex) => (
+                            <span key={callIndex} style={{
+                              fontSize: '11px',
+                              fontFamily: 'var(--font-code)',
+                              color: 'var(--primary)',
+                              background: 'var(--primary-light)',
+                              borderRadius: '999px',
+                              padding: '3px 8px'
+                            }}>
+                              calls {call.function}() {call.multiplier && call.multiplier !== 'O(1)' ? `x ${call.multiplier}` : ''}{' -> '}{call.complexity}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      {fn.snippet && (
+                        <pre style={{
+                          margin: '10px 0 0',
+                          padding: '10px',
+                          background: '#111827',
+                          color: '#e5e7eb',
+                          borderRadius: '8px',
+                          overflowX: 'auto',
+                          fontSize: '12px',
+                          lineHeight: '1.5',
+                          fontFamily: 'var(--font-code)',
+                          whiteSpace: 'pre',
+                          tabSize: 2
+                        }}>{formatDisplayCode(fn.snippet)}</pre>
+                      )}
+                      {functionAiSolution && (
+                        <div style={{
+                          marginTop: '10px',
+                          border: '1px solid #b7dfbf',
+                          background: '#f6fff8',
+                          borderRadius: '8px',
+                          padding: '10px'
+                        }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', flexWrap: 'wrap', marginBottom: '8px' }}>
+                            <div>
+                              <div style={{ fontSize: '12px', fontWeight: '800', color: 'var(--success)', textTransform: 'uppercase', marginBottom: '3px' }}>
+                                {functionAiSolution.source_label || 'AI'} Modified Code
+                              </div>
+                              <div style={{ fontSize: '13px', color: 'var(--dark)', lineHeight: '1.5' }}>
+                                {functionAiSolution.description || functionAiSolution.solution || functionAiSolution.title || 'Verified lower-complexity rewrite.'}
+                              </div>
+                            </div>
+                            {(functionAiSolution.complexity_before || functionAiSolution.complexity_after) && (
+                              <div style={{ fontSize: '12px', fontWeight: '700', whiteSpace: 'nowrap' }}>
+                                <span style={{ color: 'var(--danger)' }}>{functionAiSolution.complexity_before || fn.complexity}</span>
+                                <span style={{ color: 'var(--gray)', padding: '0 6px' }}>-&gt;</span>
+                                <span style={{ color: 'var(--success)' }}>{functionAiSolution.complexity_after || 'improved'}</span>
+                              </div>
+                            )}
+                          </div>
+                          {functionAiSolution.notes && (
+                            <p style={{ fontSize: '12px', color: 'var(--gray)', margin: '0 0 10px', lineHeight: '1.5' }}>
+                              {functionAiSolution.notes}
+                            </p>
+                          )}
+                          <pre style={{
+                            margin: 0,
+                            padding: '10px',
+                            background: '#102016',
+                            color: '#d9fbe5',
+                            borderRadius: '8px',
+                            overflowX: 'auto',
+                            fontSize: '12px',
+                            lineHeight: '1.5',
+                            fontFamily: 'var(--font-code)',
+                            whiteSpace: 'pre',
+                            tabSize: 2
+                          }}>{formatDisplayCode(functionAiSolution.code)}</pre>
+                        </div>
+                      )}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
@@ -665,7 +857,7 @@ export default function Results() {
 
         {/* Suggestions */}
         {/* Transformed Code */}
-        {optimizedCode && optimizedCode.available && (
+        {optimizedCode && optimizedCode.available && !optimizedCodeShownInFunctionSection && (
           <div className="card" style={{ marginBottom: '20px' }}>
             <h3 style={{ fontSize: '16px', fontWeight: '600', marginBottom: '4px' }}>
               {optimizedByAi ? `${optimizedCode.source_label || 'AI'} Optimized Version of Your Code` : '🔄 Optimized Version of Your Code'}
@@ -705,14 +897,14 @@ export default function Results() {
         )}
 
         {/* Optimizations */}
-        {r.optimizations && r.optimizations.length > 0 && (
+        {visibleOptimizations.length > 0 && (
           <div className="card" style={{ marginBottom: '20px' }}>
             <h3 style={{ fontSize: '16px', fontWeight: '600', marginBottom: '16px' }}>
               💡 Optimization Suggestions
             </h3>
-            {r.optimizations.map((opt, i) => (
+            {visibleOptimizations.map((opt, i) => (
               <div key={i} style={{
-                borderBottom: i < r.optimizations.length - 1 ? '1px solid var(--border)' : 'none',
+                borderBottom: i < visibleOptimizations.length - 1 ? '1px solid var(--border)' : 'none',
                 paddingBottom: '20px',
                 marginBottom: '20px'
               }}>

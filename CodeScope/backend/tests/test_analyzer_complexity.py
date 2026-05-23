@@ -286,6 +286,60 @@ void multiErase(multiset<int>& s) {
         self.assertEqual(result["hotspots"][0]["line"], 1)
         self.assertIn("arr.push", result["hotspots"][0]["snippet"])
 
+    def test_hotspots_show_only_highest_complexity_exact_function_snippets(self):
+        code = """def generate_subsets(nums):
+    result = []
+
+    def backtrack(index, current):
+        if index == len(nums):
+            result.append(current[:])
+            return
+        current.append(nums[index])
+        backtrack(index + 1, current)
+        current.pop()
+        backtrack(index + 1, current)
+
+    backtrack(0, [])
+    return result
+
+
+def matrix_multiply(A, B):
+    n = len(A)
+    result = [[0] * n for _ in range(n)]
+    for i in range(n):
+        for j in range(n):
+            for k in range(n):
+                result[i][j] += A[i][k] * B[k][j]
+    return result
+
+
+def build_string(n):
+    s = ""
+    for i in range(n):
+        s += str(i)
+    return s
+
+
+def main():
+    generate_subsets([1, 2, 3])
+    matrix_multiply([[1]], [[2]])
+    build_string(1000)
+"""
+
+        result = self.analyzer.analyze(code, "sample.py")
+        details = {item["function"]: item for item in result["function_complexity_details"]}
+
+        self.assertEqual(
+            [hotspot["function"] for hotspot in result["hotspots"]],
+            ["generate_subsets", "backtrack"],
+        )
+        self.assertNotIn("matrix_multiply", [hotspot["function"] for hotspot in result["hotspots"]])
+        self.assertNotIn("main", [hotspot["function"] for hotspot in result["hotspots"]])
+        self.assertNotIn("def main", details["build_string"]["snippet"])
+        self.assertNotIn("def matrix_multiply", details["generate_subsets"]["snippet"])
+        self.assertTrue(details["backtrack"]["snippet"].startswith("def backtrack"))
+        self.assertIn("    if index == len(nums):", details["backtrack"]["snippet"])
+
     def test_backtracking_pop_keeps_branching_path_space_linear(self):
         code = """function paths(n, path = []) {
     if (n <= 0) return 1;
@@ -916,7 +970,7 @@ def power(matrix, n):
         self.assertEqual(merged[0]["function"], "hasDuplicate")
         self.assertEqual(merged[0]["complexity_after"], "O(n)")
 
-    def test_ai_discovery_prompt_sends_expensive_function_snippets(self):
+    def test_ai_discovery_prompt_sends_all_function_snippets(self):
         code = """function hasDuplicate(nums) {
     for (let i = 0; i < nums.length; i++) {
         for (let j = i + 1; j < nums.length; j++) {
@@ -936,14 +990,15 @@ function alreadyCheap(nums) {
         prompt = _build_ai_optimization_prompt(result, code, "javascript", [], targets)
 
         self.assertTrue(any(target["function"] == "hasDuplicate" for target in targets))
-        self.assertFalse(any(target["function"] == "alreadyCheap" for target in targets))
+        self.assertTrue(any(target["function"] == "alreadyCheap" for target in targets))
         duplicate_target = next(target for target in targets if target["function"] == "hasDuplicate")
         self.assertEqual(duplicate_target["effective_complexity"], "O(n²)")
         self.assertIn("snippet", duplicate_target)
         self.assertIn("if (nums[i] === nums[j]) return true;", duplicate_target["snippet"])
-        self.assertIn("Independently inspect each expensive function target", prompt)
-        self.assertIn("EXPENSIVE FUNCTIONS FOR INDEPENDENT AI DISCOVERY", prompt)
+        self.assertIn("Independently inspect every detected function target", prompt)
+        self.assertIn("ALL DETECTED FUNCTIONS FOR AI OPTIMIZATION REVIEW", prompt)
         self.assertIn('"function": "hasDuplicate"', prompt)
+        self.assertIn('"function": "alreadyCheap"', prompt)
         self.assertIn('"snippet"', prompt)
 
     def test_groq_discovery_accepts_verified_rewrites(self):
@@ -1001,7 +1056,7 @@ function alreadyCheap(nums) {
             result = _analyze_with_extras(code, "Test.java", {"n": 16})
 
         self.assertEqual(result["time_complexity"], "O(n^((log n + 1)/2))")
-        self.assertEqual(seen_payload["optimizations"], [])
+        self.assertTrue(seen_payload["optimizations"])
         self.assertFalse(seen_payload["transformed_code"]["available"])
         self.assertEqual(result["optimizations"], [])
         self.assertFalse(result["transformed_code"]["available"])
@@ -1029,7 +1084,7 @@ function alreadyCheap(nums) {
 """
 
         def discovered_only(analysis_result, code_text, language):
-            self.assertEqual(analysis_result["optimizations"], [])
+            self.assertIsInstance(analysis_result["optimizations"], list)
             return [{
                 "title": "Groq collapsed repeated recursive calls",
                 "problem": "tricky repeats the same recursive call inside the loop.",
@@ -1141,7 +1196,7 @@ function b(n) {
 """
 
         def discovered_only(analysis_result, code_text, language):
-            self.assertEqual(analysis_result["optimizations"], [])
+            self.assertIsInstance(analysis_result["optimizations"], list)
             return [{
                 "title": "Groq collapsed repeated recursion",
                 "problem": "grow repeats the same recursive branch twice.",
@@ -1177,6 +1232,114 @@ function b(n) {
         self.assertEqual(issue["ai_solution"]["complexity_before"], "O(2^n)")
         self.assertEqual(issue["ai_solution"]["complexity_after"], "O(n)")
         self.assertEqual(result["ai_transformed_code"]["code"], grok_code)
+        self.assertEqual(result["ai_transformed_code"]["function"], "grow")
+        self.assertTrue(result["hotspots"])
+        self.assertEqual(result["hotspots"][0]["function"], "grow")
+        self.assertIn("ai_solution", result["hotspots"][0])
+        self.assertEqual(result["hotspots"][0]["ai_solution"]["source"], "groq")
+        self.assertEqual(result["hotspots"][0]["ai_solution"]["code"], grok_code)
+
+    def test_route_attaches_ai_solution_to_matching_function_breakdown(self):
+        code = """function grow(n, arr = []) {
+    if (n <= 0) return arr.length;
+    return grow(n - 1, arr) + grow(n - 1, arr);
+}
+
+function buildText(n) {
+    let s = "";
+    for (let i = 0; i < n; i++) {
+        s += i;
+    }
+    return s;
+}
+"""
+        grow_code = """function grow(n, arr = []) {
+    return Math.max(0, (2 ** n) - 1);
+}
+"""
+        build_code = """function buildText(n) {
+    const parts = [];
+    for (let i = 0; i < n; i++) {
+        parts.push(String(i));
+    }
+    return parts.join("");
+}
+"""
+
+        def discovered_multiple(analysis_result, code_text, language):
+            return [
+                {
+                    "title": "Collapse repeated recursion",
+                    "problem": "grow repeats the same branch.",
+                    "solution": "Use a direct count.",
+                    "complexity_before": "O(2^n)",
+                    "complexity_after": "O(1)",
+                    "example": grow_code,
+                    "ai_generated": True,
+                    "ai_discovered": True,
+                    "source": "groq",
+                    "source_label": "Groq",
+                    "function": "grow",
+                    "ai_note": "Groq returned a verified rewrite for grow.",
+                },
+                {
+                    "title": "Use array join for string building",
+                    "problem": "buildText repeatedly copies the growing string.",
+                    "solution": "Collect pieces and join once.",
+                    "complexity_before": "O(n²)",
+                    "complexity_after": "O(n)",
+                    "example": build_code,
+                    "ai_generated": True,
+                    "ai_discovered": True,
+                    "source": "groq",
+                    "source_label": "Groq",
+                    "ai_note": "Groq returned a verified rewrite for buildText.",
+                },
+            ]
+
+        function_rows = [
+            {
+                "function": "grow",
+                "complexity": "O(2^n)",
+                "own_complexity": "O(2^n)",
+                "effective_complexity": "O(2^n)",
+                "calls": [],
+                "line": 1,
+                "snippet": "function grow(n, arr = []) { return grow(n - 1, arr) + grow(n - 1, arr); }",
+                "explanation": "grow repeats both recursive branches.",
+            },
+            {
+                "function": "buildText",
+                "complexity": "O(n²)",
+                "own_complexity": "O(n²)",
+                "effective_complexity": "O(n²)",
+                "calls": [],
+                "line": 6,
+                "snippet": "function buildText(n) { let s = ''; for (let i = 0; i < n; i++) s += i; return s; }",
+                "explanation": "buildText repeatedly copies a growing string.",
+            },
+        ]
+
+        with patch("app.routes.enhance_optimizations_with_ai", side_effect=discovered_multiple), \
+             patch("app.routes.get_function_level_explanations", return_value=function_rows), \
+             patch("app.routes.get_ai_explanation", return_value={
+                 "available": True,
+                 "why_this_complexity": "",
+                 "real_world_analogy": "",
+                 "performance_impact": "",
+                 "top_optimization": "",
+             }):
+            result = _analyze_with_extras(code, "sample.js")
+
+        rows = {item["function"]: item for item in result["function_explanations"]}
+        self.assertEqual(result["ai_transformed_code"]["function"], "grow")
+        self.assertEqual([hotspot["function"] for hotspot in result["hotspots"]], ["grow"])
+        self.assertEqual(result["hotspots"][0]["ai_solution"]["code"], grow_code)
+        optimized = {item["function"]: item for item in result["ai_optimized_functions"]}
+        self.assertEqual(optimized["grow"]["code"], grow_code)
+        self.assertEqual(optimized["buildText"]["code"], build_code)
+        self.assertEqual(rows["buildText"]["ai_solution"]["code"], build_code)
+        self.assertEqual(rows["buildText"]["ai_solution"]["source"], "groq")
 
     def test_ai_rewrite_validation_rejects_changed_public_signature(self):
         original = """function hasDuplicate(nums) {

@@ -148,7 +148,7 @@ def enhance_optimizations_with_ai(analysis_result, code, language):
         prompt = _build_ai_optimization_prompt(
             analysis_result, code, language, optimizations, discovery_targets
         )
-        ai_response = _call_ai_completion(prompt, max_tokens=2200, return_source=True)
+        ai_response = _call_ai_completion(prompt, max_tokens=4000, return_source=True)
         if isinstance(ai_response, tuple):
             content, provider = ai_response
         else:
@@ -415,8 +415,6 @@ def _expensive_function_targets(analysis_result):
             detail.get('effective_complexity') or detail.get('complexity') or detail.get('own_complexity') or ''
         )
         own = str(detail.get('own_complexity') or complexity)
-        if _is_low_value_ai_rewrite_target(complexity) and _is_low_value_ai_rewrite_target(own):
-            continue
         snippet = str(detail.get('snippet') or '').strip()
         targets.append({
             'function': detail.get('function'),
@@ -425,9 +423,9 @@ def _expensive_function_targets(analysis_result):
             'effective_complexity': complexity,
             'reason': detail.get('reason', ''),
             'calls': detail.get('calls') or [],
-            'snippet': snippet[:1800],
+            'snippet': snippet[:1200],
         })
-    return targets[:8]
+    return targets[:24]
 
 
 def _is_low_value_ai_rewrite_target(complexity):
@@ -482,7 +480,7 @@ def _build_ai_optimization_prompt(analysis_result, code, language, optimizations
 
     return f"""You are CodeScope's optimization-code generator. CodeScope's analyzer has already detected function complexities. Your job is to inspect the exact code, then:
 1. Improve any analyzer optimization candidates with code-specific rewrites.
-2. Independently inspect each expensive function target and discover a same-input/same-output lower-complexity rewrite if one exists, even if the analyzer did not already name the optimization.
+2. Independently inspect every detected function target and discover a same-input/same-output lower-complexity rewrite if one exists, even if the analyzer did not already name the optimization.
 
 ORIGINAL CODE:
 ```{language}
@@ -501,19 +499,19 @@ ANALYZER FACTS:
 OPTIMIZATION CANDIDATES:
 {json.dumps(candidates, ensure_ascii=False)}
 
-EXPENSIVE FUNCTIONS FOR INDEPENDENT AI DISCOVERY:
+ALL DETECTED FUNCTIONS FOR AI OPTIMIZATION REVIEW:
 {json.dumps(discovery_targets, ensure_ascii=False)}
 
 Rules:
 - Return a code-specific optimized version only when you can preserve the original function/class behavior for the same valid inputs.
-- For every item under EXPENSIVE FUNCTIONS FOR INDEPENDENT AI DISCOVERY, inspect that function's snippet, detected complexity, reason, and calls.
-- Prefer rewriting the exact expensive function, but include any helper needed for complete usable code.
+- For every item under ALL DETECTED FUNCTIONS FOR AI OPTIMIZATION REVIEW, inspect that function's snippet, detected complexity, reason, and calls.
+- Prefer rewriting the exact reviewed function, but include any helper needed for complete usable code.
 - Preserve public function/class names and parameters unless the candidate explicitly requires helper parameters.
 - The code field must contain complete code in the same language, not pseudocode and not a comment-only strategy list.
 - Do not invent unrelated features, I/O prompts, console code, tests, or external dependencies.
 - If the candidate is "problem-dependent" and the exact behavior cannot be inferred from the code, return available=false for that candidate.
 - For independent discovery, only return a discovered optimization if you can clearly explain the original behavior and the replacement has lower Big-O than that function's effective_complexity.
-- If a function is already asymptotically optimal for its required output, do not return a rewrite.
+- If a function is already asymptotically optimal for its required output, omit it from discovered_optimizations or return available=false for that function.
 - It is allowed to improve complexity_after when the code-specific rewrite makes the target more precise, but never change the current code's detected complexity_before.
 - Do not wrap code in markdown fences.
 - Return valid JSON only.
@@ -2119,6 +2117,8 @@ def get_function_level_explanations(func_complexities, call_chain_report, langua
                 'own_complexity': own,
                 'effective_complexity': effective,
                 'calls': calls,
+                'line': detail.get('line'),
+                'snippet': detail.get('snippet') or '',
                 'explanation': _explain_detailed_function(detail)
             })
         return explanations
@@ -2220,6 +2220,8 @@ def _merge_ai_function_explanations(function_details, ai_items):
             'own_complexity': own,
             'effective_complexity': effective,
             'calls': detail.get('calls') or [],
+            'line': detail.get('line'),
+            'snippet': detail.get('snippet') or '',
             'explanation': explanation
         })
     return merged
