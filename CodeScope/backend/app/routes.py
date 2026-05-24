@@ -13,9 +13,16 @@ import io
 import os
 import posixpath
 import re
+import threading
+import time
+import uuid
 from collections import defaultdict
 
 main = Blueprint('main', __name__)
+
+ANALYSIS_JOB_TTL_SECONDS = 10 * 60
+ANALYSIS_JOBS = {}
+ANALYSIS_JOBS_LOCK = threading.Lock()
 
 MAX_ZIP_BYTES = 8 * 1024 * 1024
 MAX_SOURCE_BYTES = 250 * 1024
@@ -114,10 +121,125 @@ def _analyze_with_extras(code, filename, concrete_inputs=None):
         local_analyzer.last_func_complexity_details,
         code
     )
+    result['function_explanations'] = _canonical_function_explanations(
+        result.get('function_explanations'),
+        local_analyzer.last_func_complexity_details,
+    )
     _attach_ai_solutions_to_function_explanations(result, ai_only_optimizations)
     reset_ai_budget(ai_budget_token)
 
     return result
+
+
+def _start_analysis_job(code, filename, concrete_inputs=None):
+    _cleanup_analysis_jobs()
+    job_id = uuid.uuid4().hex
+    with ANALYSIS_JOBS_LOCK:
+        ANALYSIS_JOBS[job_id] = {
+            'status': 'queued',
+            'created_at': time.time(),
+            'updated_at': time.time(),
+            'filename': filename,
+            'result': None,
+            'error': None,
+        }
+    thread = threading.Thread(
+        target=_run_analysis_job,
+        args=(job_id, code, filename, concrete_inputs),
+        daemon=True,
+    )
+    thread.start()
+    return job_id
+
+
+def _run_analysis_job(job_id, code, filename, concrete_inputs=None):
+    _update_analysis_job(job_id, status='running')
+    try:
+        result = _analyze_with_extras(code, filename, concrete_inputs)
+        _update_analysis_job(
+            job_id,
+            status='completed',
+            result={'success': True, 'filename': filename, 'result': result},
+        )
+    except Exception as exc:
+        _update_analysis_job(job_id, status='failed', error=str(exc))
+
+
+def _update_analysis_job(job_id, **updates):
+    with ANALYSIS_JOBS_LOCK:
+        job = ANALYSIS_JOBS.get(job_id)
+        if not job:
+            return
+        job.update(updates)
+        job['updated_at'] = time.time()
+
+
+def _get_analysis_job(job_id):
+    _cleanup_analysis_jobs()
+    with ANALYSIS_JOBS_LOCK:
+        job = ANALYSIS_JOBS.get(job_id)
+        return dict(job) if job else None
+
+
+def _cleanup_analysis_jobs():
+    cutoff = time.time() - ANALYSIS_JOB_TTL_SECONDS
+    with ANALYSIS_JOBS_LOCK:
+        expired = [
+            job_id for job_id, job in ANALYSIS_JOBS.items()
+            if job.get('updated_at', job.get('created_at', 0)) < cutoff
+        ]
+        for job_id in expired:
+            ANALYSIS_JOBS.pop(job_id, None)
+
+
+def _wants_async_analysis(data):
+    value = (data or {}).get('async')
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.lower() in ('1', 'true', 'yes')
+    return False
+
+
+def _canonical_function_explanations(function_explanations, function_details):
+    if not function_details:
+        return function_explanations or []
+    detail_items = (
+        list(function_details.values())
+        if isinstance(function_details, dict)
+        else list(function_details or [])
+    )
+    existing_by_name = {
+        item.get('function'): item
+        for item in (function_explanations or [])
+        if isinstance(item, dict) and item.get('function')
+    }
+    canonical = []
+    for detail in detail_items:
+        if not isinstance(detail, dict):
+            continue
+        name = detail.get('function')
+        existing = existing_by_name.get(name, {})
+        own = detail.get('own_complexity', detail.get('complexity', 'O(1)'))
+        effective = detail.get('effective_complexity', detail.get('complexity', own))
+        explanation = existing.get('explanation') or detail.get('reason') or ''
+        if (
+            existing.get('own_complexity') not in (None, own) or
+            existing.get('effective_complexity') not in (None, effective)
+        ):
+            explanation = detail.get('reason') or explanation
+        canonical.append({
+            **existing,
+            'function': name,
+            'complexity': effective,
+            'own_complexity': own,
+            'effective_complexity': effective,
+            'calls': detail.get('calls') or existing.get('calls') or [],
+            'line': detail.get('line') or existing.get('line'),
+            'snippet': detail.get('snippet') or existing.get('snippet') or '',
+            'explanation': explanation,
+        })
+    return canonical
 
 
 def _issue_problem_only(issue):
@@ -172,8 +294,6 @@ def _normalize_ai_optimization_functions(optimizations, result):
     if not function_names:
         return
     for opt in optimizations or []:
-        if opt.get('function'):
-            continue
         inferred = _infer_ai_optimization_function(opt, function_names)
         if inferred:
             opt['function'] = inferred
@@ -193,20 +313,104 @@ def _result_function_names(result):
 
 
 def _infer_ai_optimization_function(opt, function_names):
+    declared = str(opt.get('function') or '').strip()
+    if declared:
+        canonical = _canonical_function_name(declared, function_names)
+        if canonical:
+            return canonical
+
     code = str(opt.get('example') or opt.get('code') or '')
     metadata = ' '.join(
         str(opt.get(field) or '')
         for field in ('title', 'problem', 'solution', 'description', 'ai_note')
     )
+    extracted = _extract_function_names_from_code(code)
+    for name in extracted:
+        canonical = _canonical_function_name(name, function_names)
+        if canonical:
+            return canonical
+
     for name in function_names:
-        escaped = re.escape(name)
-        if re.search(rf'\b{escaped}\s*\(', code):
+        if _code_mentions_function(code, name):
             return name
     metadata_lower = metadata.lower()
     for name in function_names:
-        if name.lower() in metadata_lower:
+        aliases = _function_name_aliases(name)
+        if any(alias and re.search(rf'\b{re.escape(alias)}\b', metadata_lower) for alias in aliases):
             return name
     return None
+
+
+def _canonical_function_name(name, function_names):
+    if not name:
+        return None
+    lookup = _function_alias_lookup(function_names)
+    return lookup.get(str(name).strip().lower())
+
+
+def _function_alias_lookup(function_names):
+    alias_to_names = defaultdict(list)
+    for function_name in function_names:
+        for alias in _function_name_aliases(function_name):
+            alias_to_names[alias].append(function_name)
+
+    lookup = {}
+    for alias, names in alias_to_names.items():
+        unique_names = []
+        seen = set()
+        for name in names:
+            key = name.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            unique_names.append(name)
+        if len(unique_names) == 1:
+            lookup[alias] = unique_names[0]
+    return lookup
+
+
+def _function_name_aliases(name):
+    raw = str(name or '').strip()
+    if not raw:
+        return set()
+    lowered = raw.lower()
+    aliases = {lowered}
+    simple = lowered.split('.')[-1]
+    if simple:
+        aliases.add(simple)
+    return aliases
+
+
+def _extract_function_names_from_code(code):
+    text = str(code or '')
+    names = []
+    patterns = [
+        r'\bdef\s+([A-Za-z_]\w*)\s*\(',
+        r'\bfunction\s+([A-Za-z_$][\w$]*)\s*\(',
+        r'\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:function\b|\([^)]*\)\s*=>|[A-Za-z_$][\w$]*\s*=>)',
+        r'\b(?:public|private|protected)?\s*(?:static\s+)?[\w:<>\[\], ?&*]+\s+([A-Za-z_]\w*)\s*\(',
+    ]
+    for pattern in patterns:
+        for match in re.finditer(pattern, text):
+            name = match.group(1)
+            if name not in names:
+                names.append(name)
+    return names
+
+
+def _code_mentions_function(code, function_name):
+    text = str(code or '')
+    for alias in _function_name_aliases(function_name):
+        if not alias:
+            continue
+        escaped = re.escape(alias)
+        if re.search(rf'\b{escaped}\s*\(', text, re.IGNORECASE):
+            return True
+        if re.search(rf'\bdef\s+{escaped}\s*\(', text, re.IGNORECASE):
+            return True
+        if re.search(rf'\bfunction\s+{escaped}\s*\(', text, re.IGNORECASE):
+            return True
+    return False
 
 
 def _ai_optimized_function_payloads(optimizations):
@@ -244,7 +448,7 @@ def _select_primary_ai_optimization(optimizations, result):
         match = next(
             (
                 opt for opt in available
-                if str(opt.get('function') or '').lower() == function
+                if _function_names_match(opt.get('function'), function)
             ),
             None,
         )
@@ -306,7 +510,7 @@ def _attach_ai_solution_to_hotspot(result, ai_optimization):
         selected = next(
             (
                 hotspot for hotspot in result['hotspots']
-                if str(hotspot.get('function') or '').lower() == target_function
+                if _function_names_match(hotspot.get('function'), target_function)
             ),
             None,
         )
@@ -320,18 +524,40 @@ def _attach_ai_solutions_to_function_explanations(result, optimizations):
     explanations = result.get('function_explanations') or []
     if not explanations:
         return
-    by_name = {
-        str(opt.get('function') or '').lower(): opt
-        for opt in (optimizations or [])
-        if opt.get('example') and opt.get('function')
-    }
-    if not by_name:
+    function_names = [
+        str(item.get('function') or '').strip()
+        for item in explanations
+        if item.get('function')
+    ]
+    if not function_names:
         return
+    lookup = _function_alias_lookup(function_names)
     for item in explanations:
-        function = str(item.get('function') or '').lower()
-        optimization = by_name.get(function)
+        function = str(item.get('function') or '').strip()
+        optimization = None
+        for opt in optimizations or []:
+            if not opt.get('example'):
+                continue
+            opt_function = str(opt.get('function') or '').strip()
+            canonical = lookup.get(opt_function.lower()) if opt_function else None
+            if canonical and canonical == function:
+                optimization = opt
+                break
+            if _function_names_match(opt_function, function):
+                optimization = opt
+                break
+            if not opt_function and _code_mentions_function(opt.get('example'), function):
+                optimization = opt
+                break
         if optimization:
+            optimization['function'] = function
             item['ai_solution'] = _ai_solution_payload(optimization)
+
+
+def _function_names_match(left, right):
+    left_aliases = _function_name_aliases(left)
+    right_aliases = _function_name_aliases(right)
+    return bool(left_aliases and right_aliases and left_aliases.intersection(right_aliases))
 
 
 def _attach_ai_solution_status(result, reason):
@@ -1014,12 +1240,55 @@ def analyze_code():
         if not code.strip():
             return jsonify({'error': 'Code is empty'}), 400
 
+        if _wants_async_analysis(data):
+            job_id = _start_analysis_job(code, filename, concrete_inputs)
+            return jsonify({
+                'success': True,
+                'async': True,
+                'job_id': job_id,
+                'status': 'queued',
+                'filename': filename,
+            }), 202
+
         result = _analyze_with_extras(code, filename, concrete_inputs)
 
         return jsonify({'success': True, 'filename': filename, 'result': result})
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+@main.route('/api/analyze/jobs/<job_id>', methods=['GET'])
+def analyze_job_status(job_id):
+    job = _get_analysis_job(job_id)
+    if not job:
+        return jsonify({'error': 'Analysis job not found or expired'}), 404
+
+    status = job.get('status')
+    if status == 'completed':
+        payload = dict(job.get('result') or {})
+        payload.update({
+            'async': True,
+            'job_id': job_id,
+            'status': status,
+        })
+        return jsonify(payload)
+    if status == 'failed':
+        return jsonify({
+            'success': False,
+            'async': True,
+            'job_id': job_id,
+            'status': status,
+            'error': job.get('error') or 'Analysis failed',
+        }), 500
+
+    return jsonify({
+        'success': True,
+        'async': True,
+        'job_id': job_id,
+        'status': status,
+        'filename': job.get('filename'),
+    })
 
 
 @main.route('/api/analyze/inputs', methods=['POST'])

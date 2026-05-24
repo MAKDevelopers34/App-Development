@@ -368,6 +368,11 @@ class CodeAnalyzer:
         semantic_analysis = self.analyze_semantic_assumptions(
             code, language, input_schema, concrete_inputs, time_result, memory_analysis
         )
+        overall_summary = self.build_overall_complexity_summary(
+            time_result['complexity'], space, memory_analysis
+        )
+        if concrete and concrete.get('kind') == 'fixed_entrypoint_literals':
+            overall_summary = self._with_fixed_entrypoint_overall(overall_summary, concrete)
 
         result = {
             'language': language,
@@ -386,9 +391,7 @@ class CodeAnalyzer:
             'memory_allocation_analysis': memory_analysis,
             'analysis_confidence': self._analysis_confidence_summary(code, language, time_result),
             'semantic_analysis': semantic_analysis,
-            'overall_complexity': self.build_overall_complexity_summary(
-                time_result['complexity'], space, memory_analysis
-            ),
+            'overall_complexity': overall_summary,
             'hotspots': self._build_hotspots(self.last_func_complexity_details),
         }
         if recurrence_analysis:
@@ -404,6 +407,27 @@ class CodeAnalyzer:
         result['suggestions'] = self.generate_suggestions(result)
         result['rating'] = self.calculate_rating(result)
         return result
+
+    def _with_fixed_entrypoint_overall(self, overall, concrete):
+        updated = dict(overall or {})
+        scalable_time = updated.get('time') or concrete.get('symbolic_time_complexity')
+        scalable_space = updated.get('space') or concrete.get('symbolic_space_complexity')
+        fixed_time = concrete.get('fixed_input_time_complexity', 'O(1)')
+        fixed_space = concrete.get('fixed_input_space_complexity', 'O(1)')
+        updated['current_run_time'] = fixed_time
+        updated['current_run_space'] = fixed_space
+        updated['scalable_time'] = scalable_time
+        updated['scalable_space'] = scalable_space
+        updated['headline'] = (
+            f'{fixed_time} current run, {fixed_space} current space; '
+            f'{scalable_time} scalable time, {scalable_space} scalable space'
+        )
+        updated['memory_model'] = (
+            f'This pasted executable uses fixed hardcoded data, so the current run is {fixed_time} time '
+            f'and {fixed_space} space. If those hardcoded containers are treated as variable inputs, '
+            f'the scalable algorithm is {scalable_time} time and {scalable_space} space.'
+        )
+        return updated
 
     # ─────────────────────────────────────────────
     # INPUT SCHEMA INFERENCE
@@ -872,10 +896,25 @@ class CodeAnalyzer:
             return {'complexity': self._alpha(), 'reason': 'path compression and union by rank'}
         if re.search(r'parent\s*\[[^\]]+\]\s*=\s*find\s*\(\s*parent\s*\[', body):
             return {'complexity': self._alpha(), 'reason': 'path compression'}
+        if self._looks_like_graph_bfs_function(name, body, full_code, language):
+            return {
+                'complexity': 'O(V + E)',
+                'reason': 'BFS graph traversal visits reachable vertices once and scans outgoing edges with a shared visited structure'
+            }
         if self._looks_like_graph_dfs_function(name, body, full_code, language):
             return {
                 'complexity': 'O(V + E)',
                 'reason': 'DFS graph traversal visits reachable vertices once and scans outgoing edges with a shared visited structure'
+            }
+        if self._looks_like_dijkstra_function(name, body, full_code, language):
+            return {
+                'complexity': 'O(E log V)',
+                'reason': 'Dijkstra with a heap processes edge relaxations and priority-queue updates at O(log V)'
+            }
+        if self._looks_like_knapsack_dp_function(name, body, full_code, language):
+            return {
+                'complexity': 'O(n * W)',
+                'reason': '0/1 knapsack dynamic programming fills n item rows across W capacity states'
             }
         binary_search = self.detect_binary_search_pattern(body, language)
         if binary_search.get('detected'):
@@ -905,10 +944,10 @@ class CodeAnalyzer:
             }
         if self._looks_like_memoized_recursive_slice_keys(name, body):
             return {'complexity': 'O(n log n)', 'reason': 'materialized memo keys and copied slices'}
-        if self._looks_like_recursive_slice_partition(name, body):
-            return {'complexity': 'O(n log n)', 'reason': 'copied slices at each recursion level'}
         if self._looks_like_recursive_resort_merge(name, body):
             return {'complexity': self._tuple_to_string(('n_log2', 1)), 'reason': 'sorted(left + right) at each merge'}
+        if self._looks_like_recursive_slice_partition(name, body):
+            return {'complexity': 'O(n log n)', 'reason': 'copied slices at each recursion level'}
         if self.detect_recursive_ordered_map_access(full_code, language).get('detected') and re.search(rf'\b{name}\s*\([^)]*(?:-\s*1|\+\s*1)', body):
             return {'complexity': 'O(n log n)', 'reason': 'TreeMap/tree-map update in linear recursion'}
         known_algorithm = self.detect_known_algorithm(full_code)
@@ -1006,10 +1045,13 @@ class CodeAnalyzer:
     def _build_function_complexity_details(self, code, language, own_complexities, effective_complexities):
         details = {}
         repeated_dfs = self._repeated_fresh_graph_search_info(code, 'dfs')
-        for name in self._function_names(code, language):
-            body = self._extract_function_body(code, name, language)
-            own = own_complexities.get(name, 'O(1)')
-            effective = effective_complexities.get(name, own)
+        function_records = self._function_detail_records(code, language)
+        for record in function_records:
+            display_name = record['display_name']
+            name = record['name']
+            body = record.get('body') if record.get('body') is not None else self._extract_function_body(code, name, language)
+            own = own_complexities.get(display_name, own_complexities.get(name, 'O(1)'))
+            effective = effective_complexities.get(display_name, effective_complexities.get(name, own))
             reason = self._function_complexity_reason(name, body, own, effective, effective_complexities, code, language)
             calls = self._function_call_summaries(body, effective_complexities, current_func=name)
             if repeated_dfs and name == repeated_dfs.get('caller'):
@@ -1018,18 +1060,75 @@ class CodeAnalyzer:
                     'multiplier': 'O(V)',
                     'complexity': 'O(V + E)',
                 }]
-            line = self._find_function_line(code, name, language)
-            details[name] = {
-                'function': name,
+            line = record.get('line') or self._find_function_line(code, name, language)
+            details[display_name] = {
+                'function': display_name,
+                'simple_function': name,
                 'own_complexity': own,
                 'effective_complexity': effective,
                 'complexity': effective,
                 'reason': reason,
                 'calls': calls,
                 'line': line,
-                'snippet': self._function_snippet(code, line, language=language, func_name=name),
+                'snippet': record.get('snippet') or self._function_snippet(code, line, language=language, func_name=name),
             }
         return details
+
+    def _function_detail_records(self, code, language):
+        if language == 'python':
+            records = self._python_function_detail_records(code)
+            if records:
+                return records
+        return [
+            {
+                'name': name,
+                'display_name': name,
+                'line': self._find_function_line(code, name, language),
+                'body': None,
+                'snippet': None,
+            }
+            for name in self._function_names(code, language)
+        ]
+
+    def _python_function_detail_records(self, code):
+        try:
+            tree = ast.parse(code)
+        except SyntaxError:
+            return []
+        lines = code.splitlines()
+        raw_records = []
+
+        def visit_statements(statements, class_stack=(), func_stack=()):
+            for node in statements:
+                if isinstance(node, ast.ClassDef):
+                    visit_statements(node.body, class_stack + (node.name,), func_stack)
+                    continue
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    end_line = getattr(node, 'end_lineno', node.lineno)
+                    qual_parts = class_stack + func_stack + (node.name,)
+                    raw_records.append({
+                        'name': node.name,
+                        'qualname': '.'.join(qual_parts),
+                        'class_stack': class_stack,
+                        'line': node.lineno,
+                        'body': textwrap.dedent('\n'.join(lines[node.lineno:end_line])).strip(),
+                        'snippet': textwrap.dedent('\n'.join(lines[node.lineno - 1:end_line])).strip(),
+                    })
+                    visit_statements(node.body, class_stack, func_stack + (node.name,))
+
+        visit_statements(tree.body)
+        simple_counts = defaultdict(int)
+        for record in raw_records:
+            simple_counts[record['name']] += 1
+        records = []
+        for record in raw_records:
+            display_name = (
+                record['qualname']
+                if record['class_stack'] or simple_counts[record['name']] > 1
+                else record['name']
+            )
+            records.append({**record, 'display_name': display_name})
+        return records
 
     def _find_function_line(self, code, func_name, language):
         for line_number, line in enumerate(code.splitlines(), 1):
@@ -1311,16 +1410,16 @@ class CodeAnalyzer:
                 'reason': 'Memoized recursive slicing still pays O(n log n) for materialized memo keys and copied slices'
             }
 
-        if self._looks_like_recursive_slice_partition(func_name, body):
-            return {
-                'complexity': 'O(n log n)',
-                'reason': 'Divide-and-conquer recursion copies slices at each level, giving O(n log n) copied slices'
-            }
-
         if self._looks_like_recursive_resort_merge(func_name, body):
             return {
                 'complexity': self._tuple_to_string(('n_log2', 1)),
                 'reason': 'Recursive merge calls sorted(left + right), adding a sort at each merge level'
+            }
+
+        if self._looks_like_recursive_slice_partition(func_name, body):
+            return {
+                'complexity': 'O(n log n)',
+                'reason': 'Divide-and-conquer recursion copies slices at each level, giving O(n log n) copied slices'
             }
 
         if has_memo:
@@ -1694,11 +1793,15 @@ class CodeAnalyzer:
 
         ackermann = self._find_ackermann_function(code, language)
         if not ackermann:
+            if concrete_inputs is None:
+                return self._detect_fixed_entrypoint_literal_analysis(code, language)
             return None
         values = self._parse_concrete_input_values(concrete_inputs, ackermann['name'], ackermann['params'])
         if values is None:
             values = self._find_literal_call_values(code, ackermann['name'])
         if values is None:
+            if concrete_inputs is None:
+                return self._detect_fixed_entrypoint_literal_analysis(code, language)
             return None
         m, n = values
         exact = self._simulate_ackermann(m, n)
@@ -1720,6 +1823,132 @@ class CodeAnalyzer:
             'symbolic_space_complexity': 'O(A(m, n))',
             'reason': 'Exact concrete-input simulation for fixed Ackermann inputs'
         }
+
+    def _detect_fixed_entrypoint_literal_analysis(self, code, language):
+        if language not in ('cpp', 'c', 'java'):
+            return None
+
+        body = self._extract_function_body(code, 'main', language)
+        if not body:
+            return None
+        if self._has_runtime_input_source(code, language):
+            return None
+
+        literal_inputs = self._literal_entrypoint_inputs(body, language)
+        if not literal_inputs:
+            return None
+
+        time_result = self.detect_time_complexity(code, language)
+        symbolic_time = time_result.get('complexity')
+        if not symbolic_time or symbolic_time in ('O(1)', 'O(unknown)'):
+            return None
+        symbolic_space = self.detect_space_complexity(code, language)
+
+        return {
+            'available': True,
+            'kind': 'fixed_entrypoint_literals',
+            'function': 'main',
+            'inputs': literal_inputs,
+            'return_value': 'program output',
+            'time': 'bounded by fixed literal data in main()',
+            'space': 'bounded by fixed literal data in main()',
+            'fixed_input_time_complexity': 'O(1)',
+            'fixed_input_space_complexity': 'O(1)',
+            'symbolic_time_complexity': symbolic_time,
+            'symbolic_space_complexity': symbolic_space,
+            'reason': (
+                'The executable entrypoint builds its working data from fixed literals and does not read '
+                'runtime input. For this exact pasted program the run is constant-size'
+            ),
+        }
+
+    def _has_runtime_input_source(self, code, language):
+        patterns = [
+            r'\bargc\b', r'\bargv\b',
+            r'\b(?:std::)?cin\s*>>', r'\bgetline\s*\(\s*(?:std::)?cin\b',
+            r'\bscanf\s*\(', r'\bfscanf\s*\(', r'\bifstream\b', r'\bfstream\b',
+            r'\bScanner\s*\(', r'\bBufferedReader\b', r'\bSystem\.in\b',
+            r'\bargs\s*\[', r'\binput\s*\(', r'\bsys\.argv\b',
+            r'\bprocess\.argv\b', r'\bprompt\s*\(', r'\breadline\b',
+        ]
+        return any(re.search(pattern, code) for pattern in patterns)
+
+    def _literal_entrypoint_inputs(self, body, language):
+        inputs = {}
+        if language in ('cpp', 'c'):
+            vector_pattern = (
+                r'\b(?:std::)?vector\s*<[^;{}()=]+>\s+([A-Za-z_]\w*)\s*'
+                r'(?:=\s*)?\{([^{};]*)\}'
+            )
+            for name, contents in re.findall(vector_pattern, body, re.DOTALL):
+                count = self._count_literal_items(contents)
+                if count is not None:
+                    inputs[name] = count
+
+            flat_vector_pattern = (
+                r'\b(?:std::)?vector\s*<[^;{}()=]+>\s+([A-Za-z_]\w*)\s*=\s*([^;{}]+);'
+            )
+            for name, contents in re.findall(flat_vector_pattern, body, re.DOTALL):
+                if name in inputs:
+                    continue
+                if not re.search(r'["\']|-?\d', contents):
+                    continue
+                count = self._count_literal_items(contents)
+                if count is not None:
+                    inputs[name] = count
+
+            array_pattern = r'\b\w+(?:\s*\*)?\s+([A-Za-z_]\w*)\s*\[\s*\]\s*=\s*\{([^{};]*)\}'
+            for name, contents in re.findall(array_pattern, body, re.DOTALL):
+                count = self._count_literal_items(contents)
+                if count is not None:
+                    inputs[name] = count
+
+        if language == 'java':
+            array_pattern = (
+                r'\b(?:int|long|double|float|char|String|boolean)\s*\[\]\s+([A-Za-z_]\w*)\s*=\s*'
+                r'(?:new\s+\w+\s*\[\]\s*)?\{([^{};]*)\}'
+            )
+            for name, contents in re.findall(array_pattern, body, re.DOTALL):
+                count = self._count_literal_items(contents)
+                if count is not None:
+                    inputs[name] = count
+            for name, contents in re.findall(r'\bList\s*<[^>]+>\s+([A-Za-z_]\w*)\s*=\s*Arrays\.asList\s*\(([^;]*)\)', body, re.DOTALL):
+                count = self._count_literal_items(contents)
+                if count is not None:
+                    inputs[name] = count
+
+        return {
+            name: f'{count} literal item{"s" if count != 1 else ""}'
+            for name, count in inputs.items()
+        }
+
+    def _count_literal_items(self, contents):
+        text = str(contents or '').strip()
+        if not text:
+            return 0
+        depth = 0
+        count = 1
+        in_string = None
+        escaped = False
+        for char in text:
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif char == '\\':
+                    escaped = True
+                elif char == in_string:
+                    in_string = None
+                continue
+            if char in ('"', "'"):
+                in_string = char
+                continue
+            if char in '([{':
+                depth += 1
+            elif char in ')]}' and depth > 0:
+                depth -= 1
+            elif char == ',' and depth == 0:
+                count += 1
+        return count
 
     def _find_dfs_function(self, code, language):
         for name in self._function_names(code, language):
@@ -3385,6 +3614,89 @@ class CodeAnalyzer:
         ))
         return has_visited_guard and has_adjacency_loop and graph_context
 
+    def _looks_like_graph_bfs_function(self, name, body, full_code='', language='unknown'):
+        if not name or not body:
+            return False
+        compact = re.sub(r'\s+', ' ', body)
+        has_queue = bool(re.search(
+            r'\b(?:queue|q)\s*=|\bdeque\s*\(|\bQueue\s*<|\bLinkedList\s*<|'
+            r'\bstd::queue\s*<|\bnew\s+Queue\b',
+            compact,
+            re.IGNORECASE
+        ))
+        consumes_queue = bool(re.search(
+            r'\.(?:popleft|poll|pop|shift)\s*\(|\bpop\s*\(\s*0\s*\)|'
+            r'\b(?:queue|q)\s*\.front\s*\(',
+            compact,
+            re.IGNORECASE
+        ))
+        has_visited = bool(re.search(
+            r'\b(?:visited|seen|vis)\s*=\s*(?:set\s*\(|\{|\[)|'
+            r'\b(?:visited|seen|vis)\.(?:add|insert|push)\s*\(|'
+            r'\b(?:visited|seen|vis)\s*\[[^\]]+\]\s*=\s*true',
+            compact,
+            re.IGNORECASE
+        ))
+        has_adjacency_loop = bool(re.search(
+            r'for\s+(?:\w+\s+)?\w+\s+in\s+\w+\s*\[[^\]]+\]|'
+            r'for\s*\([^)]*:\s*\w+\.get\s*\([^)]+\)\s*\)|'
+            r'for\s*\([^)]*of\s+\w+\s*\[[^\]]+\][^)]*\)|'
+            r'for\s*\([^)]*:\s*\w+\s*\[[^\]]+\]\s*\)|'
+            r'\b(?:graph|adj|adjacency|g)\s*(?:\.get\s*\(|\[[^\]]+\])',
+            compact,
+            re.IGNORECASE
+        ))
+        graph_context = bool(re.search(
+            r'\b(?:graph|adj|adjacency|neighbor|neighbour|vertex|vertices|edge|edges)\b',
+            f'{full_code}\n{body}',
+            re.IGNORECASE
+        ))
+        return has_queue and consumes_queue and has_visited and has_adjacency_loop and graph_context
+
+    def _looks_like_dijkstra_function(self, name, body, full_code='', language='unknown'):
+        compact = re.sub(r'\s+', ' ', f'{full_code}\n{body}')
+        body_compact = re.sub(r'\s+', ' ', body)
+        has_name_or_heap = bool(re.search(r'\bdijkstra\b', name or '', re.IGNORECASE)) or bool(re.search(
+            r'\bheapq\b|\bheappush\s*\(|\bheappop\s*\(|\bPriorityQueue\s*<|\bpriority_queue\s*<',
+            compact
+        ))
+        if not has_name_or_heap:
+            return False
+        has_distances = bool(re.search(r'\b(?:dist|distance|distances)\b', body_compact, re.IGNORECASE))
+        has_heap_ops = bool(re.search(
+            r'\bheapq\.(?:heappush|heappop)\s*\(|\b(?:heappush|heappop)\s*\(|'
+            r'\.(?:offer|poll|push|pop)\s*\(',
+            body_compact
+        ))
+        has_relaxation = bool(re.search(
+            r'if\s+[^:\n{;]*<\s*(?:dist|distance|distances)|'
+            r'(?:dist|distance|distances)\s*\[[^\]]+\]\s*=',
+            body_compact,
+            re.IGNORECASE
+        ))
+        has_edge_loop = bool(re.search(
+            r'for\s+[^:\n]+in\s+(?:graph|adj|g)\s*\[[^\]]+\]|'
+            r'for\s*\([^)]*:\s*(?:graph|adj|g)\s*\[[^\]]+\]\s*\)',
+            body_compact,
+            re.IGNORECASE
+        ))
+        return has_distances and has_heap_ops and has_relaxation and has_edge_loop
+
+    def _looks_like_knapsack_dp_function(self, name, body, full_code='', language='unknown'):
+        compact = re.sub(r'\s+', ' ', body)
+        if not re.search(r'\bknapsack\b|capacity|weights?|values?', f'{name or ""} {compact}', re.IGNORECASE):
+            return False
+        has_dp_table = bool(re.search(
+            r'\bdp\s*=\s*\[\s*\[|new\s+\w+\s*\[[^\]]+\]\s*\[[^\]]+\]|'
+            r'\bvector\s*<\s*vector\b',
+            compact,
+            re.IGNORECASE
+        ))
+        loops_items = bool(re.search(r'for\s+\w+\s+in\s+range\s*\([^)]*\bn\b|for\s*\([^;]*\bi\b[^;]*\bn\b', compact))
+        loops_capacity = bool(re.search(r'for\s+\w+\s+in\s+range\s*\([^)]*(?:capacity|W|cap)|for\s*\([^;]*(?:capacity|W|cap)', compact))
+        recurrence = bool(re.search(r'\bdp\s*\[[^\]]+\]\s*\[[^\]]+\].*max\s*\(|Math\.max\s*\(|std::max\s*\(', compact))
+        return has_dp_table and loops_items and loops_capacity and recurrence
+
     def _looks_like_permutation_backtracking(self, code):
         code_lower = code.lower()
         has_permutation_name = bool(re.search(r'\b(permute|permutation|permutations|backtrack)\b', code_lower))
@@ -4205,7 +4517,7 @@ class CodeAnalyzer:
             'O(n log n) average, O(n²) worst': ('n', 2),
             'O(n + m) average': ('n', 1),
             'O(n/m) best, O(nm) worst': ('n', 2),
-            'O(m)': ('log', 1),
+            'O(m)': ('n', 1),
             'O(k)': ('const', 0),
             'O(k log M)': ('log', 1),
             'O(k³ log n)': ('n', 3),
@@ -4225,6 +4537,7 @@ class CodeAnalyzer:
             'O(expected)': ('n', 1),
             'O(2^n) worst, much better with good bounds': ('exp', 2),
             'O(b^(d/2))': ('exp', 2),
+            'O(n * W)': ('n', 2),
             'O(n × W)': ('n', 2),
             'O(n² × m)': ('n', 3),
             'O(n² × 2^n)': ('n_exp', 2),
@@ -4454,16 +4767,20 @@ class CodeAnalyzer:
             hash_vars.update(re.findall(r'\b(\w+)\s*=\s*\{', compact))
             hash_vars.update(re.findall(r'\b(\w+)\s*\.\s*add\s*\(', compact))
             list_vars = set(re.findall(r'\b(\w+)\s*=\s*\[\s*\]', compact))
-            for match in re.finditer(r'\b(\w+)\s+in\s+(\w+)\b', compact):
+            mapping_like_attributes = {'children', 'cache', 'memo', 'dict', 'map', 'mapping', 'table', 'index'}
+            for match in re.finditer(r'\b(\w+)\s+(?:not\s+)?in\s+([\w.]+)\b', compact):
                 prefix = compact[max(0, match.start() - 8):match.start()]
                 if re.search(r'\bfor\s*$', prefix):
                     continue
                 target = match.group(2)
+                target_name = target.rsplit('.', 1)[-1]
                 if target in hash_vars:
+                    continue
+                if target_name in hash_vars or target_name in mapping_like_attributes:
                     continue
                 depth = self._max_operation_loop_depth(code, rf'\b\w+\s+in\s+{re.escape(target)}\b')
                 complexity = self._polynomial_complexity(depth + 1)
-                grows_target = target in list_vars and re.search(rf'\b{re.escape(target)}\s*\.\s*append\s*\(', compact)
+                grows_target = target_name in list_vars and re.search(rf'\b{re.escape(target_name)}\s*\.\s*append\s*\(', compact)
                 return {
                     'detected': True,
                     'complexity': complexity,
@@ -4807,7 +5124,11 @@ class CodeAnalyzer:
         return code
 
     def _looks_like_recursive_slice_partition(self, func_name, body):
-        return bool(re.search(rf'\b{func_name}\s*\([^)]*\.slice\s*\(', body)) and bool(re.search(r'\.slice\s*\(', body))
+        escaped = re.escape(func_name)
+        js_slice = bool(re.search(rf'\b{escaped}\s*\([^)]*\.slice\s*\(', body)) and bool(re.search(r'\.slice\s*\(', body))
+        python_slice = bool(re.search(rf'\b{escaped}\s*\([^)]*\w+\s*\[[^:\]]*:[^\]]*\]', body))
+        has_halving = bool(re.search(r'\bmid\s*=|//\s*2|/\s*2', body))
+        return js_slice or (python_slice and has_halving)
 
     def _looks_like_memoized_recursive_slice_keys(self, func_name, body):
         return (

@@ -81,7 +81,16 @@ export default function Results() {
     const amortized = r?.amortized_analysis;
     const semantic = r?.semantic_analysis;
     const allocation = r?.memory_allocation_analysis;
+    const isFixedEntrypointRun = concrete?.kind === 'fixed_entrypoint_literals';
     const displaySpace = overall.space || space_complexity;
+    const displayTime = isFixedEntrypointRun
+      ? (overall.current_run_time || concrete?.fixed_input_time_complexity || 'O(1)')
+      : (overall.time || time_complexity);
+    const displayCurrentSpace = isFixedEntrypointRun
+      ? (overall.current_run_space || concrete?.fixed_input_space_complexity || 'O(1)')
+      : displaySpace;
+    const scalableTime = overall.scalable_time || time_complexity;
+    const scalableSpace = overall.scalable_space || displaySpace;
     const peakSpace = overall.peak_space || displaySpace;
     const totalAllocation = overall.total_allocation || allocation?.total_allocated_space;
     const hasDistinctAllocation = totalAllocation && totalAllocation !== displaySpace;
@@ -90,8 +99,9 @@ export default function Results() {
     const confidenceDetail = !Array.isArray(confidence?.notes) || confidence.notes.length === 0
       ? confidence?.reason || ''
       : '';
-    const hotspots = Array.isArray(r?.hotspots) ? r.hotspots : [];
-    const functionExplanations = Array.isArray(r?.function_explanations) ? r.function_explanations : [];
+    const rawHotspots = Array.isArray(r?.hotspots) ? r.hotspots : [];
+    const rawFunctionExplanations = Array.isArray(r?.function_explanations) ? r.function_explanations : [];
+    const functionDetails = Array.isArray(r?.function_complexity_details) ? r.function_complexity_details : [];
     const aiTransformed = r?.ai_transformed_code;
     const optimizedCode = aiTransformed?.available ? aiTransformed : null;
     const optimizedByAi = Boolean(aiTransformed?.available);
@@ -101,6 +111,31 @@ export default function Results() {
     const safeFilename = filename || getSafeFilename(data);
 
     const escapeRegExp = (value = '') => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const normalizeComplexity = (value = '') => String(value)
+      .toLowerCase()
+      .replace(/\s+/g, '')
+      .replace(/\u00b2/g, '^2')
+      .replace(/\u00b3/g, '^3')
+      .replace(/\u00d7/g, '*')
+      .replace(/²/g, '^2')
+      .replace(/³/g, '^3')
+      .replace(/×/g, '*');
+
+    const complexityRank = (value = '') => {
+      const label = normalizeComplexity(value);
+      if (!label || label.includes('unknown')) return 0;
+      if (label.includes('n!')) return 11;
+      if (label.includes('3^n')) return 10;
+      if (label.includes('2^n') || label.includes('φ') || label.includes('phi')) return 9;
+      if (label.includes('n^3') || label.includes('v^3')) return 8;
+      if (label.includes('n^2log') || label.includes('n^2*log')) return 7;
+      if (label.includes('n^2') || label.includes('n*w') || label.includes('n*capacity') || label.includes('v*e')) return 6;
+      if (label.includes('nlog') || label.includes('(v+e)log') || label.includes('elog')) return 4;
+      if (label.includes('v+e') || label === 'o(n)' || label.includes('o(n)')) return 3;
+      if (label.includes('sqrt')) return 2;
+      if (label.includes('log')) return 1;
+      return label.includes('n') ? 3 : 0;
+    };
 
     const normalizeAiSolution = (solution) => {
       if (!solution) return null;
@@ -114,6 +149,95 @@ export default function Results() {
     };
 
     const normalizeCodeForCompare = (code = '') => String(code).replace(/\r\n/g, '\n').trim();
+    const functionAliases = (name = '') => {
+      const raw = String(name || '').trim().toLowerCase();
+      if (!raw) return [];
+      const simple = raw.split('.').pop();
+      return Array.from(new Set([raw, simple].filter(Boolean)));
+    };
+    const functionNamesMatch = (left = '', right = '') => {
+      const leftAliases = functionAliases(left);
+      const rightAliases = new Set(functionAliases(right));
+      return leftAliases.some(alias => rightAliases.has(alias));
+    };
+    const codeMentionsFunction = (code = '', functionName = '') => {
+      const text = String(code || '');
+      return functionAliases(functionName).some(alias => {
+        const escaped = escapeRegExp(alias);
+        return (
+          new RegExp(`\\b${escaped}\\s*\\(`, 'i').test(text) ||
+          new RegExp(`\\bdef\\s+${escaped}\\s*\\(`, 'i').test(text) ||
+          new RegExp(`\\bfunction\\s+${escaped}\\s*\\(`, 'i').test(text)
+        );
+      });
+    };
+
+    const rawFunctionByName = new Map(
+      rawFunctionExplanations
+        .filter(item => item?.function)
+        .map(item => [String(item.function).toLowerCase(), item])
+    );
+    const detailByName = new Map(
+      functionDetails
+        .filter(item => item?.function)
+        .map(item => [String(item.function).toLowerCase(), item])
+    );
+    const functionExplanations = functionDetails.length > 0
+      ? functionDetails.map(detail => {
+          const existing = rawFunctionByName.get(String(detail.function || '').toLowerCase()) ||
+            rawFunctionExplanations.find(item => functionNamesMatch(item?.function, detail.function)) ||
+            {};
+          const detailOwn = detail.own_complexity || detail.complexity;
+          const detailEffective = detail.effective_complexity || detail.complexity || detailOwn;
+          const existingMatchesFacts =
+            normalizeComplexity(existing.own_complexity || existing.complexity) === normalizeComplexity(detailOwn) &&
+            normalizeComplexity(existing.effective_complexity || existing.complexity || existing.own_complexity) === normalizeComplexity(detailEffective);
+          return {
+            ...existing,
+            ...detail,
+            complexity: detailEffective,
+            own_complexity: detailOwn,
+            effective_complexity: detailEffective,
+            explanation: existingMatchesFacts && existing.explanation
+              ? existing.explanation
+              : (detail.reason || existing.explanation || 'Analyzer-owned function complexity.'),
+            snippet: detail.snippet || existing.snippet || '',
+            ai_solution: existing.ai_solution || detail.ai_solution,
+          };
+        })
+      : rawFunctionExplanations;
+
+    const derivedHotspots = (() => {
+      if (rawHotspots.length > 0 || functionExplanations.length === 0) return [];
+      const candidates = functionExplanations
+        .map(fn => ({
+          function: fn.function,
+          line: fn.line || 1,
+          complexity: fn.effective_complexity || fn.complexity || fn.own_complexity,
+          reason: fn.explanation || fn.reason || 'This function dominates the detected complexity.',
+          snippet: fn.snippet || '',
+          ai_solution: fn.ai_solution,
+          _rank: complexityRank(fn.effective_complexity || fn.complexity || fn.own_complexity),
+        }))
+        .filter(item => item.function && item._rank > complexityRank('O(n)'));
+      if (candidates.length === 0) return [];
+      const maxRank = Math.max(...candidates.map(item => item._rank));
+      return candidates
+        .filter(item => item._rank === maxRank)
+        .map(({ _rank, ...item }) => item);
+    })();
+
+    const hotspots = (rawHotspots.length > 0 ? rawHotspots : derivedHotspots).map(hotspot => {
+      const detail = detailByName.get(String(hotspot.function || '').toLowerCase());
+      if (!detail) return hotspot;
+      return {
+        ...hotspot,
+        complexity: detail.effective_complexity || detail.complexity || hotspot.complexity,
+        reason: detail.reason || hotspot.reason,
+        snippet: detail.snippet || hotspot.snippet,
+        ai_solution: hotspot.ai_solution || detail.ai_solution,
+      };
+    });
 
     const aiRewriteCandidates = [
       optimizedCode,
@@ -126,16 +250,13 @@ export default function Results() {
       if (direct) return direct;
 
       const functionName = String(hotspot?.function || '').trim();
-      const functionPattern = functionName
-        ? new RegExp(`\\b${escapeRegExp(functionName)}\\s*\\(`, 'i')
-        : null;
 
       return aiRewriteCandidates.find(candidate => {
         const candidateFunction = String(candidate.function || '').trim();
-        if (functionName && candidateFunction && candidateFunction.toLowerCase() === functionName.toLowerCase()) return true;
-        if (functionPattern?.test(candidate.code || '')) return true;
+        if (functionName && candidateFunction && functionNamesMatch(candidateFunction, functionName)) return true;
+        if (functionName && codeMentionsFunction(candidate.code, functionName)) return true;
         const metadata = `${candidate.title || ''} ${candidate.problem || ''} ${candidate.solution || ''} ${candidate.description || ''}`;
-        return functionName && metadata.toLowerCase().includes(functionName.toLowerCase());
+        return functionAliases(functionName).some(alias => metadata.toLowerCase().includes(alias));
       }) || null;
     };
 
@@ -145,12 +266,11 @@ export default function Results() {
 
       const functionName = String(fn?.function || '').trim();
       if (!functionName) return null;
-      const functionPattern = new RegExp(`\\b${escapeRegExp(functionName)}\\s*\\(`, 'i');
 
       return aiRewriteCandidates.find(candidate => {
         const candidateFunction = String(candidate.function || '').trim();
-        if (candidateFunction && candidateFunction.toLowerCase() === functionName.toLowerCase()) return true;
-        if (functionPattern.test(candidate.code || '')) return true;
+        if (candidateFunction && functionNamesMatch(candidateFunction, functionName)) return true;
+        if (codeMentionsFunction(candidate.code, functionName)) return true;
         return false;
       }) || null;
     };
@@ -215,14 +335,22 @@ export default function Results() {
                 <div style={{ fontSize: '11px', color: 'var(--gray)', fontWeight: '700', textTransform: 'uppercase', marginBottom: '4px' }}>
                   Time
                 </div>
-                <ComplexityBadge complexity={overall.time || time_complexity} />
+                <ComplexityBadge complexity={displayTime} />
               </div>
               <div>
                 <div style={{ fontSize: '11px', color: 'var(--gray)', fontWeight: '700', textTransform: 'uppercase', marginBottom: '4px' }}>
                   Space
                 </div>
-                <ComplexityBadge complexity={displaySpace} />
+                <ComplexityBadge complexity={displayCurrentSpace} />
               </div>
+              {isFixedEntrypointRun && (
+                <div>
+                  <div style={{ fontSize: '11px', color: 'var(--gray)', fontWeight: '700', textTransform: 'uppercase', marginBottom: '4px' }}>
+                    Scalable Time
+                  </div>
+                  <ComplexityBadge complexity={scalableTime} />
+                </div>
+              )}
               {totalAllocation && (
                 <div>
                   <div style={{ fontSize: '11px', color: 'var(--gray)', fontWeight: '700', textTransform: 'uppercase', marginBottom: '4px' }}>
@@ -255,9 +383,11 @@ export default function Results() {
             <div style={{ fontSize: '13px', color: 'var(--gray)', marginBottom: '12px', fontWeight: '500' }}>
               Time Complexity
             </div>
-            <ComplexityBadge complexity={time_complexity} />
+            <ComplexityBadge complexity={displayTime} />
             <div style={{ fontSize: '12px', color: 'var(--gray)', marginTop: '10px', lineHeight: '1.5' }}>
-              How execution time grows as input size increases
+              {isFixedEntrypointRun
+                ? `Current hardcoded run; scalable algorithm: ${scalableTime}`
+                : 'How execution time grows as input size increases'}
             </div>
           </div>
 
@@ -266,9 +396,11 @@ export default function Results() {
             <div style={{ fontSize: '13px', color: 'var(--gray)', marginBottom: '12px', fontWeight: '500' }}>
               Space Complexity
             </div>
-            <ComplexityBadge complexity={displaySpace} />
+            <ComplexityBadge complexity={displayCurrentSpace} />
             <div style={{ fontSize: '12px', color: 'var(--gray)', marginTop: '10px', lineHeight: '1.5' }}>
-              {r.space_complexity_reason || 'How peak memory usage grows as input size increases'}
+              {isFixedEntrypointRun
+                ? `Current hardcoded run; scalable algorithm: ${scalableSpace}`
+                : (r.space_complexity_reason || 'How peak memory usage grows as input size increases')}
             </div>
             {hasDistinctPeak && (
               <div style={{ fontSize: '12px', color: 'var(--gray)', marginTop: '8px', lineHeight: '1.5' }}>
@@ -318,7 +450,7 @@ export default function Results() {
           {concrete && (
             <div className="card" style={{ border: '1px solid var(--primary)', background: '#f8fbff' }}>
               <h3 style={{ fontSize: '16px', fontWeight: '600', marginBottom: '14px' }}>
-                Concrete Input Result
+                {isFixedEntrypointRun ? 'Current Pasted Run' : 'Concrete Input Result'}
               </h3>
               {concrete.available ? (
                 <>
@@ -328,10 +460,10 @@ export default function Results() {
                     gap: '12px',
                     marginBottom: '12px'
                   }}>
-                    {[
-                      ['Function', `${concrete.function}()`],
+                    {[ 
+                      ['Function', `${concrete.function || 'program'}()`],
                       ['Inputs', Object.entries(concrete.inputs || {}).map(([k, v]) => `${k}=${v}`).join(', ')],
-                      ['Return Value', concrete.return_value],
+                      ['Return Value', concrete.return_value ?? 'N/A'],
                       ['Time', concrete.time],
                       ['Space', concrete.space],
                       ['Fixed Big-O', `${concrete.fixed_input_time_complexity} time, ${concrete.fixed_input_space_complexity} space`],
@@ -347,7 +479,7 @@ export default function Results() {
                     ))}
                   </div>
                   <p style={{ fontSize: '13px', color: 'var(--gray)', lineHeight: '1.6', margin: 0 }}>
-                    {concrete.reason}. Symbolic growth remains {concrete.symbolic_time_complexity} when inputs are variable.
+                    {concrete.reason}. Scalable growth remains {concrete.symbolic_time_complexity} when those inputs are variable.
                   </p>
                 </>
               ) : (

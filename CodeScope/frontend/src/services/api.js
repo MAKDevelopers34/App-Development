@@ -9,7 +9,11 @@ const api = axios.create({
   timeout: 120000,
 });
 
+const sleep = (ms) => new Promise(resolve => window.setTimeout(resolve, ms));
+
 export const getApiErrorMessage = (err) => {
+  if (err.message && !err.response) return err.message;
+
   const backendError = err.response?.data?.error;
   if (backendError) return backendError;
 
@@ -30,8 +34,44 @@ export const analyzeCode = async (code, filename = 'code.py', concreteInputs = '
       payload.concrete_inputs = concreteInputs;
     }
   }
-  const response = await api.post('/api/analyze/code', payload);
+  const response = await api.post('/api/analyze/code', { ...payload, async: true });
+  if (response.data?.job_id) {
+    return pollAnalysisJob(response.data.job_id);
+  }
   return response.data;
+};
+
+export const pollAnalysisJob = async (jobId, options = {}) => {
+  const intervalMs = options.intervalMs || 2500;
+  const timeoutMs = options.timeoutMs || 150000;
+  const startedAt = Date.now();
+  let lastPollError = null;
+
+  while (Date.now() - startedAt < timeoutMs) {
+    await sleep(intervalMs);
+    try {
+      const response = await api.get(`/api/analyze/jobs/${jobId}`, { timeout: 30000 });
+      const payload = response.data;
+      lastPollError = null;
+      if (payload.status === 'completed' || payload.result) {
+        return payload;
+      }
+      if (payload.status === 'failed') {
+        throw new Error(payload.error || 'Backend analysis failed.');
+      }
+    } catch (err) {
+      if (err.response?.data?.status === 'failed') {
+        throw new Error(err.response.data.error || 'Backend analysis failed.');
+      }
+      if (err.response?.status === 404) {
+        throw new Error(err.response.data?.error || 'Analysis job was not found.');
+      }
+      lastPollError = err;
+    }
+  }
+
+  const detail = lastPollError ? ` Last poll error: ${getApiErrorMessage(lastPollError)}` : '';
+  throw new Error(`Analysis is still running after ${Math.round(timeoutMs / 1000)} seconds.${detail}`);
 };
 
 export const inferInputs = async (code, filename = 'code.py') => {

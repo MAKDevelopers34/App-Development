@@ -1,6 +1,8 @@
 import unittest
+import time
 from unittest.mock import patch
 
+from app import create_app
 from app.analyzer import CodeAnalyzer
 from app.ai_explainer import (
     _build_ai_optimization_prompt,
@@ -15,7 +17,7 @@ from app.ai_explainer import (
 )
 from app.github_fetcher import SUPPORTED_EXTENSIONS as GITHUB_SUPPORTED_EXTENSIONS
 from app.report_generator import generate_pdf_report
-from app.routes import SUPPORTED_CODE_EXTENSIONS, _analyze_with_extras, _build_batch_summary, _should_skip_batch_path
+from app.routes import ANALYSIS_JOBS, ANALYSIS_JOBS_LOCK, SUPPORTED_CODE_EXTENSIONS, _analyze_with_extras, _build_batch_summary, _should_skip_batch_path
 
 
 class AnalyzerComplexityTests(unittest.TestCase):
@@ -339,6 +341,224 @@ def main():
         self.assertNotIn("def matrix_multiply", details["generate_subsets"]["snippet"])
         self.assertTrue(details["backtrack"]["snippet"].startswith("def backtrack"))
         self.assertIn("    if index == len(nums):", details["backtrack"]["snippet"])
+
+    def test_algorithm_suite_reports_real_per_function_complexities_and_hotspots(self):
+        code = """from collections import deque, defaultdict
+import heapq
+
+def merge(left, right):
+    result = []
+    i = j = 0
+    while i < len(left) and j < len(right):
+        if left[i] < right[j]:
+            result.append(left[i])
+            i += 1
+        else:
+            result.append(right[j])
+            j += 1
+    result.extend(left[i:])
+    result.extend(right[j:])
+    return result
+
+def merge_sort(arr):
+    if len(arr) <= 1:
+        return arr
+    mid = len(arr) // 2
+    left = merge_sort(arr[:mid])
+    right = merge_sort(arr[mid:])
+    return merge(left, right)
+
+def binary_search(arr, target):
+    low = 0
+    high = len(arr) - 1
+    while low <= high:
+        mid = (low + high) // 2
+        if arr[mid] == target:
+            return mid
+        elif arr[mid] < target:
+            low = mid + 1
+        else:
+            high = mid - 1
+    return -1
+
+def bfs(graph, start):
+    visited = set()
+    queue = deque([start])
+    while queue:
+        node = queue.popleft()
+        if node in visited:
+            continue
+        visited.add(node)
+        for neighbor in graph[node]:
+            queue.append(neighbor)
+    return visited
+
+def dfs(graph, node, visited=None):
+    if visited is None:
+        visited = set()
+    visited.add(node)
+    for neighbor in graph[node]:
+        if neighbor not in visited:
+            dfs(graph, neighbor, visited)
+    return visited
+
+def dijkstra(graph, start):
+    pq = [(0, start)]
+    distances = {node: float('inf') for node in graph}
+    distances[start] = 0
+    while pq:
+        current_distance, node = heapq.heappop(pq)
+        if current_distance > distances[node]:
+            continue
+        for neighbor, weight in graph[node]:
+            distance = current_distance + weight
+            if distance < distances[neighbor]:
+                distances[neighbor] = distance
+                heapq.heappush(pq, (distance, neighbor))
+    return distances
+
+memo = {}
+def fibonacci(n):
+    if n <= 1:
+        return n
+    if n in memo:
+        return memo[n]
+    memo[n] = fibonacci(n - 1) + fibonacci(n - 2)
+    return memo[n]
+
+def generate_subsets(nums):
+    result = []
+    def backtrack(index, current):
+        if index == len(nums):
+            result.append(current[:])
+            return
+        current.append(nums[index])
+        backtrack(index + 1, current)
+        current.pop()
+        backtrack(index + 1, current)
+    backtrack(0, [])
+    return result
+
+def matrix_multiply(A, B):
+    n = len(A)
+    result = [[0] * n for _ in range(n)]
+    for i in range(n):
+        for j in range(n):
+            for k in range(n):
+                result[i][j] += A[i][k] * B[k][j]
+    return result
+
+def build_string(n):
+    s = ""
+    for i in range(n):
+        s += str(i)
+    return s
+
+def topological_sort(graph):
+    indegree = defaultdict(int)
+    for node in graph:
+        for neighbor in graph[node]:
+            indegree[neighbor] += 1
+    queue = deque()
+    for node in graph:
+        if indegree[node] == 0:
+            queue.append(node)
+    result = []
+    while queue:
+        node = queue.popleft()
+        result.append(node)
+        for neighbor in graph[node]:
+            indegree[neighbor] -= 1
+            if indegree[neighbor] == 0:
+                queue.append(neighbor)
+    return result
+"""
+
+        result = self.analyzer.analyze(code, "algorithms.py")
+        details = {item["function"]: item for item in result["function_complexity_details"]}
+        hotspots = {item["function"]: item for item in result["hotspots"]}
+
+        self.assertEqual(details["merge"]["own_complexity"], "O(n)")
+        self.assertEqual(details["merge_sort"]["own_complexity"], "O(n log n)")
+        self.assertEqual(details["binary_search"]["own_complexity"], "O(log n)")
+        self.assertEqual(details["bfs"]["own_complexity"], "O(V + E)")
+        self.assertEqual(details["dfs"]["own_complexity"], "O(V + E)")
+        self.assertEqual(details["dijkstra"]["own_complexity"], "O(E log V)")
+        self.assertEqual(details["fibonacci"]["own_complexity"], "O(n)")
+        self.assertEqual(details["generate_subsets"]["own_complexity"], "O(2^n)")
+        self.assertEqual(details["backtrack"]["own_complexity"], "O(2^n)")
+        self.assertEqual(details["matrix_multiply"]["own_complexity"], "O(n³)")
+        self.assertEqual(details["build_string"]["own_complexity"], "O(n²)")
+        self.assertIn("generate_subsets", hotspots)
+        self.assertIn("backtrack", hotspots)
+        self.assertNotEqual(details["merge"]["own_complexity"], "O(1)")
+        self.assertNotEqual(details["build_string"]["own_complexity"], "O(1)")
+
+    def test_python_class_methods_and_knapsack_are_reported_without_mixing(self):
+        code = """class TrieNode:
+    def __init__(self):
+        self.children = {}
+        self.end = False
+
+class Trie:
+    def __init__(self):
+        self.root = TrieNode()
+
+    def insert(self, word):
+        node = self.root
+        for char in word:
+            if char not in node.children:
+                node.children[char] = TrieNode()
+            node = node.children[char]
+        node.end = True
+
+    def search(self, word):
+        node = self.root
+        for char in word:
+            if char not in node.children:
+                return False
+            node = node.children[char]
+        return node.end
+
+class LRUCache:
+    def __init__(self, capacity):
+        self.capacity = capacity
+        self.cache = {}
+        self.order = []
+
+    def get(self, key):
+        if key not in self.cache:
+            return -1
+        self.order.remove(key)
+        self.order.append(key)
+        return self.cache[key]
+
+def knapsack(weights, values, capacity):
+    n = len(weights)
+    dp = [[0] * (capacity + 1) for _ in range(n + 1)]
+    for i in range(1, n + 1):
+        for w in range(capacity + 1):
+            if weights[i - 1] <= w:
+                dp[i][w] = max(values[i - 1] + dp[i - 1][w - weights[i - 1]], dp[i - 1][w])
+            else:
+                dp[i][w] = dp[i - 1][w]
+    return dp[n][capacity]
+"""
+
+        result = self.analyzer.analyze(code, "structures.py")
+        details = {item["function"]: item for item in result["function_complexity_details"]}
+
+        self.assertIn("TrieNode.__init__", details)
+        self.assertIn("Trie.__init__", details)
+        self.assertIn("LRUCache.__init__", details)
+        self.assertIn("Trie.insert", details)
+        self.assertIn("Trie.search", details)
+        self.assertIn("LRUCache.get", details)
+        self.assertEqual(details["Trie.insert"]["own_complexity"], "O(m)")
+        self.assertIn(details["Trie.search"]["own_complexity"], ("O(n)", "O(m)"))
+        self.assertEqual(details["LRUCache.get"]["own_complexity"], "O(n)")
+        self.assertEqual(details["knapsack"]["own_complexity"], "O(n * W)")
+        self.assertTrue(details["Trie.insert"]["snippet"].startswith("def insert"))
 
     def test_backtracking_pop_keeps_branching_path_space_linear(self):
         code = """function paths(n, path = []) {
@@ -1340,6 +1560,169 @@ function buildText(n) {
         self.assertEqual(optimized["buildText"]["code"], build_code)
         self.assertEqual(rows["buildText"]["ai_solution"]["code"], build_code)
         self.assertEqual(rows["buildText"]["ai_solution"]["source"], "groq")
+
+    def test_route_attaches_ai_solution_to_qualified_python_method_alias(self):
+        code = """class LRUCache:
+    def __init__(self, capacity):
+        self.capacity = capacity
+        self.cache = {}
+        self.order = []
+
+    def get(self, key):
+        if key not in self.cache:
+            return -1
+        self.order.remove(key)
+        self.order.append(key)
+        return self.cache[key]
+"""
+        get_code = """def get(self, key):
+    value = self.cache.get(key, -1)
+    if value == -1:
+        return -1
+    self.order.move_to_end(key)
+    return value
+"""
+
+        def discovered_method_alias(analysis_result, code_text, language):
+            return [{
+                "title": "Use ordered dictionary access",
+                "problem": "get removes from a list, which is linear.",
+                "solution": "Use an ordered mapping so recency updates are constant time.",
+                "complexity_before": "O(n)",
+                "complexity_after": "O(1)",
+                "example": get_code,
+                "ai_generated": True,
+                "ai_discovered": True,
+                "source": "groq",
+                "source_label": "Groq",
+                "function": "get",
+                "ai_note": "Groq returned a method-level rewrite for get.",
+            }]
+
+        with patch("app.routes.enhance_optimizations_with_ai", side_effect=discovered_method_alias), \
+             patch("app.routes.get_ai_explanation", return_value={
+                 "available": True,
+                 "why_this_complexity": "",
+                 "real_world_analogy": "",
+                 "performance_impact": "",
+                 "top_optimization": "",
+             }):
+            result = _analyze_with_extras(code, "cache.py")
+
+        rows = {item["function"]: item for item in result["function_explanations"]}
+        optimized = {item["function"]: item for item in result["ai_optimized_functions"]}
+        self.assertIn("LRUCache.get", rows)
+        self.assertIn("ai_solution", rows["LRUCache.get"])
+        self.assertEqual(rows["LRUCache.get"]["ai_solution"]["code"], get_code)
+        self.assertIn("LRUCache.get", optimized)
+        self.assertEqual(optimized["LRUCache.get"]["code"], get_code)
+
+    def test_route_canonicalizes_bad_ai_function_complexity_rows(self):
+        code = """def merge(left, right):
+    result = []
+    i = j = 0
+    while i < len(left) and j < len(right):
+        if left[i] < right[j]:
+            result.append(left[i])
+            i += 1
+        else:
+            result.append(right[j])
+            j += 1
+    result.extend(left[i:])
+    result.extend(right[j:])
+    return result
+
+def build_string(n):
+    s = ""
+    for i in range(n):
+        s += str(i)
+    return s
+"""
+
+        def wrong_rows(*args, **kwargs):
+            return [
+                {
+                    "function": "merge",
+                    "complexity": "O(1)",
+                    "own_complexity": "O(1)",
+                    "effective_complexity": "O(1)",
+                    "calls": [],
+                    "explanation": "No input-sized loops or recursive expansion were found.",
+                },
+                {
+                    "function": "build_string",
+                    "complexity": "O(1)",
+                    "own_complexity": "O(1)",
+                    "effective_complexity": "O(1)",
+                    "calls": [],
+                    "explanation": "No input-sized loops or recursive expansion were found.",
+                },
+            ]
+
+        with patch("app.routes.enhance_optimizations_with_ai", return_value=[]), \
+             patch("app.routes.get_ai_explanation", return_value={
+                 "available": True,
+                 "why_this_complexity": "",
+                 "real_world_analogy": "",
+                 "performance_impact": "",
+                 "top_optimization": "",
+             }), \
+             patch("app.routes.get_function_level_explanations", side_effect=wrong_rows):
+            result = _analyze_with_extras(code, "sample.py")
+
+        rows = {item["function"]: item for item in result["function_explanations"]}
+        self.assertEqual(rows["merge"]["own_complexity"], "O(n)")
+        self.assertEqual(rows["build_string"]["own_complexity"], "O(n²)")
+        self.assertIn("build_string", [item["function"] for item in result["hotspots"]])
+
+    def test_async_code_analysis_endpoint_returns_completed_job_payload(self):
+        app = create_app()
+        app.config["TESTING"] = True
+        fake_result = {
+            "language": "python",
+            "time_complexity": "O(n)",
+            "function_complexity_details": [
+                {
+                    "function": "run",
+                    "own_complexity": "O(n)",
+                    "effective_complexity": "O(n)",
+                    "complexity": "O(n)",
+                    "line": 1,
+                    "snippet": "def run(n):\n    for i in range(n):\n        pass",
+                }
+            ],
+            "hotspots": [],
+            "function_explanations": [],
+        }
+
+        try:
+            with patch("app.routes._analyze_with_extras", return_value=fake_result):
+                with app.test_client() as client:
+                    response = client.post("/api/analyze/code", json={
+                        "code": "def run(n):\n    for i in range(n):\n        pass\n",
+                        "filename": "sample.py",
+                        "async": True,
+                    })
+                    self.assertEqual(response.status_code, 202)
+                    job_id = response.get_json()["job_id"]
+
+                    completed = None
+                    for _ in range(50):
+                        poll = client.get(f"/api/analyze/jobs/{job_id}")
+                        self.assertIn(poll.status_code, (200, 500))
+                        payload = poll.get_json()
+                        if payload.get("status") == "completed":
+                            completed = payload
+                            break
+                        time.sleep(0.02)
+
+            self.assertIsNotNone(completed)
+            self.assertTrue(completed["success"])
+            self.assertTrue(completed["async"])
+            self.assertEqual(completed["result"]["time_complexity"], "O(n)")
+        finally:
+            with ANALYSIS_JOBS_LOCK:
+                ANALYSIS_JOBS.clear()
 
     def test_ai_rewrite_validation_rejects_changed_public_signature(self):
         original = """function hasDuplicate(nums) {
@@ -3017,6 +3400,80 @@ public class Perm {
         self.assertEqual(concrete["fixed_input_time_complexity"], "O(1)")
         self.assertEqual(concrete["fixed_input_space_complexity"], "O(1)")
         self.assertEqual(result["time_complexity"], "O(A(m, n))")
+
+    def test_hardcoded_cpp_huffman_reports_current_run_and_scalable_complexity(self):
+        code = r"""#include <iostream>
+#include <queue>
+#include <vector>
+#include <unordered_map>
+using namespace std;
+
+struct Node {
+    char data;
+    int freq;
+    Node* left;
+    Node* right;
+    Node(char data, int freq) {
+        this->data = data;
+        this->freq = freq;
+        left = right = nullptr;
+    }
+};
+
+struct Compare {
+    bool operator()(Node* a, Node* b) {
+        return a->freq > b->freq;
+    }
+};
+
+void generateCodes(Node* root, string code, unordered_map<char, string>& huffmanCode) {
+    if (root == nullptr)
+        return;
+    if (!root->left && !root->right) {
+        huffmanCode[root->data] = code;
+    }
+    generateCodes(root->left, code + "0", huffmanCode);
+    generateCodes(root->right, code + "1", huffmanCode);
+}
+
+int main() {
+    vector<char> chars = {'A', 'B', 'C', 'D', 'E', 'F'};
+    vector<int> freq = {5, 9, 12, 13, 16, 45};
+    priority_queue<Node*, vector<Node*>, Compare> pq;
+    for (int i = 0; i < chars.size(); i++) {
+        pq.push(new Node(chars[i], freq[i]));
+    }
+    while (pq.size() > 1) {
+        Node* left = pq.top();
+        pq.pop();
+        Node* right = pq.top();
+        pq.pop();
+        Node* merged = new Node('$', left->freq + right->freq);
+        merged->left = left;
+        merged->right = right;
+        pq.push(merged);
+    }
+    Node* root = pq.top();
+    unordered_map<char, string> huffmanCode;
+    generateCodes(root, "", huffmanCode);
+    for (auto pair : huffmanCode) {
+        cout << pair.first << " : " << pair.second << endl;
+    }
+    return 0;
+}"""
+
+        result = self.analyzer.analyze(code, "huffman.cpp")
+        concrete = result["concrete_analysis"]
+
+        self.assertEqual(result["time_complexity"], "O(n log n)")
+        self.assertEqual(result["space_complexity"], "O(n)")
+        self.assertEqual(concrete["kind"], "fixed_entrypoint_literals")
+        self.assertEqual(concrete["fixed_input_time_complexity"], "O(1)")
+        self.assertEqual(concrete["fixed_input_space_complexity"], "O(1)")
+        self.assertEqual(concrete["symbolic_time_complexity"], "O(n log n)")
+        self.assertIn("chars=6 literal items", ", ".join(f"{k}={v}" for k, v in concrete["inputs"].items()))
+        self.assertIn("O(1) current run", result["overall_complexity"]["headline"])
+        self.assertIn("O(n log n) scalable time", result["overall_complexity"]["headline"])
 
 
 if __name__ == "__main__":
