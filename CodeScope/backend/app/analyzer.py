@@ -874,6 +874,11 @@ class CodeAnalyzer:
                 'complexity': 'O(V + E)',
                 'reason': 'DFS graph traversal visits reachable vertices once and scans outgoing edges with a shared visited structure'
             }
+        if self._looks_like_ordered_dict_constant_method(name, body, full_code, language):
+            return {
+                'complexity': 'O(1)',
+                'reason': 'OrderedDict recency operations use hash-table lookup plus linked-order updates'
+            }
         binary_search = self.detect_binary_search_pattern(body, language)
         if binary_search.get('detected'):
             return binary_search
@@ -909,7 +914,7 @@ class CodeAnalyzer:
         if self.detect_recursive_ordered_map_access(full_code, language).get('detected') and re.search(rf'\b{name}\s*\([^)]*(?:-\s*1|\+\s*1)', body):
             return {'complexity': 'O(n log n)', 'reason': 'TreeMap/tree-map update in linear recursion'}
         line = self._find_function_line(full_code, name, language)
-        function_context = self._function_snippet(full_code, line, max_lines=30)
+        function_context = self._function_snippet(full_code, line, language, max_lines=30)
         ordered_tree_drain = self.detect_ordered_tree_drain(function_context or body, language)
         if ordered_tree_drain.get('detected'):
             return ordered_tree_drain
@@ -934,6 +939,30 @@ class CodeAnalyzer:
             if detected.get('detected'):
                 return detected
         return None
+
+    def _looks_like_ordered_dict_constant_method(self, name, body, full_code, language):
+        if language != 'python' or 'OrderedDict' not in full_code:
+            return False
+
+        if re.search(r'\bOrderedDict\s*\(', body) and not re.search(r'\b(?:for|while)\b', body):
+            return True
+
+        ordered_attrs = set(re.findall(r'\b(self\.\w+)\s*=\s*OrderedDict\s*\(', full_code))
+        if not ordered_attrs:
+            return False
+
+        for attr in ordered_attrs:
+            escaped = re.escape(attr)
+            if not re.search(escaped, body):
+                continue
+            if re.search(rf'{escaped}\.move_to_end\s*\(', body):
+                return True
+            if re.search(rf'{escaped}\.popitem\s*\(', body):
+                return True
+            if re.search(rf'\b\w+\s+(?:not\s+)?in\s+{escaped}\b', body) and name in ('get', 'put', '__contains__'):
+                return True
+
+        return False
 
     def _extract_function_own_complexities(self, code, language):
         complexities = {}
@@ -1018,7 +1047,7 @@ class CodeAnalyzer:
                 'reason': reason,
                 'calls': calls,
                 'line': line,
-                'snippet': self._function_snippet(code, line),
+                'snippet': self._function_snippet(code, line, language),
             }
         return details
 
@@ -1034,12 +1063,63 @@ class CodeAnalyzer:
                 return line_number
         return 1
 
-    def _function_snippet(self, code, start_line, max_lines=18):
+    def _function_snippet(self, code, start_line, language=None, max_lines=18):
         lines = code.splitlines()
         if not lines:
             return ''
         start = max(0, (start_line or 1) - 1)
-        return '\n'.join(lines[start:start + max_lines]).strip()
+        end = self._function_snippet_end(lines, start, language, max_lines)
+        return '\n'.join(lines[start:end]).strip()
+
+    def _function_snippet_end(self, lines, start, language=None, max_lines=18):
+        hard_end = min(len(lines), start + max_lines)
+        if start >= len(lines):
+            return hard_end
+
+        if language == 'python' or self._line_starts_python_block(lines[start]):
+            base_indent = self._line_indent(lines[start])
+            for index in range(start + 1, hard_end):
+                if not lines[index].strip():
+                    continue
+                if self._line_indent(lines[index]) <= base_indent:
+                    return index
+            return hard_end
+
+        if language in ('java', 'cpp', 'c', 'javascript', 'typescript') or self._line_starts_function(lines[start], language):
+            depth = 0
+            seen_open = False
+            for index in range(start, hard_end):
+                line = lines[index]
+                if '{' in line:
+                    seen_open = True
+                depth += line.count('{') - line.count('}')
+                if seen_open and depth <= 0:
+                    return index + 1
+
+            if not seen_open:
+                for index in range(start + 1, hard_end):
+                    if self._line_starts_function(lines[index], language):
+                        return index
+                    if ';' in lines[index]:
+                        return index + 1
+
+        return hard_end
+
+    def _line_indent(self, line):
+        expanded = line.expandtabs(4)
+        return len(expanded) - len(expanded.lstrip())
+
+    def _line_starts_function(self, line, language=None):
+        stripped = line.strip()
+        if not stripped:
+            return False
+        if language == 'python' or self._line_starts_python_block(line):
+            return self._line_starts_python_block(line)
+        return bool(re.match(self._function_def_regex(), stripped))
+
+    def _line_starts_python_block(self, line):
+        stripped = line.strip()
+        return stripped.startswith(('def ', 'async def ', 'class '))
 
     def _build_hotspots(self, details):
         if isinstance(details, dict):

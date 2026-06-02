@@ -1,54 +1,106 @@
-export default function ComplexityBadge({ complexity }) {
-  const getStyle = () => {
-    const good = ['O(1)', 'O(log n)', 'O(log² n)', 'O(log³ n)'];
-    const medium = ['O(n)', 'O(n log n)'];
-    if (good.includes(complexity)) {
-      return { background: '#e6f4ea', color: '#34a853', border: '1px solid #34a853' };
-    } else if (medium.includes(complexity)) {
-      return { background: '#fef7e0', color: '#b06000', border: '1px solid #fbbc04' };
-    } else {
-      return { background: '#fce8e6', color: '#ea4335', border: '1px solid #ea4335' };
-    }
-  };
+const normalizeComplexity = (value = '') => String(value || '')
+  .toLowerCase()
+  .replace(/\s+/g, '')
+  .replace(/\u00c2\u00b2/g, '^2')
+  .replace(/\u00c2\u00b3/g, '^3')
+  .replace(/\u00b2/g, '^2')
+  .replace(/\u00b3/g, '^3')
+  .replace(/\u00d7/g, '*')
+  .replace(/\u03c6/g, 'phi')
+  .replace(/\u00c2/g, '');
 
-  const getLabel = () => {
-    const labels = {
-      'O(1)': 'Excellent',
-      'O(log n)': 'Great',
-      'O(log² n)': 'Great',
-      'O(log³ n)': 'Great',
-      'O(n)': 'Good',
-      'O(n log n)': 'Fair',
-      'O((log n)!)': 'Critical',
-      'O(n²)': 'Poor',
-      'O(n³)': 'Critical'
+const classifyComplexity = (complexity = '') => {
+  const normalized = normalizeComplexity(complexity);
+
+  if (!normalized || normalized.includes('unknown')) {
+    return {
+      label: 'Unknown',
+      style: { background: '#eef2f7', color: '#475569', border: '1px solid #cbd5e1' },
     };
-    labels['O(n^((log n + 1)/2))'] = 'Critical';
-    labels['O(n^log n)'] = 'Critical';
-    labels['O(n) average, O(n²) worst'] = 'Worst-case risk';
-    labels['O(n²) average, O(n³) worst'] = 'Critical risk';
-    return labels[complexity] || '';
+  }
+
+  const worstCaseRisk = normalized.includes('average') && normalized.includes('worst');
+  const hasFactorial = normalized.includes('!') || normalized.includes('factorial');
+  const hasExponential = /(\^n|2\*\*n|2\^n|3\^n|phi\^n)/.test(normalized);
+  const hasCubic = /(\^3|n3|v3)/.test(normalized);
+  const hasQuadratic = /(\^2|n2|v2|n\*n|v\*e|n\*w)/.test(normalized);
+  const hasNLogN = /(nlog|n\*log|elog|\(v\+e\)log)/.test(normalized);
+  const hasLinear = /(o\(n\)|\bn\b|v\+e|n\+m|n\+k|m\+n)/.test(normalized);
+  const hasLog = normalized.includes('log') || normalized.includes('sqrt');
+
+  if (hasFactorial || hasExponential || normalized.includes('ackermann')) {
+    return {
+      label: 'Critical',
+      style: { background: '#fce8e6', color: '#b42318', border: '1px solid #ea4335' },
+    };
+  }
+
+  if (hasCubic || worstCaseRisk) {
+    return {
+      label: 'High',
+      style: { background: '#fff1f2', color: '#be123c', border: '1px solid #fb7185' },
+    };
+  }
+
+  if (hasQuadratic) {
+    return {
+      label: 'Costly',
+      style: { background: '#fff7ed', color: '#c2410c', border: '1px solid #fdba74' },
+    };
+  }
+
+  if (hasNLogN) {
+    return {
+      label: 'Fair',
+      style: { background: '#fef7e0', color: '#b06000', border: '1px solid #fbbc04' },
+    };
+  }
+
+  if (hasLinear) {
+    return {
+      label: 'Good',
+      style: { background: '#e6f4ea', color: '#137333', border: '1px solid #34a853' },
+    };
+  }
+
+  if (normalized.includes('o(1)') || hasLog) {
+    return {
+      label: 'Great',
+      style: { background: '#e0f2fe', color: '#0369a1', border: '1px solid #38bdf8' },
+    };
+  }
+
+  return {
+    label: '',
+    style: { background: '#eef2f7', color: '#475569', border: '1px solid #cbd5e1' },
   };
+};
+
+export default function ComplexityBadge({ complexity }) {
+  const value = complexity || 'O(unknown)';
+  const { label, style } = classifyComplexity(value);
 
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
       <span style={{
-        ...getStyle(),
+        ...style,
         padding: '6px 14px',
         borderRadius: '20px',
         fontSize: '14px',
         fontWeight: '600',
         fontFamily: 'var(--font-code)'
       }}>
-        {complexity}
+        {value}
       </span>
-      <span style={{
-        fontSize: '12px',
-        color: 'var(--gray)',
-        fontWeight: '500'
-      }}>
-        {getLabel()}
-      </span>
+      {label && (
+        <span style={{
+          fontSize: '12px',
+          color: 'var(--gray)',
+          fontWeight: '500'
+        }}>
+          {label}
+        </span>
+      )}
     </div>
   );
 }

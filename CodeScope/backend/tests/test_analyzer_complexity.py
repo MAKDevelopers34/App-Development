@@ -916,7 +916,7 @@ def power(matrix, n):
         self.assertEqual(merged[0]["function"], "hasDuplicate")
         self.assertEqual(merged[0]["complexity_after"], "O(n)")
 
-    def test_ai_discovery_prompt_sends_expensive_function_snippets(self):
+    def test_ai_discovery_prompt_sends_every_function_snippet(self):
         code = """function hasDuplicate(nums) {
     for (let i = 0; i < nums.length; i++) {
         for (let j = i + 1; j < nums.length; j++) {
@@ -936,15 +936,146 @@ function alreadyCheap(nums) {
         prompt = _build_ai_optimization_prompt(result, code, "javascript", [], targets)
 
         self.assertTrue(any(target["function"] == "hasDuplicate" for target in targets))
-        self.assertFalse(any(target["function"] == "alreadyCheap" for target in targets))
+        self.assertTrue(any(target["function"] == "alreadyCheap" for target in targets))
         duplicate_target = next(target for target in targets if target["function"] == "hasDuplicate")
         self.assertEqual(duplicate_target["effective_complexity"], "O(n²)")
         self.assertIn("snippet", duplicate_target)
         self.assertIn("if (nums[i] === nums[j]) return true;", duplicate_target["snippet"])
-        self.assertIn("Independently inspect each expensive function target", prompt)
-        self.assertIn("EXPENSIVE FUNCTIONS FOR INDEPENDENT AI DISCOVERY", prompt)
+        self.assertIn("Independently inspect every function rewrite target", prompt)
+        self.assertIn("ALL FUNCTIONS FOR GROQ REWRITE CHECK", prompt)
         self.assertIn('"function": "hasDuplicate"', prompt)
+        self.assertIn('"function": "alreadyCheap"', prompt)
         self.assertIn('"snippet"', prompt)
+
+    def test_ai_discovery_targets_known_lower_complexity_patterns(self):
+        code = """memo = {}
+def fibonacci(n):
+    if n <= 1:
+        return n
+    if n in memo:
+        return memo[n]
+    memo[n] = fibonacci(n - 1) + fibonacci(n - 2)
+    return memo[n]
+
+class LRUCache:
+    def __init__(self, capacity):
+        self.capacity = capacity
+        self.cache = {}
+        self.order = []
+
+    def get(self, key):
+        if key not in self.cache:
+            return -1
+        self.order.remove(key)
+        self.order.append(key)
+        return self.cache[key]
+
+    def put(self, key, value):
+        if key in self.cache:
+            self.order.remove(key)
+        elif len(self.cache) >= self.capacity:
+            oldest = self.order.pop(0)
+            del self.cache[oldest]
+        self.cache[key] = value
+        self.order.append(key)
+
+def build_string(n):
+    s = ""
+    for i in range(n):
+        s += str(i)
+    return s
+
+def binary_search(arr, target):
+    low = 0
+    high = len(arr) - 1
+    while low <= high:
+        mid = (low + high) // 2
+        if arr[mid] == target:
+            return mid
+        if arr[mid] < target:
+            low = mid + 1
+        else:
+            high = mid - 1
+    return -1
+"""
+
+        result = self.analyzer.analyze(code, "sample.py")
+        targets = _expensive_function_targets(result)
+        by_name = {target["function"]: target for target in targets}
+
+        self.assertIn("build_string", by_name)
+        self.assertIn("fibonacci", by_name)
+        self.assertIn("get", by_name)
+        self.assertIn("put", by_name)
+        self.assertIn("binary_search", by_name)
+        self.assertEqual(by_name["build_string"]["rewrite_hint"]["kind"], "string_builder_join")
+        self.assertEqual(by_name["fibonacci"]["rewrite_hint"]["kind"], "fibonacci_fast_doubling")
+        self.assertEqual(by_name["get"]["rewrite_hint"]["kind"], "lru_ordered_dict")
+        self.assertNotIn("rewrite_hint", by_name["binary_search"])
+
+    def test_ordered_dict_lru_rewrite_validates_function_complexity(self):
+        original = """class LRUCache:
+    def __init__(self, capacity):
+        self.capacity = capacity
+        self.cache = {}
+        self.order = []
+
+    def get(self, key):
+        if key not in self.cache:
+            return -1
+        self.order.remove(key)
+        self.order.append(key)
+        return self.cache[key]
+
+    def put(self, key, value):
+        if key in self.cache:
+            self.order.remove(key)
+        elif len(self.cache) >= self.capacity:
+            oldest = self.order.pop(0)
+            del self.cache[oldest]
+        self.cache[key] = value
+        self.order.append(key)
+"""
+        optimized = """from collections import OrderedDict
+
+class LRUCache:
+    def __init__(self, capacity):
+        self.capacity = capacity
+        self.cache = OrderedDict()
+
+    def get(self, key):
+        if key not in self.cache:
+            return -1
+        self.cache.move_to_end(key)
+        return self.cache[key]
+
+    def put(self, key, value):
+        if key in self.cache:
+            self.cache.move_to_end(key)
+        elif len(self.cache) >= self.capacity:
+            self.cache.popitem(last=False)
+        self.cache[key] = value
+"""
+
+        get_validation = _validate_ai_rewrite_complexity(
+            optimized,
+            "python",
+            "O(n)",
+            original_code=original,
+            required_function="get",
+        )
+        put_validation = _validate_ai_rewrite_complexity(
+            optimized,
+            "python",
+            "O(n)",
+            original_code=original,
+            required_function="put",
+        )
+
+        self.assertTrue(get_validation["valid"])
+        self.assertTrue(put_validation["valid"])
+        self.assertEqual(get_validation["complexity"], "O(1)")
+        self.assertEqual(put_validation["complexity"], "O(1)")
 
     def test_groq_discovery_accepts_verified_rewrites(self):
         code = """function hasDuplicate(nums) {

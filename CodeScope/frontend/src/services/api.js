@@ -7,9 +7,16 @@ const api = axios.create({
   timeout: 120000,
 });
 
-// ─── Analyze pasted code ────────────────────────────────────
+export const getApiErrorMessage = (error, fallback = 'Request failed. Please try again.') => (
+  error?.response?.data?.error ||
+  error?.response?.data?.message ||
+  error?.message ||
+  fallback
+);
+
 export const analyzeCode = async (code, filename = 'code.py', concreteInputs = '') => {
   const payload = { code, filename };
+
   if (concreteInputs) {
     if (typeof concreteInputs === 'string') {
       if (concreteInputs.trim()) payload.concrete_inputs = concreteInputs.trim();
@@ -17,6 +24,7 @@ export const analyzeCode = async (code, filename = 'code.py', concreteInputs = '
       payload.concrete_inputs = concreteInputs;
     }
   }
+
   const response = await api.post('/api/analyze/code', payload);
   return response.data;
 };
@@ -26,29 +34,28 @@ export const inferInputs = async (code, filename = 'code.py') => {
   return response.data;
 };
 
-// ─── Analyze ZIP file ───────────────────────────────────────
 export const analyzeZip = async (file) => {
   const formData = new FormData();
   formData.append('file', file);
+
   const response = await api.post('/api/analyze/zip', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
   });
   return response.data;
 };
 
-// ─── Analyze GitHub URL ─────────────────────────────────────
 export const analyzeGithub = async (url) => {
   const response = await api.post('/api/analyze/github', { url });
   return response.data;
 };
 
-// ─── Download PDF report ────────────────────────────────────
 export const downloadReport = async (analysisData, reportType = 'code') => {
   const response = await api.post(
     '/api/report',
     { analysis_data: analysisData, report_type: reportType },
     { responseType: 'blob' }
   );
+
   const url = window.URL.createObjectURL(new Blob([response.data]));
   const link = document.createElement('a');
   link.href = url;
@@ -56,6 +63,7 @@ export const downloadReport = async (analysisData, reportType = 'code') => {
   document.body.appendChild(link);
   link.click();
   link.remove();
+  window.URL.revokeObjectURL(url);
 };
 
 export default api;
