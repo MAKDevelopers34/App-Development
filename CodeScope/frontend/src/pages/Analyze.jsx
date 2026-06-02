@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDropzone } from 'react-dropzone';
-import { analyzeCode, analyzeZip, analyzeGithub, getApiErrorMessage, inferInputs } from '../services/api';
+import { analyzeCode, analyzeZip, analyzeGithub, inferInputs } from '../services/api';
 
 const splitParams = (raw = '') => {
   const params = [];
@@ -229,7 +229,7 @@ export default function Analyze() {
       }
 
     } catch (err) {
-      setError(getApiErrorMessage(err));
+      setError(err.response?.data?.error || 'Something went wrong. Make sure the backend is running.');
     } finally {
       setLoading(false);
     }
