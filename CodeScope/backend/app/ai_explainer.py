@@ -158,7 +158,7 @@ def enhance_optimizations_with_ai(analysis_result, code, language):
         prompt = _build_ai_optimization_prompt(
             analysis_result, code, language, optimizations, discovery_targets
         )
-        ai_response = _call_ai_completion(prompt, max_tokens=3600, return_source=True)
+        ai_response = _call_ai_completion(prompt, max_tokens=1600, return_source=True)
         if isinstance(ai_response, tuple):
             content, provider = ai_response
         else:
@@ -432,9 +432,9 @@ def _expensive_function_targets(analysis_result):
             'line': detail.get('line'),
             'own_complexity': own,
             'effective_complexity': complexity,
-            'reason': detail.get('reason', ''),
-            'calls': detail.get('calls') or [],
-            'snippet': snippet[:1800],
+            'reason': _compact_text(detail.get('reason', ''), 180),
+            'calls': _compact_calls(detail.get('calls') or []),
+            'snippet': _compact_code_snippet(snippet, 900),
         }
         if rewrite_hint:
             target['rewrite_hint'] = rewrite_hint
@@ -458,6 +458,62 @@ def _rewrite_target_sort_key(target):
     except Exception:
         rank = 0
     return (priority, -rank, int(target.get('line') or 0))
+
+
+def _compact_text(value, limit=240):
+    text = re.sub(r'\s+', ' ', str(value or '')).strip()
+    if len(text) <= limit:
+        return text
+    return text[:max(0, limit - 3)].rstrip() + '...'
+
+
+def _compact_calls(calls):
+    compact = []
+    for call in (calls or [])[:4]:
+        if not isinstance(call, dict):
+            continue
+        compact.append({
+            'function': call.get('function'),
+            'multiplier': call.get('multiplier'),
+            'complexity': call.get('complexity'),
+        })
+    return compact
+
+
+def _compact_code_snippet(snippet, limit=900):
+    text = str(snippet or '').strip()
+    if len(text) <= limit:
+        return text
+
+    lines = text.splitlines()
+    kept = []
+    used = 0
+    for line in lines:
+        next_used = used + len(line) + 1
+        if next_used > limit:
+            break
+        kept.append(line)
+        used = next_used
+    if kept:
+        return '\n'.join(kept).rstrip() + '\n# ... truncated for Groq token budget'
+    return text[:max(0, limit - 40)].rstrip() + '\n# ... truncated for Groq token budget'
+
+
+def _compact_rewrite_target(target):
+    if not isinstance(target, dict):
+        return {}
+    compact = {
+        'function': target.get('function'),
+        'line': target.get('line'),
+        'own_complexity': target.get('own_complexity'),
+        'effective_complexity': target.get('effective_complexity'),
+        'reason': _compact_text(target.get('reason', ''), 180),
+        'calls': _compact_calls(target.get('calls') or []),
+        'snippet': _compact_code_snippet(target.get('snippet', ''), 900),
+    }
+    if target.get('rewrite_hint'):
+        compact['rewrite_hint'] = target.get('rewrite_hint')
+    return compact
 
 
 def _known_lower_complexity_rewrite_hint(detail):
@@ -563,7 +619,6 @@ def _is_low_value_ai_rewrite_target(complexity):
 
 
 def _build_ai_optimization_prompt(analysis_result, code, language, optimizations, discovery_targets=None):
-    function_details = analysis_result.get('function_complexity_details') or []
     input_schema = analysis_result.get('input_schema') or {}
     discovery_targets = discovery_targets or []
 
@@ -578,32 +633,30 @@ def _build_ai_optimization_prompt(analysis_result, code, language, optimizations
             'solution': opt.get('solution'),
             'complexity_before': opt.get('complexity_before'),
             'complexity_after': opt.get('complexity_after'),
-            'analyzer_example': opt.get('example'),
+            'analyzer_example': _compact_code_snippet(opt.get('example'), 700),
         })
 
-    return f"""You are CodeScope's optimization-code generator. CodeScope's analyzer has already detected function complexities. Your job is to inspect the exact code, then:
+    compact_targets = [_compact_rewrite_target(target) for target in discovery_targets]
+    compact_facts = {
+        'language': language,
+        'time_complexity': analysis_result.get('time_complexity'),
+        'space_complexity': analysis_result.get('space_complexity'),
+        'reason': _compact_text(analysis_result.get('time_complexity_reason', ''), 220),
+        'input_schema': input_schema,
+    }
+
+    return f"""You are CodeScope's optimization-code generator. CodeScope's analyzer has already detected function complexities. Your job is to inspect the exact function snippets, then:
 1. Improve any analyzer optimization candidates with code-specific rewrites.
 2. Independently inspect every function rewrite target and return a same-input/same-output lower-complexity rewrite only when one exists.
 
-ORIGINAL CODE:
-```{language}
-{code[:12000]}
-```
-
 ANALYZER FACTS:
-- Language: {language}
-- Overall Complexity: {json.dumps(analysis_result.get('overall_complexity'), ensure_ascii=False)}
-- Time Complexity: {analysis_result.get('time_complexity')}
-- Space Complexity: {analysis_result.get('space_complexity')}
-- Reason: {analysis_result.get('time_complexity_reason', '')}
-- Input Schema: {json.dumps(input_schema, ensure_ascii=False)}
-- Function Details: {json.dumps(function_details, ensure_ascii=False)}
+{json.dumps(compact_facts, ensure_ascii=False)}
 
 OPTIMIZATION CANDIDATES:
 {json.dumps(candidates, ensure_ascii=False)}
 
 ALL FUNCTIONS FOR GROQ REWRITE CHECK:
-{json.dumps(discovery_targets, ensure_ascii=False)}
+{json.dumps(compact_targets, ensure_ascii=False)}
 
 Rules:
 - Return a code-specific optimized version only when you can preserve the original function/class behavior for the same valid inputs.
@@ -612,7 +665,7 @@ Rules:
 - Return every lower-complexity function rewrite you can verify in discovered_optimizations. Do not stop after one function when multiple functions can be improved.
 - Use optimizations only for OPTIMIZATION CANDIDATES by index. If OPTIMIZATION CANDIDATES is empty, optimizations must be an empty array.
 - If a target has rewrite_hint, use that hint as the preferred direction, but still preserve behavior and verify that the replacement has lower Big-O.
-- Prefer rewriting the exact target function, but include any helper needed for complete usable code.
+- Prefer rewriting the exact target function from its snippet, but include any helper needed for complete usable code.
 - Preserve public function/class names and parameters unless the candidate explicitly requires helper parameters.
 - The code field must contain complete code in the same language, not pseudocode and not a comment-only strategy list.
 - Do not invent unrelated features, I/O prompts, console code, tests, or external dependencies.
@@ -1381,6 +1434,21 @@ def _provider_order():
     return ('groq', 'grok')
 
 
+def _format_ai_provider_error(provider_label, exc):
+    raw = str(exc or '')
+    lowered = raw.lower()
+    if 'rate_limit_exceeded' in lowered or 'tokens per minute' in lowered or 'request too large' in lowered:
+        return (
+            f'{provider_label} API limit reached: the request was too large for the current token-per-minute tier. '
+            'CodeScope now sends a smaller rewrite request; please try again in a minute.'
+        )
+    if 'invalid_api_key' in lowered or 'incorrect api key' in lowered or '401' in lowered:
+        return f'{provider_label} API key was rejected. Check the deployed GROQ_API_KEY/GROK_API_KEY environment variable.'
+    if 'connection error' in lowered or 'failed to establish' in lowered or 'timed out' in lowered:
+        return f'{provider_label} API connection failed. Check backend internet access and try again.'
+    return f'{provider_label} API error: {_compact_text(raw, 220)}'
+
+
 def _call_ai_completion(prompt, max_tokens=900, return_source=False):
     _set_last_ai_provider_error('')
     last_error = None
@@ -1413,8 +1481,9 @@ def _call_ai_completion(prompt, max_tokens=900, return_source=False):
                 return (content, 'grok') if return_source else content
             except Exception as exc:
                 last_error = exc
-                _set_last_ai_provider_error(f'Grok API error: {exc}')
-                _log_ai_error(f'Grok API error: {exc}')
+                message = _format_ai_provider_error('Grok', exc)
+                _set_last_ai_provider_error(message)
+                _log_ai_error(message)
         if provider == 'groq' and GROQ_API_KEY:
             attempted = True
             try:
@@ -1438,8 +1507,9 @@ def _call_ai_completion(prompt, max_tokens=900, return_source=False):
                 _log_ai_error(f'Groq package unavailable: {exc}')
             except Exception as exc:
                 last_error = exc
-                _set_last_ai_provider_error(f'Groq API error: {exc}')
-                _log_ai_error(f'Groq API error: {exc}')
+                message = _format_ai_provider_error('Groq', exc)
+                _set_last_ai_provider_error(message)
+                _log_ai_error(message)
     if last_error:
         _log_ai_error(f'AI provider unavailable; using fallback explanation: {last_error}')
     elif not attempted:
