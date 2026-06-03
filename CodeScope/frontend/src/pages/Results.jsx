@@ -1,7 +1,7 @@
 import { Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { useState } from 'react';
 import ComplexityBadge from '../components/ComplexityBadge';
-import { downloadReport } from '../services/api';
+import { downloadReport, getApiErrorMessage, getModifiedCode } from '../services/api';
 
 const cardPanel = {
   background: 'white',
@@ -495,6 +495,27 @@ function FunctionAiRewrite({ solution }) {
   );
 }
 
+function ModifiedCodeAction({ loading, error, hasSolutions, onClick }) {
+  return (
+    <section className="card" style={{ marginBottom: '20px', display: 'flex', justifyContent: 'flex-end', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
+      {error && (
+        <div style={{ flex: '1 1 260px', color: '#b42318', fontSize: '13px', lineHeight: '1.5' }}>
+          {error}
+        </div>
+      )}
+      <button
+        type="button"
+        onClick={onClick}
+        disabled={loading}
+        className="btn btn-primary"
+        style={{ opacity: loading ? 0.75 : 1 }}
+      >
+        {loading ? 'Getting Modified Code...' : hasSolutions ? 'Refresh Modified Code' : 'Get Modified Code'}
+      </button>
+    </section>
+  );
+}
+
 function CodeBlock({ code, success = false }) {
   return (
     <pre style={{
@@ -516,12 +537,15 @@ function CodeBlock({ code, success = false }) {
 export default function Results() {
   const location = useLocation();
   const navigate = useNavigate();
+  const stateData = location.state || {};
+  const [currentResult, setCurrentResult] = useState(stateData.result);
   const [downloading, setDownloading] = useState(false);
   const [downloadError, setDownloadError] = useState('');
+  const [modifiedLoading, setModifiedLoading] = useState(false);
+  const [modifiedError, setModifiedError] = useState('');
   const [selectedFile, setSelectedFile] = useState(0);
 
-  const stateData = location.state || {};
-  const result = stateData.result;
+  const result = currentResult;
   const type = stateData.type;
 
   if (!result) {
@@ -551,6 +575,35 @@ export default function Results() {
     }
   };
 
+  const handleGetModifiedCode = async () => {
+    const sourceCode = result?.source_code || stateData.source_code || '';
+    const filename = result?.filename || 'code.py';
+
+    if (!sourceCode.trim()) {
+      setModifiedError('Original pasted code is not available for this result. Please analyze the code again.');
+      return;
+    }
+
+    setModifiedLoading(true);
+    setModifiedError('');
+    try {
+      const payload = await getModifiedCode(
+        sourceCode,
+        filename,
+        result?.concrete_inputs || stateData.concrete_inputs || ''
+      );
+      setCurrentResult({
+        ...payload,
+        source_code: sourceCode,
+        concrete_inputs: result?.concrete_inputs || stateData.concrete_inputs || '',
+      });
+    } catch (err) {
+      setModifiedError(getApiErrorMessage(err, 'Could not get modified code from Groq. Please try again.'));
+    } finally {
+      setModifiedLoading(false);
+    }
+  };
+
   const renderSingleResult = (data, filename) => {
     const fileResult = data?.result || data || {};
     const safeFilename = filename || getSafeFilename(data);
@@ -561,12 +614,23 @@ export default function Results() {
     const hotspots = hotspotsFor(fileResult, functionsWithAiSolutions);
     const groqReason = fileResult?.ai_transformed_code?.reason || '';
     const groqStatus = isGroqFailureReason(groqReason) ? groqReason : '';
+    const hasAiSolutions = functionsWithAiSolutions.some(fn => (
+      Array.isArray(fn.ai_solutions) && fn.ai_solutions.length > 0
+    ));
 
     return (
       <div data-filename={safeFilename}>
         <ComplexitySummary result={fileResult} filename={safeFilename} />
         <HotCodeSection hotspots={hotspots} />
         <FunctionBreakdown functions={functionsWithAiSolutions} groqStatus={groqStatus} />
+        {type === 'code' && (
+          <ModifiedCodeAction
+            loading={modifiedLoading}
+            error={modifiedError}
+            hasSolutions={hasAiSolutions}
+            onClick={handleGetModifiedCode}
+          />
+        )}
       </div>
     );
   };

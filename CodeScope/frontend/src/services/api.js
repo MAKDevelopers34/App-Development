@@ -29,7 +29,26 @@ export const analyzeCode = async (code, filename = 'code.py', concreteInputs = '
     }
   }
 
-  const response = await api.post('/api/analyze/code', { ...payload, async: true });
+  const response = await api.post('/api/analyze/code', payload);
+  return {
+    ...response.data,
+    source_code: code,
+    concrete_inputs: payload.concrete_inputs,
+  };
+};
+
+export const getModifiedCode = async (code, filename = 'code.py', concreteInputs = '') => {
+  const payload = { code, filename, async: true };
+
+  if (concreteInputs) {
+    if (typeof concreteInputs === 'string') {
+      if (concreteInputs.trim()) payload.concrete_inputs = concreteInputs.trim();
+    } else {
+      payload.concrete_inputs = concreteInputs;
+    }
+  }
+
+  const response = await api.post('/api/optimize/code', payload);
   if (response.data?.job_id) {
     return pollAnalysisJob(response.data.job_id);
   }
