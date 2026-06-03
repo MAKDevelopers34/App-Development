@@ -4,6 +4,8 @@ import itertools
 import os
 import re
 import json
+import time
+from contextvars import ContextVar
 import requests
 from dotenv import load_dotenv
 
@@ -16,6 +18,16 @@ GROK_MODEL = os.getenv('GROK_MODEL', 'grok-3-mini')
 GROK_API_BASE = os.getenv('GROK_API_BASE', 'https://api.x.ai/v1/chat/completions')
 AI_EXPLAINER_PROVIDER = os.getenv('AI_EXPLAINER_PROVIDER', 'auto').lower()
 AI_EXPLAINER_DEBUG = os.getenv('AI_EXPLAINER_DEBUG', '').lower() in ('1', 'true', 'yes')
+try:
+    AI_REQUEST_TIMEOUT_SECONDS = max(1.0, min(45.0, float(os.getenv('AI_REQUEST_TIMEOUT_SECONDS', '25'))))
+except ValueError:
+    AI_REQUEST_TIMEOUT_SECONDS = 25.0
+try:
+    AI_TOTAL_TIMEOUT_SECONDS = max(5.0, min(90.0, float(os.getenv('AI_TOTAL_TIMEOUT_SECONDS', '80'))))
+except ValueError:
+    AI_TOTAL_TIMEOUT_SECONDS = 80.0
+
+_AI_DEADLINE = ContextVar('AI_DEADLINE', default=None)
 _LAST_AI_PROVIDER_ERROR = ''
 
 
@@ -31,6 +43,31 @@ def get_last_ai_provider_error():
 def _set_last_ai_provider_error(message=''):
     global _LAST_AI_PROVIDER_ERROR
     _LAST_AI_PROVIDER_ERROR = str(message or '')
+
+
+def start_ai_budget(total_seconds=None):
+    budget = AI_TOTAL_TIMEOUT_SECONDS if total_seconds is None else total_seconds
+    return _AI_DEADLINE.set(time.monotonic() + max(1.0, float(budget)))
+
+
+def reset_ai_budget(token):
+    _AI_DEADLINE.reset(token)
+
+
+def _remaining_ai_timeout():
+    deadline = _AI_DEADLINE.get()
+    if deadline is None:
+        return AI_REQUEST_TIMEOUT_SECONDS
+
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        return 0.0
+    return min(AI_REQUEST_TIMEOUT_SECONDS, remaining)
+
+
+def _groq_client(timeout=None):
+    from groq import Groq
+    return Groq(api_key=GROQ_API_KEY, timeout=timeout or AI_REQUEST_TIMEOUT_SECONDS)
 
 
 def get_ai_explanation(analysis_result, code, language):
@@ -147,8 +184,11 @@ def _get_groq_explanation(analysis_result, code, language):
     """
     Calls Groq API for intelligent explanation.
     """
-    from groq import Groq
-    client = Groq(api_key=GROQ_API_KEY)
+    timeout = _remaining_ai_timeout()
+    if timeout <= 0:
+        return None
+
+    client = _groq_client(timeout)
 
     prompt = _build_ai_prompt(analysis_result, code, language)
 
@@ -166,6 +206,10 @@ def _get_grok_explanation(analysis_result, code, language):
     """
     Calls xAI Grok-compatible chat completions API.
     """
+    timeout = _remaining_ai_timeout()
+    if timeout <= 0:
+        return None
+
     response = requests.post(
         GROK_API_BASE,
         headers={
@@ -178,7 +222,7 @@ def _get_grok_explanation(analysis_result, code, language):
             'temperature': 0.25,
             'max_tokens': 800,
         },
-        timeout=20,
+        timeout=timeout,
     )
     response.raise_for_status()
     payload = response.json()
@@ -1345,6 +1389,9 @@ def _call_ai_completion(prompt, max_tokens=900, return_source=False):
         if provider == 'grok' and GROK_API_KEY:
             attempted = True
             try:
+                timeout = _remaining_ai_timeout()
+                if timeout <= 0:
+                    raise TimeoutError('AI request budget expired before Grok API call.')
                 response = requests.post(
                     GROK_API_BASE,
                     headers={
@@ -1357,7 +1404,7 @@ def _call_ai_completion(prompt, max_tokens=900, return_source=False):
                         'temperature': 0.2,
                         'max_tokens': max_tokens,
                     },
-                    timeout=20,
+                    timeout=timeout,
                 )
                 response.raise_for_status()
                 payload = response.json()
@@ -1371,8 +1418,10 @@ def _call_ai_completion(prompt, max_tokens=900, return_source=False):
         if provider == 'groq' and GROQ_API_KEY:
             attempted = True
             try:
-                from groq import Groq
-                client = Groq(api_key=GROQ_API_KEY)
+                timeout = _remaining_ai_timeout()
+                if timeout <= 0:
+                    raise TimeoutError('AI request budget expired before Groq API call.')
+                client = _groq_client(timeout)
                 response = client.chat.completions.create(
                     model=GROQ_MODEL,
                     messages=_ai_messages(prompt),

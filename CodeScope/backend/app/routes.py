@@ -6,15 +6,24 @@ from app.ai_explainer import (
     get_ai_explanation,
     get_function_level_explanations,
     get_last_ai_provider_error,
+    reset_ai_budget,
+    start_ai_budget,
 )
 import zipfile
 import io
 import os
 import posixpath
 import re
+import threading
+import time
+import uuid
 from collections import defaultdict
 
 main = Blueprint('main', __name__)
+
+ANALYSIS_JOB_TTL_SECONDS = 10 * 60
+ANALYSIS_JOBS = {}
+ANALYSIS_JOBS_LOCK = threading.Lock()
 
 MAX_ZIP_BYTES = 8 * 1024 * 1024
 MAX_SOURCE_BYTES = 250 * 1024
@@ -40,6 +49,7 @@ def _analyze_with_extras(code, filename, concrete_inputs=None):
     language = result.get('language', 'unknown')
     result['issues'] = [_issue_problem_only(issue) for issue in (result.get('issues') or [])]
 
+    ai_budget_token = start_ai_budget()
     ai_discovery_result = {
         **result,
         'optimizations': [],
@@ -114,8 +124,79 @@ def _analyze_with_extras(code, filename, concrete_inputs=None):
         local_analyzer.last_func_complexity_details,
         code
     )
+    reset_ai_budget(ai_budget_token)
 
     return result
+
+
+def _start_analysis_job(code, filename, concrete_inputs=None):
+    _cleanup_analysis_jobs()
+    job_id = uuid.uuid4().hex
+    with ANALYSIS_JOBS_LOCK:
+        ANALYSIS_JOBS[job_id] = {
+            'status': 'queued',
+            'created_at': time.time(),
+            'updated_at': time.time(),
+            'filename': filename,
+            'result': None,
+            'error': None,
+        }
+    thread = threading.Thread(
+        target=_run_analysis_job,
+        args=(job_id, code, filename, concrete_inputs),
+        daemon=True,
+    )
+    thread.start()
+    return job_id
+
+
+def _run_analysis_job(job_id, code, filename, concrete_inputs=None):
+    _update_analysis_job(job_id, status='running')
+    try:
+        result = _analyze_with_extras(code, filename, concrete_inputs)
+        _update_analysis_job(
+            job_id,
+            status='completed',
+            result={'success': True, 'filename': filename, 'result': result},
+        )
+    except Exception as exc:
+        _update_analysis_job(job_id, status='failed', error=str(exc))
+
+
+def _update_analysis_job(job_id, **updates):
+    with ANALYSIS_JOBS_LOCK:
+        job = ANALYSIS_JOBS.get(job_id)
+        if not job:
+            return
+        job.update(updates)
+        job['updated_at'] = time.time()
+
+
+def _get_analysis_job(job_id):
+    _cleanup_analysis_jobs()
+    with ANALYSIS_JOBS_LOCK:
+        job = ANALYSIS_JOBS.get(job_id)
+        return dict(job) if job else None
+
+
+def _cleanup_analysis_jobs():
+    cutoff = time.time() - ANALYSIS_JOB_TTL_SECONDS
+    with ANALYSIS_JOBS_LOCK:
+        expired = [
+            job_id for job_id, job in ANALYSIS_JOBS.items()
+            if job.get('updated_at', job.get('created_at', 0)) < cutoff
+        ]
+        for job_id in expired:
+            ANALYSIS_JOBS.pop(job_id, None)
+
+
+def _wants_async_analysis(data):
+    value = (data or {}).get('async')
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in ('1', 'true', 'yes')
+    return False
 
 
 def _issue_problem_only(issue):
@@ -870,12 +951,56 @@ def analyze_code():
         if not code.strip():
             return jsonify({'error': 'Code is empty'}), 400
 
+        if _wants_async_analysis(data):
+            job_id = _start_analysis_job(code, filename, concrete_inputs)
+            return jsonify({
+                'success': True,
+                'async': True,
+                'job_id': job_id,
+                'status': 'queued',
+                'filename': filename,
+            }), 202
+
         result = _analyze_with_extras(code, filename, concrete_inputs)
 
         return jsonify({'success': True, 'filename': filename, 'result': result})
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+@main.route('/api/analyze/jobs/<job_id>', methods=['GET'])
+def analyze_job_status(job_id):
+    job = _get_analysis_job(job_id)
+    if not job:
+        return jsonify({'success': False, 'error': 'Analysis job was not found'}), 404
+
+    status = job.get('status')
+    if status == 'completed':
+        payload = dict(job.get('result') or {})
+        payload.update({
+            'async': True,
+            'job_id': job_id,
+            'status': status,
+        })
+        return jsonify(payload)
+
+    if status == 'failed':
+        return jsonify({
+            'success': False,
+            'async': True,
+            'job_id': job_id,
+            'status': status,
+            'error': job.get('error') or 'Analysis failed',
+        }), 500
+
+    return jsonify({
+        'success': True,
+        'async': True,
+        'job_id': job_id,
+        'status': status,
+        'filename': job.get('filename'),
+    })
 
 
 @main.route('/api/analyze/inputs', methods=['POST'])

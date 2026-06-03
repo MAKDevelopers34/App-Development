@@ -1,6 +1,8 @@
 import axios from 'axios';
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:5000';
+export const API_BASE_URL = (
+  import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:5000'
+).replace(/\/+$/, '');
 
 const api = axios.create({
   baseURL: API_BASE_URL,
@@ -14,6 +16,8 @@ export const getApiErrorMessage = (error, fallback = 'Request failed. Please try
   fallback
 );
 
+const sleep = (ms) => new Promise(resolve => window.setTimeout(resolve, ms));
+
 export const analyzeCode = async (code, filename = 'code.py', concreteInputs = '') => {
   const payload = { code, filename };
 
@@ -25,8 +29,44 @@ export const analyzeCode = async (code, filename = 'code.py', concreteInputs = '
     }
   }
 
-  const response = await api.post('/api/analyze/code', payload);
+  const response = await api.post('/api/analyze/code', { ...payload, async: true });
+  if (response.data?.job_id) {
+    return pollAnalysisJob(response.data.job_id);
+  }
   return response.data;
+};
+
+export const pollAnalysisJob = async (jobId, options = {}) => {
+  const intervalMs = options.intervalMs || 2500;
+  const timeoutMs = options.timeoutMs || 150000;
+  const startedAt = Date.now();
+  let lastPollError = null;
+
+  while (Date.now() - startedAt < timeoutMs) {
+    await sleep(intervalMs);
+    try {
+      const response = await api.get(`/api/analyze/jobs/${jobId}`, { timeout: 30000 });
+      const payload = response.data;
+      lastPollError = null;
+      if (payload.status === 'completed' || payload.result) {
+        return payload;
+      }
+      if (payload.status === 'failed') {
+        throw new Error(payload.error || 'Backend analysis failed.');
+      }
+    } catch (err) {
+      if (err.response?.data?.status === 'failed') {
+        throw new Error(err.response.data.error || 'Backend analysis failed.', { cause: err });
+      }
+      if (err.response?.status === 404) {
+        throw new Error(err.response.data?.error || 'Analysis job was not found.', { cause: err });
+      }
+      lastPollError = err;
+    }
+  }
+
+  const detail = lastPollError ? ` Last poll error: ${getApiErrorMessage(lastPollError)}` : '';
+  throw new Error(`Analysis is still running after ${Math.round(timeoutMs / 1000)} seconds.${detail}`);
 };
 
 export const inferInputs = async (code, filename = 'code.py') => {
