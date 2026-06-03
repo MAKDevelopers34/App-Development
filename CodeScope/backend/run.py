@@ -9,4 +9,5 @@ if __name__ == '__main__':
         host=os.getenv('FLASK_HOST', '0.0.0.0'),
         port=int(os.getenv('PORT', '5000')),
         threaded=True,
+        use_reloader=False,
     )

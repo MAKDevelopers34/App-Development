@@ -3184,11 +3184,22 @@ class CodeAnalyzer:
         has_window_name = bool(re.search(r'sliding.?window|window_size|max_window|min_window', code, re.IGNORECASE))
         has_window_vars = bool(re.search(r'\b(?:window|left|start|begin)\b.*\b(?:right|end|j)\b', code, re.IGNORECASE))
         has_expand_shrink = bool(re.search(r'(?:while|if)\s*.*\b(?:window|left|start)\b.*(?:\+\+|-=|\+=)', code, re.IGNORECASE))
-        has_classic_shape = bool(re.search(
-            r'for\s+.*\n(?:.*\n)*?\s*while\s+.*(?:left|start|lo)\s*(?:<|<=)\s*(?:right|end|i)',
-            code, re.IGNORECASE | re.DOTALL
-        ))
+        has_classic_shape = self._has_sliding_window_for_while_shape(code)
         return has_window_name or (has_window_vars and has_expand_shrink) or has_classic_shape
+
+    def _has_sliding_window_for_while_shape(self, code):
+        lines = code.splitlines()
+        while_with_window_pointer = re.compile(
+            r'\bwhile\b.*\b(?:left|start|lo)\b\s*(?:<|<=)\s*\b(?:right|end|i)\b',
+            re.IGNORECASE
+        )
+        for index, line in enumerate(lines):
+            if not re.search(r'\bfor\b', line, re.IGNORECASE):
+                continue
+            for candidate in lines[index + 1:index + 26]:
+                if while_with_window_pointer.search(candidate):
+                    return True
+        return False
 
     def _looks_like_monotonic_stack(self, code):
         has_stack_ops = bool(re.search(r'stack\s*=\s*\[\]|\.append\s*\(|\.pop\s*\(', code))

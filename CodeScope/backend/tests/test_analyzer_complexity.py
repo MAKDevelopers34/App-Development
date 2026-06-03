@@ -2666,6 +2666,54 @@ def strassen(A, B):
         self.assertEqual(concrete["edge_scans"], 4)
         self.assertEqual(concrete["symbolic_time_complexity"], "O(V + E)")
 
+    def test_edmonds_karp_known_algorithm_detection_does_not_backtrack(self):
+        code = """from collections import deque
+
+def bfs(capacity, source, sink, parent):
+    visited = [False] * len(capacity)
+    queue = deque([source])
+    visited[source] = True
+    while queue:
+        u = queue.popleft()
+        for v, cap in enumerate(capacity[u]):
+            if not visited[v] and cap > 0:
+                queue.append(v)
+                visited[v] = True
+                parent[v] = u
+                if v == sink:
+                    return True
+    return False
+
+def edmonds_karp(capacity, source, sink):
+    n = len(capacity)
+    residual_cap = [[cap for cap in row] for row in capacity]
+    parent = [-1] * n
+    max_flow = 0
+    while bfs(residual_cap, source, sink, parent):
+        path_flow = float('Inf')
+        s = sink
+        while s != source:
+            path_flow = min(path_flow, residual_cap[parent[s]][s])
+            s = parent[s]
+        max_flow += path_flow
+        v = sink
+        while v != source:
+            u = parent[v]
+            residual_cap[u][v] -= path_flow
+            residual_cap[v][u] += path_flow
+            v = parent[v]
+    return max_flow
+"""
+
+        known = self.analyzer.detect_known_algorithm(code)
+        result = self.analyzer.analyze(code, "flow.py")
+        functions = [item["function"] for item in result["function_complexity_details"]]
+
+        self.assertFalse(known["detected"])
+        self.assertEqual(result["time_complexity"], "O(V E\u00b2)")
+        self.assertEqual(result["space_complexity"], "O(V + E)")
+        self.assertEqual(functions, ["bfs", "edmonds_karp"])
+
     def test_repeated_dfs_with_fresh_visited_repeats_graph_work(self):
         code = """def dfs(graph, node, visited):
     if node in visited:

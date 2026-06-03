@@ -547,6 +547,7 @@ export default function Results() {
 
   const result = currentResult;
   const type = stateData.type;
+  const isCodeResult = type === 'code' || (!type && !Array.isArray(result?.files));
 
   if (!result) {
     return <Navigate to="/analyze" replace />;
@@ -623,7 +624,7 @@ export default function Results() {
         <ComplexitySummary result={fileResult} filename={safeFilename} />
         <HotCodeSection hotspots={hotspots} />
         <FunctionBreakdown functions={functionsWithAiSolutions} groqStatus={groqStatus} />
-        {type === 'code' && (
+        {isCodeResult && (
           <ModifiedCodeAction
             loading={modifiedLoading}
             error={modifiedError}
@@ -719,7 +720,7 @@ export default function Results() {
               Analysis Results
             </h1>
             <p style={{ fontSize: '14px', color: 'var(--gray)' }}>
-              {type === 'code' && `File: ${result?.filename || 'Unknown'}`}
+              {isCodeResult && `File: ${result?.filename || 'Unknown'}`}
               {type === 'zip' && `ZIP file - ${result?.total_files || 0} files analyzed`}
               {type === 'github' && `GitHub: ${result?.github_url || 'Unknown'}`}
             </p>
@@ -749,7 +750,7 @@ export default function Results() {
           </div>
         )}
 
-        {type === 'code' && renderSingleResult(result, result?.filename)}
+        {isCodeResult && renderSingleResult(result, result?.filename)}
         {(type === 'zip' || type === 'github') && renderMultiResult()}
       </div>
     </div>
