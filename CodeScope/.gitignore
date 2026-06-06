@@ -24,3 +24,6 @@ Thumbs.db
 *.tmp
 .idea/
 .vscode/settings.json
+
+#Deployment Zip
+backend/.elasticbeanstalk/
