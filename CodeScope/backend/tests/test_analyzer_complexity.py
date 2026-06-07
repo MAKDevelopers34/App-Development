@@ -13,9 +13,25 @@ from app.ai_explainer import (
     _merge_ai_optimization_suggestions,
     _validate_ai_rewrite_complexity,
 )
-from app.github_fetcher import SUPPORTED_EXTENSIONS as GITHUB_SUPPORTED_EXTENSIONS
+from app.github_fetcher import (
+    SUPPORTED_EXTENSIONS as GITHUB_SUPPORTED_EXTENSIONS,
+    fetch_github_code,
+    get_github_folders,
+    parse_github_url_details,
+)
 from app.report_generator import generate_pdf_report
 from app.routes import SUPPORTED_CODE_EXTENSIONS, _analyze_with_extras, _build_batch_summary, _should_skip_batch_path
+
+
+class MockGithubResponse:
+    def __init__(self, payload=None, text='', status_code=200):
+        self._payload = payload
+        self.text = text
+        self.content = text.encode('utf-8')
+        self.status_code = status_code
+
+    def json(self):
+        return self._payload
 
 
 class AnalyzerComplexityTests(unittest.TestCase):
@@ -60,6 +76,69 @@ class AnalyzerComplexityTests(unittest.TestCase):
         for extension in (".cc", ".cxx", ".hpp", ".mjs", ".mts", ".pyw"):
             self.assertIn(extension, SUPPORTED_CODE_EXTENSIONS)
             self.assertIn(extension, GITHUB_SUPPORTED_EXTENSIONS)
+
+    def test_github_tree_url_preserves_selected_folder(self):
+        details = parse_github_url_details("https://github.com/acme/widgets/tree/main/backend/app")
+
+        self.assertEqual(details["owner"], "acme")
+        self.assertEqual(details["repo"], "widgets")
+        self.assertEqual(details["ref"], "main")
+        self.assertEqual(details["path"], "backend/app")
+
+    @patch("app.github_fetcher.requests.get")
+    def test_github_fetch_uses_selected_folder_and_branch(self, mock_get):
+        mock_get.side_effect = [
+            MockGithubResponse({
+                "truncated": False,
+                "tree": [
+                    {"type": "blob", "path": "README.md", "size": 20},
+                    {"type": "blob", "path": "backend/solver.py", "size": 80},
+                    {"type": "blob", "path": "frontend/App.jsx", "size": 80},
+                ],
+            }),
+            MockGithubResponse(text="def solve(n):\n    return n\n"),
+        ]
+
+        files = fetch_github_code(
+            "https://github.com/acme/widgets",
+            path="backend",
+            ref="main",
+        )
+
+        self.assertEqual(files, [{
+            "filename": "backend/solver.py",
+            "code": "def solve(n):\n    return n\n",
+        }])
+        first_call = mock_get.call_args_list[0]
+        second_call = mock_get.call_args_list[1]
+        self.assertIn("/git/trees/main", first_call.args[0])
+        self.assertEqual(first_call.kwargs["params"], {"recursive": "1"})
+        self.assertIn("/main/backend/solver.py", second_call.args[0])
+
+    @patch("app.github_fetcher.requests.get")
+    def test_github_folder_listing_returns_selectable_directories(self, mock_get):
+        mock_get.side_effect = [
+            MockGithubResponse({"default_branch": "main"}),
+            MockGithubResponse({
+                "truncated": False,
+                "tree": [
+                    {"type": "tree", "path": "backend"},
+                    {"type": "tree", "path": "backend/app"},
+                    {"type": "tree", "path": "node_modules"},
+                    {"type": "blob", "path": "frontend/src/App.jsx"},
+                    {"type": "blob", "path": "backend/app/routes.py"},
+                ],
+            }),
+        ]
+
+        tree = get_github_folders("https://github.com/acme/widgets")
+
+        self.assertEqual(
+            [folder["path"] for folder in tree["folders"]],
+            ["", "backend", "backend/app", "frontend", "frontend/src"],
+        )
+        self.assertEqual(tree["ref"], "main")
+        self.assertEqual(tree["limits"]["max_files"], 20)
 
     def test_input_schema_is_included_in_analysis_result(self):
         code = """def two_sum(nums, target):

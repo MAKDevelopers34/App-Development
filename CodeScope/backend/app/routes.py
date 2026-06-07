@@ -1,6 +1,6 @@
 from flask import Blueprint, request, jsonify, send_file
 from app.analyzer import CodeAnalyzer
-from app.github_fetcher import MAX_GITHUB_FILES, fetch_github_code
+from app.github_fetcher import MAX_GITHUB_FILES, fetch_github_code, get_github_folders
 from app.ai_explainer import (
     enhance_optimizations_with_ai,
     get_ai_explanation,
@@ -992,7 +992,8 @@ def home():
             '/api/optimize/code',
             '/api/analyze/inputs',
             '/api/analyze/zip',
-            '/api/analyze/github'
+            '/api/analyze/github',
+            '/api/analyze/github/folders'
         ]
     })
 
@@ -1229,7 +1230,15 @@ def analyze_github():
         if 'github.com' not in url:
             return jsonify({'error': 'Please provide a valid GitHub URL'}), 400
 
-        files = fetch_github_code(url)
+        selected_path = (
+            data.get('path') or
+            data.get('folder') or
+            data.get('selected_path') or
+            ''
+        )
+        selected_ref = data.get('ref') or data.get('branch')
+
+        files = fetch_github_code(url, path=selected_path, ref=selected_ref)
         if not files:
             return jsonify({'error': 'Could not fetch code from GitHub'}), 400
 
@@ -1254,6 +1263,8 @@ def analyze_github():
         return jsonify({
             'success': True,
             'github_url': url,
+            'selected_path': selected_path,
+            'branch': selected_ref,
             'total_files': len(results),
             'total_lines': total_lines,
             'total_issues': all_issues,
@@ -1267,6 +1278,27 @@ def analyze_github():
 
 
 # ─── Generate PDF Report ────────────────────────────────────
+@main.route('/api/analyze/github/folders', methods=['POST'])
+def github_folders():
+    try:
+        data = request.get_json()
+        if not data or 'url' not in data:
+            return jsonify({'error': 'No GitHub URL provided'}), 400
+
+        url = data['url']
+        if 'github.com' not in url:
+            return jsonify({'error': 'Please provide a valid GitHub URL'}), 400
+
+        tree = get_github_folders(url)
+        if not tree:
+            return jsonify({'error': 'Could not fetch repository folders from GitHub'}), 400
+
+        return jsonify({'success': True, **tree})
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @main.route('/api/report', methods=['POST'])
 def generate_report():
     try:

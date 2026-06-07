@@ -103,8 +103,17 @@ export const analyzeZip = async (file) => {
   return response.data;
 };
 
-export const analyzeGithub = async (url) => {
-  const response = await api.post('/api/analyze/github', { url });
+export const fetchGithubFolders = async (url) => {
+  const response = await api.post('/api/analyze/github/folders', { url });
+  return response.data;
+};
+
+export const analyzeGithub = async (url, path = '', ref = '') => {
+  const payload = { url };
+  if (path) payload.path = path;
+  if (ref) payload.ref = ref;
+
+  const response = await api.post('/api/analyze/github', payload);
   return response.data;
 };
 

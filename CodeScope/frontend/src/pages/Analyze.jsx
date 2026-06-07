@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDropzone } from 'react-dropzone';
-import { analyzeCode, analyzeZip, analyzeGithub, inferInputs, getApiErrorMessage } from '../services/api';
+import { analyzeCode, analyzeZip, analyzeGithub, fetchGithubFolders, inferInputs, getApiErrorMessage } from '../services/api';
 
 const splitParams = (raw = '') => {
   const params = [];
@@ -145,6 +145,11 @@ export default function Analyze() {
   const [concreteInputs, setConcreteInputs] = useState('');
   const [inputValues, setInputValues] = useState({});
   const [githubUrl, setGithubUrl] = useState('');
+  const [githubFolders, setGithubFolders] = useState([]);
+  const [githubFolderPath, setGithubFolderPath] = useState('');
+  const [githubBranch, setGithubBranch] = useState('');
+  const [githubTreeLoading, setGithubTreeLoading] = useState(false);
+  const [githubTreeError, setGithubTreeError] = useState('');
   const [zipFile, setZipFile] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -152,6 +157,14 @@ export default function Analyze() {
   const [schemaLoading, setSchemaLoading] = useState(false);
   const localInputSchema = useMemo(() => inferInputSchema(code, filename), [code, filename]);
   const inputSchema = backendInputSchema || localInputSchema;
+
+  const resetGithubTreeState = () => {
+    setGithubFolders([]);
+    setGithubFolderPath('');
+    setGithubBranch('');
+    setGithubTreeLoading(false);
+    setGithubTreeError('');
+  };
 
   useEffect(() => {
     const trimmed = code.trim();
@@ -179,6 +192,41 @@ export default function Analyze() {
       window.clearTimeout(timer);
     };
   }, [code, filename]);
+
+  useEffect(() => {
+    const trimmed = githubUrl.trim();
+
+    if (activeTab !== 'github' || !trimmed || !/github\.com\/[^/]+\/[^/]+/i.test(trimmed)) {
+      return undefined;
+    }
+
+    let active = true;
+    const timer = window.setTimeout(async () => {
+      setGithubTreeLoading(true);
+      setGithubTreeError('');
+      try {
+        const response = await fetchGithubFolders(trimmed);
+        if (!active) return;
+        const folders = Array.isArray(response?.folders) ? response.folders : [];
+        setGithubFolders(folders);
+        setGithubFolderPath(response?.selected_path || folders[0]?.path || '');
+        setGithubBranch(response?.ref || '');
+      } catch (err) {
+        if (!active) return;
+        setGithubFolders([]);
+        setGithubFolderPath('');
+        setGithubBranch('');
+        setGithubTreeError(getApiErrorMessage(err, 'Could not load repository folders.'));
+      } finally {
+        if (active) setGithubTreeLoading(false);
+      }
+    }, 500);
+
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [activeTab, githubUrl]);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     accept: { 'application/zip': ['.zip'] },
@@ -224,7 +272,7 @@ export default function Analyze() {
           setLoading(false);
           return;
         }
-        result = await analyzeGithub(githubUrl);
+        result = await analyzeGithub(githubUrl, githubFolderPath, githubBranch);
         navigate('/results', { state: { result, type: 'github' } });
       }
 
@@ -280,7 +328,11 @@ export default function Analyze() {
               <button
                 key={key}
                 style={tabStyle(key)}
-                onClick={() => { setActiveTab(key); setError(''); }}
+                onClick={() => {
+                  setActiveTab(key);
+                  setError('');
+                  if (key !== 'github') resetGithubTreeState();
+                }}
               >
                 {label}
               </button>
@@ -431,12 +483,56 @@ export default function Analyze() {
               <input
                 type="text"
                 value={githubUrl}
-                onChange={e => setGithubUrl(e.target.value)}
+                onChange={e => {
+                  setGithubUrl(e.target.value);
+                  resetGithubTreeState();
+                }}
                 placeholder="https://github.com/username/repository"
                 style={{ marginBottom: '10px', fontSize: '14px' }}
               />
+              {(githubTreeLoading || githubFolders.length > 0 || githubTreeError) && (
+                <div style={{ marginTop: '14px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'center', marginBottom: '6px', flexWrap: 'wrap' }}>
+                    <label style={{ fontSize: '13px', fontWeight: '500', color: 'var(--dark)' }}>
+                      Folder to analyze
+                    </label>
+                    {githubBranch && (
+                      <span style={{ fontSize: '12px', color: 'var(--gray)', fontFamily: 'var(--font-code)' }}>
+                        branch: {githubBranch}
+                      </span>
+                    )}
+                  </div>
+                  <select
+                    value={githubFolderPath}
+                    onChange={e => setGithubFolderPath(e.target.value)}
+                    disabled={githubTreeLoading || githubFolders.length === 0}
+                    style={{
+                      width: '100%',
+                      padding: '12px 14px',
+                      border: '1.5px solid var(--border)',
+                      borderRadius: '8px',
+                      background: 'white',
+                      color: 'var(--dark)',
+                      fontFamily: 'var(--font-code)',
+                      fontSize: '13px',
+                    }}
+                  >
+                    {githubTreeLoading && <option value="">Loading folders...</option>}
+                    {!githubTreeLoading && githubFolders.map(folder => (
+                      <option key={folder.path || 'root'} value={folder.path}>
+                        {folder.label || folder.path || 'Repository root'}
+                      </option>
+                    ))}
+                  </select>
+                  {githubTreeError && (
+                    <div style={{ color: '#b42318', fontSize: '12px', marginTop: '6px' }}>
+                      {githubTreeError}
+                    </div>
+                  )}
+                </div>
+              )}
               <p style={{ fontSize: '12px', color: 'var(--gray)' }}>
-                💡 Tip: Make sure the repository is public. We'll fetch and analyze up to 20 code files automatically.
+                Tip: Make sure the repository is public. We'll fetch and analyze up to 20 code files from the selected folder.
               </p>
             </div>
           )}
@@ -451,7 +547,7 @@ export default function Analyze() {
           {/* Analyze Button */}
           <button
             onClick={handleAnalyze}
-            disabled={loading}
+            disabled={loading || (activeTab === 'github' && githubTreeLoading)}
             className="btn btn-primary"
             style={{
               width: '100%',
@@ -460,14 +556,14 @@ export default function Analyze() {
               fontSize: '16px',
               fontWeight: '600',
               marginTop: '24px',
-              opacity: loading ? 0.7 : 1,
-              cursor: loading ? 'not-allowed' : 'pointer'
+              opacity: loading || (activeTab === 'github' && githubTreeLoading) ? 0.7 : 1,
+              cursor: loading || (activeTab === 'github' && githubTreeLoading) ? 'not-allowed' : 'pointer'
             }}
           >
-            {loading ? (
+            {loading || (activeTab === 'github' && githubTreeLoading) ? (
               <>
                 <div className="spinner" style={{ width: '18px', height: '18px' }}></div>
-                Analyzing...
+                {githubTreeLoading ? 'Loading repository...' : 'Analyzing...'}
               </>
             ) : (
               '🔍 Analyze Now'
