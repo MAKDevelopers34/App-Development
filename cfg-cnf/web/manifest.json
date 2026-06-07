@@ -1,0 +1,35 @@
+{
+    "name": "CFG to CNF Converter",
+    "short_name": "CFG to CNF",
+    "start_url": ".",
+    "display": "standalone",
+    "background_color": "#F8F4EC",
+    "theme_color": "#17212B",
+    "description": "A Flutter app that converts context-free grammars into Chomsky Normal Form.",
+    "orientation": "portrait-primary",
+    "prefer_related_applications": false,
+    "icons": [
+        {
+            "src": "icons/Icon-192.png",
+            "sizes": "192x192",
+            "type": "image/png"
+        },
+        {
+            "src": "icons/Icon-512.png",
+            "sizes": "512x512",
+            "type": "image/png"
+        },
+        {
+            "src": "icons/Icon-maskable-192.png",
+            "sizes": "192x192",
+            "type": "image/png",
+            "purpose": "maskable"
+        },
+        {
+            "src": "icons/Icon-maskable-512.png",
+            "sizes": "512x512",
+            "type": "image/png",
+            "purpose": "maskable"
+        }
+    ]
+}
