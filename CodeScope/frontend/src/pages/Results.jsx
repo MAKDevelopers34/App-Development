@@ -627,37 +627,52 @@ function FunctionAiRewrite({ solution }) {
 }
 
 function ModifiedCodeAction({ loading, error, status, hasSolutions, checked, onClick }) {
+  const completedWithSolutions = hasSolutions;
+  const completedWithoutSolution = checked && !hasSolutions && !error && !status;
+  const showStatus = !error && Boolean(status) && !hasSolutions;
+  const showError = Boolean(error) && !hasSolutions;
+  const showButton = !hasSolutions && (loading || Boolean(error) || Boolean(status) || !checked);
+  const actionClassName = [
+    'card modified-action',
+    completedWithSolutions ? 'modified-complete' : '',
+    completedWithoutSolution ? 'modified-done' : '',
+    loading ? 'modified-loading' : '',
+  ].filter(Boolean).join(' ');
+
   return (
-    <section className="card modified-action">
-      {error && (
-        <div style={{ flex: '1 1 260px', color: '#b42318', fontSize: '13px', lineHeight: '1.5' }}>
+    <section className={actionClassName}>
+      {showError && (
+        <div className="modified-action-copy error-copy">
           {error}
         </div>
       )}
-      {!error && status && (
-        <div style={{ flex: '1 1 320px', color: '#8a5a00', fontSize: '13px', lineHeight: '1.55' }}>
+      {showStatus && (
+        <div className="modified-action-copy warning-copy">
           {status}
         </div>
       )}
-      {!error && !status && checked && !hasSolutions && (
-        <div style={{ flex: '1 1 320px', color: 'var(--gray)', fontSize: '13px', lineHeight: '1.55' }}>
+      {completedWithoutSolution && (
+        <div className="modified-action-copy muted-copy">
           No lower-complexity modified function was found for this code. This can be correct when the current output already requires the detected complexity or when no same-behavior rewrite passes CodeScope validation.
         </div>
       )}
-      {!error && !status && checked && hasSolutions && (
-        <div style={{ flex: '1 1 320px', color: '#067647', fontSize: '13px', lineHeight: '1.55' }}>
-          Modified function code is ready and shown below the matching function.
+      {completedWithSolutions && (
+        <div className="modified-complete-copy">
+          <span>Modified functions ready</span>
+          <strong>Groq returned verified lower-complexity functions. They are shown below the matching original functions.</strong>
         </div>
       )}
-      <button
-        type="button"
-        onClick={onClick}
-        disabled={loading}
-        className="btn btn-primary"
-        style={{ opacity: loading ? 0.75 : 1 }}
-      >
-        {loading ? 'Getting Modified Code...' : hasSolutions ? 'Refresh Modified Code' : 'Get Modified Code'}
-      </button>
+      {showButton && (
+        <button
+          type="button"
+          onClick={onClick}
+          disabled={loading}
+          className="btn btn-primary"
+          style={{ opacity: loading ? 0.75 : 1 }}
+        >
+          {loading ? 'Getting Modified Code...' : error || status ? 'Try Again' : 'Get Modified Code'}
+        </button>
+      )}
     </section>
   );
 }
