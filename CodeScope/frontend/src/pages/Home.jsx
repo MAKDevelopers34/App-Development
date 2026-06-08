@@ -1,230 +1,160 @@
 import { Link } from 'react-router-dom';
+import heroImage from '../assets/hero.png';
 
 export default function Home() {
-  const features = [
-    {
-      icon: '⚡',
-      title: 'Time Complexity',
-      description: 'Instantly detects Big-O notation — O(1), O(n), O(n²) and more from your code structure.'
-    },
-    {
-      icon: '💾',
-      title: 'Space Complexity',
-      description: 'Analyzes memory usage patterns and data structure allocations in your code.'
-    },
-    {
-      icon: '📁',
-      title: 'ZIP File Upload',
-      description: 'Upload your entire project as a ZIP file and analyze all files at once.'
-    },
-    {
-      icon: '🔗',
-      title: 'GitHub Integration',
-      description: 'Paste any public GitHub repository URL and analyze the entire codebase instantly.'
-    },
-    {
-      icon: '🤖',
-      title: 'Verified AI Rewrites',
-      description: 'Show optimized code only when Groq/Grok returns a same-behavior rewrite that CodeScope re-analyzes as lower complexity.'
-    },
-    {
-      icon: '📄',
-      title: 'PDF Reports',
-      description: 'Download a professional PDF report with full analysis results and recommendations.'
-    }
+  const metrics = [
+    ['Big-O Time', 'Scalable runtime'],
+    ['Big-O Space', 'Memory growth'],
+    ['Hot Code', 'Highest-cost functions'],
+    ['AI Rewrites', 'Verified alternatives'],
   ];
 
-  const languages = ['Python', 'JavaScript', 'TypeScript', 'Java', 'C++', 'C'];
+  const workflow = [
+    ['01', 'Add source', 'Paste code, upload a ZIP, or point CodeScope to a public GitHub repository.'],
+    ['02', 'Choose scope', 'Select inputs or a repository folder so analysis stays focused on the right files.'],
+    ['03', 'Review report', 'Inspect complexity, exact function snippets, hot code, and improved rewrites.'],
+  ];
 
-  const steps = [
-    { step: '01', title: 'Upload Your Code', description: 'Paste code, upload a ZIP file, or enter a GitHub URL' },
-    { step: '02', title: 'Instant Analysis', description: 'Our engine analyzes complexity, detects issues and bottlenecks' },
-    { step: '03', title: 'Get Results', description: 'View detailed reports, confidence notes, hotspots, and verified AI rewrites when available' },
+  const capabilities = [
+    ['Complexity Engine', 'Time and space complexity', 'Detect Big-O behavior from loops, recursion, calls, built-ins, and allocation patterns.'],
+    ['Function View', 'Every function in context', 'See direct function cost, cost with called functions, exact code snippets, and explanations.'],
+    ['Hot Code', 'Focus where cost is highest', 'Only the maximum-complexity sections are promoted to the hot code area.'],
+    ['Groq Rewrites', 'Lower-complexity alternatives', 'Request modified functions separately and show accepted rewrites below the matching function.'],
+    ['Repository Scope', 'GitHub folder selection', 'Analyze the folder that matters instead of unrelated generated, vendor, or config files.'],
+    ['PDF Reports', 'Clean exportable results', 'Download a polished report with summaries, function details, hotspots, and recommendations.'],
+  ];
+
+  const previewRows = [
+    ['build_string()', 'O(n^2)', 'Costly'],
+    ['has_duplicate()', 'O(n^2)', 'Costly'],
+    ['binary_search()', 'O(log n)', 'Great'],
   ];
 
   return (
     <div>
-
-      {/* Hero Section */}
-      <section style={{
-        background: 'linear-gradient(135deg, #1a73e8 0%, #0d47a1 100%)',
-        color: 'white',
-        padding: '80px 0',
-        textAlign: 'center'
-      }}>
+      <section
+        className="home-hero"
+        style={{
+          backgroundImage: `linear-gradient(90deg, rgba(15, 23, 42, 0.94), rgba(15, 23, 42, 0.7)), url(${heroImage})`,
+        }}
+      >
         <div className="container">
-          <div style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: '8px',
-            background: 'rgba(255,255,255,0.15)',
-            padding: '6px 16px',
-            borderRadius: '20px',
-            fontSize: '13px',
-            marginBottom: '24px'
-          }}>
-            🚀 Free & Open Source Code Analyzer
-          </div>
-
-          <h1 style={{
-            fontSize: '52px',
-            fontWeight: '800',
-            lineHeight: '1.2',
-            marginBottom: '20px',
-            maxWidth: '700px',
-            margin: '0 auto 20px'
-          }}>
-            Analyze Your Code's
-            <span style={{ color: '#fbbf24' }}> Complexity</span> Instantly
-          </h1>
-
-          <p style={{
-            fontSize: '18px',
-            opacity: '0.9',
-            maxWidth: '560px',
-            margin: '0 auto 36px',
-            lineHeight: '1.7'
-          }}>
-            Upload your code via ZIP, GitHub URL, or paste directly.
-            Get instant Big-O analysis, performance rating, confidence notes, and verified AI rewrites when available.
-          </p>
-
-          <div style={{ display: 'flex', gap: '14px', justifyContent: 'center', flexWrap: 'wrap' }}>
-            <Link to="/analyze" className="btn btn-large" style={{
-              background: 'white',
-              color: 'var(--primary)',
-              fontWeight: '600'
-            }}>
-              🔍 Start Analyzing — It's Free
-            </Link>
-            
-            {/* Fixed: Added the missing <a tag */}
-            <a
-              href="https://github.com"
-              target="_blank"
-              rel="noreferrer"
-              className="btn btn-large"
-              style={{
-                background: 'rgba(255,255,255,0.15)',
-                color: 'white',
-                border: '1.5px solid rgba(255,255,255,0.4)'
-              }}
-            >
-              ⭐ Star on GitHub
-            </a>
-          </div>
-
-          {/* Language badges */}
-          <div style={{
-            display: 'flex',
-            gap: '10px',
-            justifyContent: 'center',
-            flexWrap: 'wrap',
-            marginTop: '40px'
-          }}>
-            {languages.map(lang => (
-              <span key={lang} style={{
-                background: 'rgba(255,255,255,0.15)',
-                padding: '4px 14px',
-                borderRadius: '20px',
-                fontSize: '13px',
-                fontWeight: '500'
-              }}>
-                {lang}
-              </span>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {/* How it works */}
-      <section style={{ padding: '80px 0', background: 'white' }}>
-        <div className="container" style={{ textAlign: 'center' }}>
-          <h2 className="section-title">How It Works</h2>
-          <p className="section-subtitle">Three simple steps to analyze your code</p>
-
-          <div style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
-            gap: '32px',
-            marginTop: '40px'
-          }}>
-            {steps.map(({ step, title, description }) => (
-              <div key={step} style={{ textAlign: 'center' }}>
-                <div style={{
-                  width: '60px',
-                  height: '60px',
-                  background: 'var(--primary-light)',
-                  borderRadius: '50%',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  margin: '0 auto 16px',
-                  fontSize: '18px',
-                  fontWeight: '700',
-                  color: 'var(--primary)'
-                }}>
-                  {step}
+          <div className="hero-content">
+            <div className="hero-eyebrow">Static complexity analysis for real code</div>
+            <h1 className="hero-title">CodeScope</h1>
+            <p className="hero-copy">
+              A focused code complexity workspace for Big-O time, Big-O space, hot functions, and verified lower-complexity alternatives across pasted code, ZIP projects, and GitHub folders.
+            </p>
+            <div className="hero-actions">
+              <Link to="/analyze" className="btn btn-large hero-primary">
+                Analyze Code
+              </Link>
+              <Link to="/about" className="btn btn-large hero-secondary">
+                View Method
+              </Link>
+            </div>
+            <div className="hero-metrics">
+              {metrics.map(([label, value]) => (
+                <div key={label} className="hero-metric">
+                  <span>{label}</span>
+                  <strong>{value}</strong>
                 </div>
-                <h3 style={{ fontSize: '17px', fontWeight: '600', marginBottom: '8px' }}>{title}</h3>
-                <p style={{ fontSize: '14px', color: 'var(--gray)', lineHeight: '1.6' }}>{description}</p>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
         </div>
       </section>
 
-      {/* Features */}
-      <section style={{ padding: '80px 0', background: 'var(--light-gray)' }}>
-        <div className="container" style={{ textAlign: 'center' }}>
-          <h2 className="section-title">Everything You Need</h2>
-          <p className="section-subtitle">Powerful features to understand and improve your code</p>
-
-          <div style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
-            gap: '20px',
-            marginTop: '40px',
-            textAlign: 'left'
-          }}>
-            {features.map(({ icon, title, description }) => (
-              <div key={title} className="card" style={{ transition: 'transform 0.2s' }}
-                onMouseEnter={e => e.currentTarget.style.transform = 'translateY(-4px)'}
-                onMouseLeave={e => e.currentTarget.style.transform = 'translateY(0)'}
-              >
-                <div style={{ fontSize: '28px', marginBottom: '12px' }}>{icon}</div>
-                <h3 style={{ fontSize: '16px', fontWeight: '600', marginBottom: '8px' }}>{title}</h3>
-                <p style={{ fontSize: '13px', color: 'var(--gray)', lineHeight: '1.6' }}>{description}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {/* CTA */}
-      <section style={{
-        padding: '80px 0',
-        background: 'var(--dark)',
-        textAlign: 'center',
-        color: 'white'
-      }}>
+      <section className="section-band white-band">
         <div className="container">
-          <h2 style={{ fontSize: '36px', fontWeight: '700', marginBottom: '16px' }}>
-            Ready to Analyze Your Code?
-          </h2>
-          <p style={{ fontSize: '16px', opacity: '0.8', marginBottom: '32px' }}>
-            Free forever. No signup required. Start analyzing in seconds.
-          </p>
-          <Link to="/analyze" className="btn btn-large" style={{
-            background: 'var(--primary)',
-            color: 'white',
-            fontWeight: '600'
-          }}>
-            🔍 Analyze My Code Now
-          </Link>
+          <div className="workflow-grid">
+            {workflow.map(([step, title, description]) => (
+              <div key={step} className="workflow-step">
+                <div className="step-number">{step}</div>
+                <h3>{title}</h3>
+                <p>{description}</p>
+              </div>
+            ))}
+          </div>
         </div>
       </section>
 
+      <section className="section-band">
+        <div className="container report-preview-shell">
+          <div className="section-copy">
+            <div className="eyebrow">Result surface</div>
+            <h2>See complexity the way engineers review code.</h2>
+            <p>
+              CodeScope separates the file summary, hot code, function-by-function complexity, and modified functions so the report stays useful even for large files.
+            </p>
+            <Link to="/analyze" className="btn btn-primary">
+              Open Analyzer
+            </Link>
+          </div>
+          <div className="report-preview" aria-label="CodeScope result preview">
+            <div className="preview-header">
+              <div>
+                <span className="preview-label">CodeScope Complexity</span>
+                <strong>sample.py</strong>
+              </div>
+              <div className="preview-score">8/10</div>
+            </div>
+            <div className="preview-metrics">
+              <div>
+                <span>Big O Time</span>
+                <strong>O(n^2)</strong>
+              </div>
+              <div>
+                <span>Big O Space</span>
+                <strong>O(n)</strong>
+              </div>
+            </div>
+            <div className="preview-table">
+              {previewRows.map(([name, complexity, rating]) => (
+                <div key={name} className="preview-row">
+                  <code>{name}</code>
+                  <span>{complexity}</span>
+                  <b>{rating}</b>
+                </div>
+              ))}
+            </div>
+            <div className="preview-footer">Modified functions appear below matching functions after Groq verification.</div>
+          </div>
+        </div>
+      </section>
+
+      <section className="section-band white-band">
+        <div className="container">
+          <div className="section-heading">
+            <div className="eyebrow">Analysis scope</div>
+            <h2>Everything on the page is there for complexity review.</h2>
+            <p>No generic filler. The interface is centered on the exact sections your tool is meant to deliver.</p>
+          </div>
+          <div className="feature-grid">
+            {capabilities.map(([label, title, description]) => (
+              <div key={title} className="premium-card feature-card">
+                <span>{label}</span>
+                <h3>{title}</h3>
+                <p>{description}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <section className="section-band">
+        <div className="container">
+          <div className="cta-band">
+            <div>
+              <div className="eyebrow">Ready for a real file</div>
+              <h2>Analyze source, inspect hot code, then request modified functions only when needed.</h2>
+            </div>
+            <Link to="/analyze" className="btn btn-primary btn-large">
+              Start Analysis
+            </Link>
+          </div>
+        </div>
+      </section>
     </div>
   );
 }

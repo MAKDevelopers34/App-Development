@@ -3,13 +3,6 @@ import { useState } from 'react';
 import ComplexityBadge from '../components/ComplexityBadge';
 import { downloadReport, getApiErrorMessage, getModifiedCode } from '../services/api';
 
-const cardPanel = {
-  background: 'white',
-  border: '1px solid var(--border)',
-  borderRadius: '8px',
-  padding: '14px',
-};
-
 const getSafeFilename = (data, fallback = 'Unknown File') => {
   const filename = data?.filename || data?.result?.filename || fallback;
   return typeof filename === 'string' && filename.trim() ? filename : fallback;
@@ -304,6 +297,25 @@ const isGroqFailureReason = (reason = '') => (
   /\b(?:groq|grok).*(?:error|connection|unavailable|key|timeout|failed)|no groq|no grok/i.test(String(reason || ''))
 );
 
+function ResultOverview({ functions, hotspots, hasAiSolutions }) {
+  const stats = [
+    ['Functions', functions.length],
+    ['Hotspots', hotspots.length],
+    ['Modified', hasAiSolutions ? 'Ready' : 'On request'],
+  ];
+
+  return (
+    <section className="result-index">
+      {stats.map(([label, value]) => (
+        <div key={label} className="index-stat">
+          <span>{label}</span>
+          <strong>{value}</strong>
+        </div>
+      ))}
+    </section>
+  );
+}
+
 function ComplexitySummary({ result, filename }) {
   const overall = result?.overall_complexity || {};
   const allocation = result?.memory_allocation_analysis || {};
@@ -313,7 +325,7 @@ function ComplexitySummary({ result, filename }) {
   const showTotalAllocated = totalAllocatedSpace && totalAllocatedSpace !== space;
 
   return (
-    <section className="card" style={{ marginBottom: '20px', border: '1px solid var(--primary)', background: '#f8fbff' }}>
+    <section className="card summary-card">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '18px', flexWrap: 'wrap' }}>
         <div style={{ minWidth: 0, flex: '1 1 280px' }}>
           <div style={{ fontSize: '12px', color: 'var(--primary)', fontWeight: '800', textTransform: 'uppercase', marginBottom: '6px' }}>
@@ -353,12 +365,15 @@ function MetricBadge({ label, value }) {
 
 function HotCodeSection({ hotspots }) {
   return (
-    <section className="card" style={{ marginBottom: '20px' }}>
-      <h3 style={{ fontSize: '16px', fontWeight: '700', marginBottom: '14px' }}>
-        Hot Code Sections
-      </h3>
+    <section className="card report-section">
+      <div className="report-section-head">
+        <div>
+          <span className="eyebrow">Highest complexity</span>
+          <h3>Hot Code Sections</h3>
+        </div>
+      </div>
       {hotspots.length === 0 ? (
-        <p style={{ fontSize: '13px', color: 'var(--gray)', margin: 0 }}>
+        <p className="empty-state">
           No high-complexity hotspot was detected for this file.
         </p>
       ) : hotspots.map((hotspot, index) => {
@@ -368,7 +383,7 @@ function HotCodeSection({ hotspots }) {
         ].filter(Boolean));
 
         return (
-          <div key={`${hotspot.function || 'hotspot'}-${index}`} style={{ ...cardPanel, marginBottom: index < hotspots.length - 1 ? '12px' : 0 }}>
+          <div key={`${hotspot.function || 'hotspot'}-${index}`} className="hotspot-card" style={{ marginBottom: index < hotspots.length - 1 ? '12px' : 0 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap', marginBottom: '10px' }}>
               <div style={{ fontFamily: 'var(--font-code)', fontSize: '13px', fontWeight: '800', overflowWrap: 'anywhere' }}>
                 {hotspot.function || 'file scope'}{hotspot.function ? '()' : ''} at line {hotspot.line || 1}
@@ -398,10 +413,13 @@ function FunctionBreakdown({ functions, groqStatus = '' }) {
   const hasAiSolution = functions.some(fn => Array.isArray(fn.ai_solutions) && fn.ai_solutions.length > 0);
 
   return (
-    <section className="card" style={{ marginBottom: '20px' }}>
-      <h3 style={{ fontSize: '16px', fontWeight: '700', marginBottom: '14px' }}>
-        Function-by-Function Complexity
-      </h3>
+    <section className="card report-section">
+      <div className="report-section-head">
+        <div>
+          <span className="eyebrow">Function table</span>
+          <h3>Function-by-Function Complexity</h3>
+        </div>
+      </div>
       {groqStatus && !hasAiSolution && (
         <div style={{
           padding: '10px 12px',
@@ -416,15 +434,11 @@ function FunctionBreakdown({ functions, groqStatus = '' }) {
         </div>
       )}
       {functions.length === 0 ? (
-        <p style={{ fontSize: '13px', color: 'var(--gray)', margin: 0 }}>
+        <p className="empty-state">
           No named functions were detected. The file-level complexity is shown above.
         </p>
       ) : functions.map((fn, index) => (
-        <div key={`${fn.function || 'function'}-${index}`} style={{
-          display: 'grid',
-          gridTemplateColumns: 'minmax(130px, 220px) minmax(0, 1fr)',
-          gap: '12px 16px',
-          padding: '12px 0',
+        <div key={`${fn.function || 'function'}-${index}`} className="function-row" style={{
           borderBottom: index < functions.length - 1 ? '1px solid var(--border)' : 'none',
         }}>
           <div style={{ minWidth: 0 }}>
@@ -439,8 +453,8 @@ function FunctionBreakdown({ functions, groqStatus = '' }) {
           </div>
           <div style={{ minWidth: 0 }}>
             <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: fn.explanation ? '8px' : 0 }}>
-              <MetricBadge label="Own" value={fn.own_complexity || fn.complexity || 'O(unknown)'} />
-              <MetricBadge label="Effective" value={fn.effective_complexity || fn.complexity || fn.own_complexity || 'O(unknown)'} />
+              <MetricBadge label="Direct Time" value={fn.own_complexity || fn.complexity || 'O(unknown)'} />
+              <MetricBadge label="With Calls" value={fn.effective_complexity || fn.complexity || fn.own_complexity || 'O(unknown)'} />
             </div>
             {fn.explanation && (
               <p style={{ fontSize: '13px', color: 'var(--gray)', lineHeight: '1.6', margin: 0, overflowWrap: 'anywhere' }}>
@@ -470,7 +484,7 @@ function FunctionBreakdown({ functions, groqStatus = '' }) {
 
 function FunctionAiRewrite({ solution }) {
   return (
-    <div style={{ ...cardPanel, marginTop: '12px', borderColor: '#b7dfbf', background: '#f6fff8' }}>
+    <div className="rewrite-card">
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap', marginBottom: '10px' }}>
         <div style={{ minWidth: 0 }}>
           <div style={{ fontSize: '11px', color: 'var(--success)', fontWeight: '800', textTransform: 'uppercase', marginBottom: '4px' }}>
@@ -497,7 +511,7 @@ function FunctionAiRewrite({ solution }) {
 
 function ModifiedCodeAction({ loading, error, hasSolutions, onClick }) {
   return (
-    <section className="card" style={{ marginBottom: '20px', display: 'flex', justifyContent: 'flex-end', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
+    <section className="card modified-action">
       {error && (
         <div style={{ flex: '1 1 260px', color: '#b42318', fontSize: '13px', lineHeight: '1.5' }}>
           {error}
@@ -518,19 +532,7 @@ function ModifiedCodeAction({ loading, error, hasSolutions, onClick }) {
 
 function CodeBlock({ code, success = false }) {
   return (
-    <pre style={{
-      margin: 0,
-      padding: '12px',
-      background: success ? '#102016' : '#111827',
-      color: success ? '#d9fbe5' : '#e5e7eb',
-      borderRadius: '8px',
-      overflowX: 'auto',
-      fontSize: '12px',
-      lineHeight: '1.5',
-      fontFamily: 'var(--font-code)',
-      whiteSpace: 'pre',
-      tabSize: 2,
-    }}>{formatCode(code)}</pre>
+    <pre className={`code-block ${success ? 'success-code' : ''}`}>{formatCode(code)}</pre>
   );
 }
 
@@ -621,6 +623,7 @@ export default function Results() {
 
     return (
       <div data-filename={safeFilename}>
+        <ResultOverview functions={functionsWithAiSolutions} hotspots={hotspots} hasAiSolutions={hasAiSolutions} />
         <ComplexitySummary result={fileResult} filename={safeFilename} />
         <HotCodeSection hotspots={hotspots} />
         <FunctionBreakdown functions={functionsWithAiSolutions} groqStatus={groqStatus} />
@@ -643,7 +646,7 @@ export default function Results() {
 
     return (
       <div>
-        <section className="card" style={{ marginBottom: '20px', border: '1px solid var(--primary)', background: '#f8fbff' }}>
+        <section className="card summary-card">
           <h2 style={{ fontSize: '18px', fontWeight: '800', margin: '0 0 14px' }}>
             Project Complexity
           </h2>
@@ -658,7 +661,7 @@ export default function Results() {
               ['Worst Time', projectSummary.worst_time_complexity || 'O(unknown)'],
               ['Average Rating', `${result?.average_rating || 0}/10`],
             ].map(([label, value]) => (
-              <div key={label} style={cardPanel}>
+              <div key={label} className="project-stat">
                 <div style={{ fontSize: '11px', color: 'var(--gray)', fontWeight: '800', textTransform: 'uppercase', marginBottom: '5px' }}>
                   {label}
                 </div>
@@ -670,7 +673,7 @@ export default function Results() {
           </div>
         </section>
 
-        <section className="card" style={{ marginBottom: '20px' }}>
+        <section className="card report-section">
           <h3 style={{ fontSize: '16px', fontWeight: '700', marginBottom: '14px' }}>
             Files Analyzed ({files.length})
           </h3>
@@ -679,18 +682,7 @@ export default function Results() {
               <button
                 key={`${getSafeFilename(file, `File ${index + 1}`)}-${index}`}
                 onClick={() => setSelectedFile(index)}
-                style={{
-                  padding: '7px 12px',
-                  borderRadius: '8px',
-                  border: '1.5px solid',
-                  borderColor: selectedFile === index ? 'var(--primary)' : 'var(--border)',
-                  background: selectedFile === index ? 'var(--primary-light)' : 'white',
-                  color: selectedFile === index ? 'var(--primary)' : 'var(--gray)',
-                  fontSize: '12px',
-                  fontWeight: '700',
-                  cursor: 'pointer',
-                  fontFamily: 'var(--font-code)',
-                }}
+                className={`file-chip ${selectedFile === index ? 'active' : ''}`}
               >
                 {getSafeFilename(file, `File ${index + 1}`).split('/').pop()}
               </button>
@@ -705,28 +697,22 @@ export default function Results() {
   };
 
   return (
-    <div style={{ padding: '48px 0', minHeight: '80vh' }}>
+    <div className="page-shell results-page">
       <div className="container">
-        <div style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          marginBottom: '28px',
-          flexWrap: 'wrap',
-          gap: '12px',
-        }}>
+        <div className="results-header">
           <div>
-            <h1 style={{ fontSize: '28px', fontWeight: '800', marginBottom: '4px' }}>
+            <div className="eyebrow">Complexity report</div>
+            <h1>
               Analysis Results
             </h1>
-            <p style={{ fontSize: '14px', color: 'var(--gray)' }}>
+            <p>
               {isCodeResult && `File: ${result?.filename || 'Unknown'}`}
               {type === 'zip' && `ZIP file - ${result?.total_files || 0} files analyzed`}
               {type === 'github' && `GitHub: ${result?.github_url || 'Unknown'}`}
             </p>
           </div>
 
-          <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+          <div className="result-toolbar">
             <button
               onClick={() => navigate('/analyze')}
               className="btn btn-outline"

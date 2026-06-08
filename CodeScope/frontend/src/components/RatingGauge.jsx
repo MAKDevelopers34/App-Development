@@ -1,8 +1,8 @@
 export default function RatingGauge({ rating }) {
   const getColor = () => {
-    if (rating >= 8) return '#34a853';
-    if (rating >= 5) return '#fbbc04';
-    return '#ea4335';
+    if (rating >= 8) return 'var(--success)';
+    if (rating >= 5) return 'var(--warning)';
+    return 'var(--danger)';
   };
 
   const getLabel = () => {
@@ -29,7 +29,7 @@ export default function RatingGauge({ rating }) {
           <circle
             cx="60" cy="60" r="45"
             fill="none"
-            stroke="#f1f3f4"
+            stroke="#e5e7eb"
             strokeWidth="10"
           />
           {/* Progress circle */}

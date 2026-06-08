@@ -284,7 +284,8 @@ export default function Analyze() {
   };
 
   const tabStyle = (tab) => ({
-    padding: '10px 24px',
+    flex: 1,
+    padding: '10px 12px',
     border: 'none',
     borderRadius: '8px',
     cursor: 'pointer',
@@ -296,34 +297,41 @@ export default function Analyze() {
     color: activeTab === tab ? 'white' : 'var(--gray)',
   });
 
+  const codeLines = code.trim() ? code.replace(/\r\n/g, '\n').split('\n').length : 0;
+  const modeLabel = activeTab === 'code' ? 'Pasted source' : activeTab === 'zip' ? 'ZIP project' : 'GitHub repository';
+  const activeLanguage = activeTab === 'code' ? languageFromFilename(filename).toUpperCase() : 'MULTI-FILE';
+  const sourceState = activeTab === 'code'
+    ? (codeLines ? `${codeLines} lines ready` : 'Waiting for pasted code')
+    : activeTab === 'zip'
+      ? (zipFile ? `${(zipFile.size / 1024).toFixed(1)} KB selected` : 'Waiting for ZIP upload')
+      : (githubFolderPath || githubUrl ? 'Repository scope selected' : 'Waiting for repository URL');
+  const schemaState = activeTab === 'code'
+    ? (schemaLoading ? 'Checking input schema' : inputSchema.available ? `Inputs detected for ${inputSchema.function}()` : 'No required input schema')
+    : 'Concrete inputs are only used for pasted code';
+
   return (
-    <div style={{ padding: '48px 0', minHeight: '80vh' }}>
-      <div className="container" style={{ maxWidth: '800px' }}>
+    <div className="page-shell analyze-page">
+      <div className="container">
 
         {/* Header */}
-        <div style={{ textAlign: 'center', marginBottom: '40px' }}>
-          <h1 className="section-title">Analyze Your Code</h1>
-          <p className="section-subtitle">
-            Choose how you want to upload your code below
+        <div className="analyze-header">
+          <div className="eyebrow">Analysis workspace</div>
+          <h1>Analyze Your Code</h1>
+          <p>
+            Paste code, upload a ZIP archive, or analyze a selected GitHub folder.
           </p>
         </div>
 
+        <div className="analyze-grid">
         {/* Main card */}
-        <div className="card" style={{ padding: '32px' }}>
+        <div className="card analyze-card">
 
           {/* Tabs */}
-          <div style={{
-            display: 'flex',
-            gap: '4px',
-            background: 'var(--light-gray)',
-            padding: '4px',
-            borderRadius: '10px',
-            marginBottom: '28px'
-          }}>
+          <div className="source-tabs">
             {[
-              { key: 'code', label: '📝 Paste Code' },
-              { key: 'zip', label: '📁 Upload ZIP' },
-              { key: 'github', label: '🔗 GitHub URL' },
+              { key: 'code', label: 'Paste Code' },
+              { key: 'zip', label: 'Upload ZIP' },
+              { key: 'github', label: 'GitHub URL' },
             ].map(({ key, label }) => (
               <button
                 key={key}
@@ -343,7 +351,7 @@ export default function Analyze() {
           {activeTab === 'code' && (
             <div>
               <div style={{ marginBottom: '16px' }}>
-                <label style={{ fontSize: '13px', fontWeight: '500', color: 'var(--dark)', display: 'block', marginBottom: '6px' }}>
+                <label className="field-label">
                   Filename (helps detect language)
                 </label>
                 <input
@@ -359,7 +367,7 @@ export default function Analyze() {
                 />
               </div>
               <div>
-                <label style={{ fontSize: '13px', fontWeight: '500', color: 'var(--dark)', display: 'block', marginBottom: '6px' }}>
+                <label className="field-label">
                   Paste your code here
                 </label>
                 <textarea
@@ -376,7 +384,8 @@ export default function Analyze() {
                     fontFamily: 'var(--font-code)',
                     fontSize: '13px',
                     resize: 'vertical',
-                    lineHeight: '1.6'
+                    lineHeight: '1.6',
+                    minHeight: '360px',
                   }}
                 />
               </div>
@@ -416,7 +425,7 @@ export default function Analyze() {
                 </div>
               ) : (
                 <div style={{ marginTop: '16px' }}>
-                  <label style={{ fontSize: '13px', fontWeight: '500', color: 'var(--dark)', display: 'block', marginBottom: '6px' }}>
+                  <label className="field-label">
                     Input values (optional)
                   </label>
                   <input
@@ -438,23 +447,39 @@ export default function Analyze() {
                 {...getRootProps()}
                 style={{
                   border: `2px dashed ${isDragActive ? 'var(--primary)' : 'var(--border)'}`,
-                  borderRadius: '12px',
+                  borderRadius: '8px',
                   padding: '48px 24px',
                   textAlign: 'center',
                   cursor: 'pointer',
                   background: isDragActive ? 'var(--primary-light)' : 'var(--light-gray)',
                   transition: 'all 0.2s'
                 }}
+                className="dropzone"
               >
                 <input {...getInputProps()} />
-                <div style={{ fontSize: '40px', marginBottom: '12px' }}>📁</div>
+                <div style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  padding: '6px 12px',
+                  borderRadius: '999px',
+                  background: 'var(--primary-light)',
+                  color: 'var(--primary)',
+                  fontSize: '12px',
+                  fontWeight: '700',
+                  letterSpacing: '0.04em',
+                  textTransform: 'uppercase',
+                  marginBottom: '14px'
+                }}>
+                  ZIP archive
+                </div>
                 {zipFile ? (
                   <div>
                     <div style={{ fontSize: '15px', fontWeight: '600', color: 'var(--primary)', marginBottom: '4px' }}>
-                      ✅ {zipFile.name}
+                      {zipFile.name}
                     </div>
                     <div style={{ fontSize: '13px', color: 'var(--gray)' }}>
-                      {(zipFile.size / 1024).toFixed(1)} KB — Click to change
+                      {(zipFile.size / 1024).toFixed(1)} KB - Click to change
                     </div>
                   </div>
                 ) : (
@@ -463,13 +488,13 @@ export default function Analyze() {
                       {isDragActive ? 'Drop your ZIP file here' : 'Drag & drop your ZIP file here'}
                     </div>
                     <div style={{ fontSize: '13px', color: 'var(--gray)' }}>
-                      or click to browse — supports .zip files only
+                      or click to browse. Supports .zip files only.
                     </div>
                   </div>
                 )}
               </div>
               <p style={{ fontSize: '12px', color: 'var(--gray)', marginTop: '10px' }}>
-                💡 Tip: ZIP your project folder and upload. We'll analyze all Python, JavaScript, Java, C++, and TypeScript files inside.
+                CodeScope analyzes Python, JavaScript, Java, C++, and TypeScript files inside the archive.
               </p>
             </div>
           )}
@@ -477,7 +502,7 @@ export default function Analyze() {
           {/* Tab: GitHub URL */}
           {activeTab === 'github' && (
             <div>
-              <label style={{ fontSize: '13px', fontWeight: '500', color: 'var(--dark)', display: 'block', marginBottom: '6px' }}>
+              <label className="field-label">
                 GitHub Repository URL
               </label>
               <input
@@ -532,7 +557,7 @@ export default function Analyze() {
                 </div>
               )}
               <p style={{ fontSize: '12px', color: 'var(--gray)' }}>
-                Tip: Make sure the repository is public. We'll fetch and analyze up to 20 code files from the selected folder.
+                CodeScope fetches public repositories and analyzes up to 20 code files from the selected folder.
               </p>
             </div>
           )}
@@ -540,7 +565,7 @@ export default function Analyze() {
           {/* Error */}
           {error && (
             <div className="error-box" style={{ marginTop: '16px' }}>
-              ⚠️ {error}
+              {error}
             </div>
           )}
 
@@ -566,10 +591,45 @@ export default function Analyze() {
                 {githubTreeLoading ? 'Loading repository...' : 'Analyzing...'}
               </>
             ) : (
-              '🔍 Analyze Now'
+              'Analyze Now'
             )}
           </button>
 
+        </div>
+        <aside className="analysis-side">
+          <div className="side-panel">
+            <div className="side-kicker">Current source</div>
+            <h2>{modeLabel}</h2>
+            <div className="status-list">
+              <div className="status-row">
+                <span>Language</span>
+                <strong>{activeLanguage}</strong>
+              </div>
+              <div className="status-row">
+                <span>Source</span>
+                <strong>{sourceState}</strong>
+              </div>
+              <div className="status-row">
+                <span>Inputs</span>
+                <strong>{schemaState}</strong>
+              </div>
+              <div className="status-row">
+                <span>Modified code</span>
+                <strong>Available after results load</strong>
+              </div>
+            </div>
+          </div>
+
+          <div className="side-panel muted-panel">
+            <div className="side-kicker">What the report will show</div>
+            <ul className="clean-list">
+              <li>Overall Big-O time and Big-O space.</li>
+              <li>Function-by-function complexity with exact code snippets.</li>
+              <li>Only the highest-cost functions in Hot Code.</li>
+              <li>Groq modified functions on request, attached below matching functions.</li>
+            </ul>
+          </div>
+        </aside>
         </div>
       </div>
     </div>

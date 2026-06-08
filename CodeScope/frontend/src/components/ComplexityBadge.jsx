@@ -31,42 +31,42 @@ const classifyComplexity = (complexity = '') => {
   if (hasFactorial || hasExponential || normalized.includes('ackermann')) {
     return {
       label: 'Critical',
-      style: { background: '#fce8e6', color: '#b42318', border: '1px solid #ea4335' },
+      style: { background: '#fef2f2', color: '#b42318', border: '1px solid #fecaca' },
     };
   }
 
   if (hasCubic || worstCaseRisk) {
     return {
       label: 'High',
-      style: { background: '#fff1f2', color: '#be123c', border: '1px solid #fb7185' },
+      style: { background: '#fff1f2', color: '#be123c', border: '1px solid #fecdd3' },
     };
   }
 
   if (hasQuadratic) {
     return {
       label: 'Costly',
-      style: { background: '#fff7ed', color: '#c2410c', border: '1px solid #fdba74' },
+      style: { background: '#fff7ed', color: '#c2410c', border: '1px solid #fed7aa' },
     };
   }
 
   if (hasNLogN) {
     return {
       label: 'Fair',
-      style: { background: '#fef7e0', color: '#b06000', border: '1px solid #fbbc04' },
+      style: { background: '#fffbeb', color: '#92400e', border: '1px solid #fde68a' },
     };
   }
 
   if (hasLinear) {
     return {
       label: 'Good',
-      style: { background: '#e6f4ea', color: '#137333', border: '1px solid #34a853' },
+      style: { background: '#ecfdf3', color: '#067647', border: '1px solid #bbf7d0' },
     };
   }
 
   if (normalized.includes('o(1)') || hasLog) {
     return {
       label: 'Great',
-      style: { background: '#e0f2fe', color: '#0369a1', border: '1px solid #38bdf8' },
+      style: { background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe' },
     };
   }
 

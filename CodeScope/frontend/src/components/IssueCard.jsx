@@ -3,24 +3,24 @@ export default function IssueCard({ issue, hideSolution = false }) {
     switch (severity) {
       case 'high':
         return {
-          background: '#fce8e6',
+          background: '#ffffff',
           border: '1px solid #f5c6c2',
-          color: '#ea4335',
-          icon: '🔴'
+          color: '#b42318',
+          accent: '#ea4335'
         };
       case 'medium':
         return {
-          background: '#fef7e0',
+          background: '#ffffff',
           border: '1px solid #fde68a',
-          color: '#b06000',
-          icon: '🟡'
+          color: '#92400e',
+          accent: '#f59e0b'
         };
       default:
         return {
-          background: '#e6f4ea',
+          background: '#ffffff',
           border: '1px solid #b7dfbf',
-          color: '#34a853',
-          icon: '🟢'
+          color: '#067647',
+          accent: '#16a34a'
         };
     }
   };
@@ -35,14 +35,21 @@ export default function IssueCard({ issue, hideSolution = false }) {
     <div style={{
       background: style.background,
       border: style.border,
-      borderRadius: '10px',
+      borderRadius: '8px',
       padding: '14px 16px',
       marginBottom: '10px',
       display: 'flex',
       alignItems: 'flex-start',
       gap: '12px'
     }}>
-      <span style={{ fontSize: '16px', marginTop: '1px' }}>{style.icon}</span>
+      <span style={{
+        width: '4px',
+        alignSelf: 'stretch',
+        minHeight: '44px',
+        borderRadius: '999px',
+        background: style.accent,
+        flex: '0 0 auto'
+      }} />
       <div style={{ flex: 1 }}>
         <div style={{
           display: 'flex',

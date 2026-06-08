@@ -11,12 +11,7 @@ export default function Footer() {
       <div className="container">
 
         {/* Top section */}
-        <div style={{
-          display: 'grid',
-          gridTemplateColumns: '2fr 1fr 1fr',
-          gap: '40px',
-          marginBottom: '40px'
-        }}>
+        <div className="footer-grid">
 
           {/* Brand */}
           <div>
@@ -37,7 +32,7 @@ export default function Footer() {
               </span>
             </div>
             <p style={{ fontSize: '13px', color: '#9aa0a6', lineHeight: '1.7', maxWidth: '280px' }}>
-              AI-powered code complexity analyzer. Upload your code and get instant insights on time complexity, space complexity, and performance improvements.
+              Code complexity analysis for pasted snippets, ZIP projects, and GitHub repositories. Review Big-O results, hot code, and lower-complexity function rewrites.
             </p>
           </div>
 
@@ -67,15 +62,15 @@ export default function Footer() {
           {/* Languages */}
           <div>
             <div style={{ fontSize: '13px', fontWeight: '600', marginBottom: '14px', color: '#e8eaed' }}>
-              Supported Languages
+              Analysis Scope
             </div>
-            {['Python', 'JavaScript', 'Java', 'C++', 'TypeScript'].map(lang => (
-              <div key={lang} style={{
+            {['File summary', 'Function complexity', 'Hot code', 'Modified functions', 'PDF reports'].map(item => (
+              <div key={item} style={{
                 fontSize: '13px',
                 color: '#9aa0a6',
                 marginBottom: '10px'
               }}>
-                {lang}
+                {item}
               </div>
             ))}
           </div>
@@ -83,18 +78,12 @@ export default function Footer() {
         </div>
 
         {/* Bottom */}
-        <div style={{
-          borderTop: '1px solid #3c4043',
-          paddingTop: '20px',
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center'
-        }}>
+        <div className="footer-bottom">
           <div style={{ fontSize: '12px', color: '#9aa0a6' }}>
-            © 2026 CodeScope. Built for algorithm analysis course project.
+            Copyright 2026 CodeScope.
           </div>
           <div style={{ fontSize: '12px', color: '#9aa0a6' }}>
-            Free & Open Source
+            Time and space complexity reports
           </div>
         </div>
 
