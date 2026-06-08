@@ -32,6 +32,13 @@ export const analyzeCode = async (code, filename = 'code.py', concreteInputs = '
   const response = await api.post('/api/analyze/code', payload);
   return {
     ...response.data,
+    result: response.data?.result
+      ? {
+          ...response.data.result,
+          source_code: response.data.result.source_code || code,
+          concrete_inputs: response.data.result.concrete_inputs || payload.concrete_inputs,
+        }
+      : response.data?.result,
     source_code: code,
     concrete_inputs: payload.concrete_inputs,
   };
@@ -50,9 +57,32 @@ export const getModifiedCode = async (code, filename = 'code.py', concreteInputs
 
   const response = await api.post('/api/optimize/code', payload);
   if (response.data?.job_id) {
-    return pollAnalysisJob(response.data.job_id);
+    const jobResult = await pollAnalysisJob(response.data.job_id);
+    return {
+      ...jobResult,
+      result: jobResult?.result
+        ? {
+            ...jobResult.result,
+            source_code: jobResult.result.source_code || code,
+            concrete_inputs: jobResult.result.concrete_inputs || payload.concrete_inputs,
+          }
+        : jobResult?.result,
+      source_code: code,
+      concrete_inputs: payload.concrete_inputs,
+    };
   }
-  return response.data;
+  return {
+    ...response.data,
+    result: response.data?.result
+      ? {
+          ...response.data.result,
+          source_code: response.data.result.source_code || code,
+          concrete_inputs: response.data.result.concrete_inputs || payload.concrete_inputs,
+        }
+      : response.data?.result,
+    source_code: code,
+    concrete_inputs: payload.concrete_inputs,
+  };
 };
 
 export const pollAnalysisJob = async (jobId, options = {}) => {

@@ -70,6 +70,118 @@ const exactFunctionSnippet = (snippet = '') => {
   return lines.join('\n').trim();
 };
 
+const sourceFunctionSnippet = (sourceCode = '', startLine = 1, language = '') => {
+  const source = String(sourceCode || '').replace(/\r\n/g, '\n').replace(/\t/g, '  ');
+  const lines = source.split('\n');
+  const start = Math.max(0, Number(startLine || 1) - 1);
+  if (!source.trim() || start >= lines.length) return '';
+
+  const firstLine = lines[start] || '';
+  const baseIndent = lineIndent(firstLine);
+  const isPython = language === 'python' || /^(?:async\s+def|def|class)\s+\w+/.test(firstLine.trim());
+  const hardEnd = lines.length;
+
+  if (isPython) {
+    for (let index = start + 1; index < hardEnd; index += 1) {
+      const line = lines[index];
+      const text = line.trim();
+      if (!text) continue;
+      if (lineIndent(line) <= baseIndent && looksLikeNextFunction(line)) {
+        return lines.slice(start, index).join('\n').trim();
+      }
+    }
+    return lines.slice(start, hardEnd).join('\n').trim();
+  }
+
+  let depth = 0;
+  let seenOpen = false;
+  for (let index = start; index < hardEnd; index += 1) {
+    const line = lines[index];
+    if (line.includes('{')) seenOpen = true;
+    depth += (line.match(/{/g) || []).length;
+    depth -= (line.match(/}/g) || []).length;
+    if (seenOpen && depth <= 0) {
+      return lines.slice(start, index + 1).join('\n').trim();
+    }
+    if (!seenOpen && index > start && looksLikeNextFunction(line)) {
+      return lines.slice(start, index).join('\n').trim();
+    }
+  }
+
+  return lines.slice(start, hardEnd).join('\n').trim();
+};
+
+const findFunctionLineByName = (sourceCode = '', functionName = '') => {
+  const name = String(functionName || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  if (!name) return 0;
+  const patterns = [
+    new RegExp(`^\\s*(?:async\\s+def|def)\\s+${name}\\s*\\(`),
+    new RegExp(`^\\s*function\\s+\\*?\\s*${name}\\s*\\(`),
+    new RegExp(`^\\s*(?:const|let|var)\\s+${name}\\s*=`),
+    new RegExp(`^\\s*(?:(?:public|private|protected)\\s+)?(?:static\\s+)?[\\w:<>,\\[\\] ?&*]+\\s+${name}\\s*\\(`),
+  ];
+
+  const lines = String(sourceCode || '').replace(/\r\n/g, '\n').split('\n');
+  const index = lines.findIndex(line => patterns.some(pattern => pattern.test(line)));
+  return index >= 0 ? index + 1 : 0;
+};
+
+const lineLooksLikeFunction = (sourceCode = '', lineNumber = 0, functionName = '') => {
+  const lines = String(sourceCode || '').replace(/\r\n/g, '\n').split('\n');
+  const line = lines[Math.max(0, Number(lineNumber || 1) - 1)] || '';
+  return aliasesFor(functionName).some(alias => {
+    const escaped = String(alias).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`\\b${escaped}\\b`).test(line);
+  });
+};
+
+const hydrateFunctionSnippets = (functions, sourceCode = '', language = '') => (
+  functions.map(fn => {
+    const current = formatCode(fn.snippet);
+    const headerOnly = current && current.split('\n').length <= 1;
+
+    const namedLine = findFunctionLineByName(sourceCode, fn.function);
+    const detailLine = Number(fn.line || 0);
+    const sourceLine = lineLooksLikeFunction(sourceCode, detailLine, fn.function)
+      ? detailLine
+      : namedLine || detailLine;
+    const rebuilt = sourceFunctionSnippet(sourceCode, sourceLine || namedLine, language);
+    if (rebuilt && (headerOnly || rebuilt.split('\n').length > current.split('\n').length)) {
+      return { ...fn, snippet: rebuilt };
+    }
+    if (current && !headerOnly) return fn;
+    return rebuilt ? { ...fn, snippet: rebuilt } : fn;
+  })
+);
+
+const readStoredSourceCode = () => {
+  try {
+    return (
+      window.sessionStorage.getItem('codescope:lastSourceCode') ||
+      window.localStorage.getItem('codescope:lastSourceCode') ||
+      ''
+    );
+  } catch {
+    return '';
+  }
+};
+
+const functionDisplaySnippet = (fn, sourceCode = '', language = '') => {
+  const namedLine = findFunctionLineByName(sourceCode, fn?.function);
+  if (namedLine) {
+    const fromSource = sourceFunctionSnippet(sourceCode, namedLine, language);
+    if (fromSource) return fromSource;
+  }
+
+  const detailLine = Number(fn?.line || 0);
+  if (lineLooksLikeFunction(sourceCode, detailLine, fn?.function)) {
+    const fromLine = sourceFunctionSnippet(sourceCode, detailLine, language);
+    if (fromLine) return fromLine;
+  }
+
+  return exactFunctionSnippet(fn?.snippet || '');
+};
+
 const normalizeComplexity = (value = '') => String(value)
   .toLowerCase()
   .replace(/\s+/g, '')
@@ -297,11 +409,11 @@ const isGroqFailureReason = (reason = '') => (
   /\b(?:groq|grok).*(?:error|connection|unavailable|key|timeout|failed)|no groq|no grok/i.test(String(reason || ''))
 );
 
-function ResultOverview({ functions, hotspots, hasAiSolutions }) {
+function ResultOverview({ functions, hotspots, hasAiSolutions, modifiedChecked, providerStatus }) {
   const stats = [
     ['Functions', functions.length],
     ['Hotspots', hotspots.length],
-    ['Modified', hasAiSolutions ? 'Ready' : 'On request'],
+    ['Modified', hasAiSolutions ? 'Ready' : providerStatus ? 'Provider error' : modifiedChecked ? 'None found' : 'On request'],
   ];
 
   return (
@@ -363,7 +475,7 @@ function MetricBadge({ label, value }) {
   );
 }
 
-function HotCodeSection({ hotspots }) {
+function HotCodeSection({ hotspots, sourceCode = '', language = '' }) {
   return (
     <section className="card report-section">
       <div className="report-section-head">
@@ -395,7 +507,9 @@ function HotCodeSection({ hotspots }) {
                 {hotspot.reason}
               </p>
             )}
-            {hotspot.snippet && <CodeBlock code={exactFunctionSnippet(hotspot.snippet)} dark />}
+            {functionDisplaySnippet(hotspot, sourceCode, language) && (
+              <CodeBlock code={functionDisplaySnippet(hotspot, sourceCode, language)} dark />
+            )}
             {aiSolutions.map((solution, solutionIndex) => (
               <FunctionAiRewrite
                 key={`${solution.function || hotspot.function || 'hotspot-rewrite'}-${solutionIndex}`}
@@ -409,7 +523,7 @@ function HotCodeSection({ hotspots }) {
   );
 }
 
-function FunctionBreakdown({ functions, groqStatus = '' }) {
+function FunctionBreakdown({ functions, groqStatus = '', sourceCode = '', language = '' }) {
   const hasAiSolution = functions.some(fn => Array.isArray(fn.ai_solutions) && fn.ai_solutions.length > 0);
 
   return (
@@ -437,7 +551,9 @@ function FunctionBreakdown({ functions, groqStatus = '' }) {
         <p className="empty-state">
           No named functions were detected. The file-level complexity is shown above.
         </p>
-      ) : functions.map((fn, index) => (
+      ) : functions.map((fn, index) => {
+        const displaySnippet = functionDisplaySnippet(fn, sourceCode, language);
+        return (
         <div key={`${fn.function || 'function'}-${index}`} className="function-row" style={{
           borderBottom: index < functions.length - 1 ? '1px solid var(--border)' : 'none',
         }}>
@@ -461,12 +577,12 @@ function FunctionBreakdown({ functions, groqStatus = '' }) {
                 {fn.explanation}
               </p>
             )}
-            {fn.snippet && (
+            {displaySnippet && (
               <div style={{ marginTop: '12px' }}>
                 <div style={{ fontSize: '11px', color: 'var(--gray)', fontWeight: '800', textTransform: 'uppercase', marginBottom: '6px' }}>
                   Function Code
                 </div>
-                <CodeBlock code={exactFunctionSnippet(fn.snippet)} />
+                <CodeBlock code={displaySnippet} />
               </div>
             )}
             {fn.ai_solutions?.map((solution, solutionIndex) => (
@@ -477,7 +593,8 @@ function FunctionBreakdown({ functions, groqStatus = '' }) {
             ))}
           </div>
         </div>
-      ))}
+        );
+      })}
     </section>
   );
 }
@@ -509,12 +626,27 @@ function FunctionAiRewrite({ solution }) {
   );
 }
 
-function ModifiedCodeAction({ loading, error, hasSolutions, onClick }) {
+function ModifiedCodeAction({ loading, error, status, hasSolutions, checked, onClick }) {
   return (
     <section className="card modified-action">
       {error && (
         <div style={{ flex: '1 1 260px', color: '#b42318', fontSize: '13px', lineHeight: '1.5' }}>
           {error}
+        </div>
+      )}
+      {!error && status && (
+        <div style={{ flex: '1 1 320px', color: '#8a5a00', fontSize: '13px', lineHeight: '1.55' }}>
+          {status}
+        </div>
+      )}
+      {!error && !status && checked && !hasSolutions && (
+        <div style={{ flex: '1 1 320px', color: 'var(--gray)', fontSize: '13px', lineHeight: '1.55' }}>
+          No lower-complexity modified function was found for this code. This can be correct when the current output already requires the detected complexity or when no same-behavior rewrite passes CodeScope validation.
+        </div>
+      )}
+      {!error && !status && checked && hasSolutions && (
+        <div style={{ flex: '1 1 320px', color: '#067647', fontSize: '13px', lineHeight: '1.55' }}>
+          Modified function code is ready and shown below the matching function.
         </div>
       )}
       <button
@@ -545,11 +677,13 @@ export default function Results() {
   const [downloadError, setDownloadError] = useState('');
   const [modifiedLoading, setModifiedLoading] = useState(false);
   const [modifiedError, setModifiedError] = useState('');
+  const [modifiedChecked, setModifiedChecked] = useState(false);
   const [selectedFile, setSelectedFile] = useState(0);
 
   const result = currentResult;
   const type = stateData.type;
   const isCodeResult = type === 'code' || (!type && !Array.isArray(result?.files));
+  const routeSourceCode = stateData.source_code || readStoredSourceCode();
 
   if (!result) {
     return <Navigate to="/analyze" replace />;
@@ -579,16 +713,18 @@ export default function Results() {
   };
 
   const handleGetModifiedCode = async () => {
-    const sourceCode = result?.source_code || stateData.source_code || '';
+    const sourceCode = result?.source_code || stateData.source_code || routeSourceCode || '';
     const filename = result?.filename || 'code.py';
 
     if (!sourceCode.trim()) {
       setModifiedError('Original pasted code is not available for this result. Please analyze the code again.');
+      setModifiedChecked(true);
       return;
     }
 
     setModifiedLoading(true);
     setModifiedError('');
+    setModifiedChecked(false);
     try {
       const payload = await getModifiedCode(
         sourceCode,
@@ -600,8 +736,10 @@ export default function Results() {
         source_code: sourceCode,
         concrete_inputs: result?.concrete_inputs || stateData.concrete_inputs || '',
       });
+      setModifiedChecked(true);
     } catch (err) {
       setModifiedError(getApiErrorMessage(err, 'Could not get modified code from Groq. Please try again.'));
+      setModifiedChecked(true);
     } finally {
       setModifiedLoading(false);
     }
@@ -610,7 +748,18 @@ export default function Results() {
   const renderSingleResult = (data, filename) => {
     const fileResult = data?.result || data || {};
     const safeFilename = filename || getSafeFilename(data);
-    const functions = functionRowsFor(fileResult);
+    const sourceCode = (
+      stateData.source_code ||
+      data?.source_code ||
+      fileResult?.source_code ||
+      routeSourceCode ||
+      ''
+    );
+    const functions = hydrateFunctionSnippets(
+      functionRowsFor(fileResult),
+      sourceCode,
+      fileResult?.language || ''
+    );
     const initialHotspots = hotspotsFor(fileResult, functions);
     const aiSolutions = aiSolutionsFor(fileResult, initialHotspots, functions);
     const functionsWithAiSolutions = attachSolutionsToFunctions(functions, aiSolutions);
@@ -623,15 +772,32 @@ export default function Results() {
 
     return (
       <div data-filename={safeFilename}>
-        <ResultOverview functions={functionsWithAiSolutions} hotspots={hotspots} hasAiSolutions={hasAiSolutions} />
+        <ResultOverview
+          functions={functionsWithAiSolutions}
+          hotspots={hotspots}
+          hasAiSolutions={hasAiSolutions}
+          modifiedChecked={modifiedChecked}
+          providerStatus={groqStatus}
+        />
         <ComplexitySummary result={fileResult} filename={safeFilename} />
-        <HotCodeSection hotspots={hotspots} />
-        <FunctionBreakdown functions={functionsWithAiSolutions} groqStatus={groqStatus} />
+        <HotCodeSection
+          hotspots={hotspots}
+          sourceCode={sourceCode}
+          language={fileResult?.language || ''}
+        />
+        <FunctionBreakdown
+          functions={functionsWithAiSolutions}
+          groqStatus={groqStatus}
+          sourceCode={sourceCode}
+          language={fileResult?.language || ''}
+        />
         {isCodeResult && (
           <ModifiedCodeAction
             loading={modifiedLoading}
             error={modifiedError}
+            status={groqStatus}
             hasSolutions={hasAiSolutions}
+            checked={modifiedChecked}
             onClick={handleGetModifiedCode}
           />
         )}

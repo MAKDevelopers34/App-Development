@@ -250,12 +250,29 @@ export default function Analyze() {
           setLoading(false);
           return;
         }
+        const concreteInputPayload = buildConcreteInputPayload(inputSchema, inputValues, concreteInputs);
         result = await analyzeCode(
           code,
           filename,
-          buildConcreteInputPayload(inputSchema, inputValues, concreteInputs)
+          concreteInputPayload
         );
-        navigate('/results', { state: { result, type: 'code' } });
+        try {
+          window.sessionStorage.setItem('codescope:lastSourceCode', code);
+          window.sessionStorage.setItem('codescope:lastFilename', filename);
+          window.localStorage.setItem('codescope:lastSourceCode', code);
+          window.localStorage.setItem('codescope:lastFilename', filename);
+        } catch {
+          // Browser storage can be unavailable in strict privacy modes.
+        }
+        navigate('/results', {
+          state: {
+            result,
+            type: 'code',
+            source_code: code,
+            filename,
+            concrete_inputs: concreteInputPayload,
+          }
+        });
 
       } else if (activeTab === 'zip') {
         if (!zipFile) {

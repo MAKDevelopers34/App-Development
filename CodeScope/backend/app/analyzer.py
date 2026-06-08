@@ -1063,7 +1063,7 @@ class CodeAnalyzer:
                 return line_number
         return 1
 
-    def _function_snippet(self, code, start_line, language=None, max_lines=18):
+    def _function_snippet(self, code, start_line, language=None, max_lines=None):
         lines = code.splitlines()
         if not lines:
             return ''
@@ -1071,8 +1071,8 @@ class CodeAnalyzer:
         end = self._function_snippet_end(lines, start, language, max_lines)
         return '\n'.join(lines[start:end]).strip()
 
-    def _function_snippet_end(self, lines, start, language=None, max_lines=18):
-        hard_end = min(len(lines), start + max_lines)
+    def _function_snippet_end(self, lines, start, language=None, max_lines=None):
+        hard_end = len(lines) if max_lines is None else min(len(lines), start + max_lines)
         if start >= len(lines):
             return hard_end
 
@@ -1081,7 +1081,10 @@ class CodeAnalyzer:
             for index in range(start + 1, hard_end):
                 if not lines[index].strip():
                     continue
-                if self._line_indent(lines[index]) <= base_indent:
+                if (
+                    self._line_indent(lines[index]) <= base_indent and
+                    self._line_starts_python_block(lines[index])
+                ):
                     return index
             return hard_end
 

@@ -218,6 +218,9 @@ def _run_analysis_job(job_id, code, filename, concrete_inputs=None, include_ai=F
             include_ai=include_ai,
             include_ai_explanations=include_ai_explanations,
         )
+        result['source_code'] = code
+        if concrete_inputs:
+            result['concrete_inputs'] = concrete_inputs
         _update_analysis_job(
             job_id,
             status='completed',
@@ -1040,6 +1043,9 @@ def analyze_code():
             include_ai=False,
             include_ai_explanations=False,
         )
+        result['source_code'] = code
+        if concrete_inputs:
+            result['concrete_inputs'] = concrete_inputs
 
         return jsonify({'success': True, 'filename': filename, 'result': result})
 
@@ -1088,6 +1094,9 @@ def optimize_code():
             include_ai=True,
             include_ai_explanations=False,
         )
+        result['source_code'] = code
+        if concrete_inputs:
+            result['concrete_inputs'] = concrete_inputs
         return jsonify({'success': True, 'filename': filename, 'result': result})
 
     except Exception as e:
@@ -1189,6 +1198,7 @@ def analyze_zip():
                             include_ai=False,
                             include_ai_explanations=False,
                         )
+                        result['source_code'] = code
 
                         results.append({'filename': filename, 'result': result})
                         source_files.append({'filename': filename, 'code': code})
@@ -1251,6 +1261,7 @@ def analyze_github():
                 include_ai=False,
                 include_ai_explanations=False,
             )
+            result['source_code'] = file['code']
 
             results.append({'filename': file['filename'], 'result': result})
             source_files.append({'filename': file['filename'], 'code': file['code']})
