@@ -1,6 +1,8 @@
 import unittest
+import tempfile
 from unittest.mock import patch
 
+from app import routes as routes_module
 from app.analyzer import CodeAnalyzer
 from app.ai_explainer import (
     _build_ai_optimization_prompt,
@@ -27,6 +29,8 @@ from app.routes import (
     _analyze_with_extras,
     _attach_ai_rewrites,
     _build_batch_summary,
+    _get_analysis_job,
+    _persist_analysis_job,
     _should_skip_batch_path,
 )
 
@@ -2630,6 +2634,33 @@ function b(n) {
 
         self.assertEqual(summary["worst_time_complexity"], self.analyzer._cubic())
         self.assertEqual(summary["worst_space_complexity"], "O(n)")
+
+    def test_analysis_job_lookup_survives_empty_process_memory(self):
+        job_id = "a" * 32
+        now = routes_module.time.time()
+        job = {
+            "status": "completed",
+            "created_at": now,
+            "updated_at": now,
+            "filename": "app.py",
+            "result": {"success": True},
+            "error": None,
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir, patch.object(routes_module, "ANALYSIS_JOB_DIR", tmpdir):
+            with routes_module.ANALYSIS_JOBS_LOCK:
+                routes_module.ANALYSIS_JOBS.clear()
+
+            _persist_analysis_job(job_id, job)
+
+            with routes_module.ANALYSIS_JOBS_LOCK:
+                routes_module.ANALYSIS_JOBS.clear()
+
+            restored = _get_analysis_job(job_id)
+
+        self.assertIsNotNone(restored)
+        self.assertEqual(restored["status"], "completed")
+        self.assertEqual(restored["result"]["success"], True)
 
     def test_report_complexity_rank_handles_arbitrary_polynomial_powers(self):
         self.assertGreater(_report_complexity_rank("O(n^7)"), _report_complexity_rank("O(n^3)"))

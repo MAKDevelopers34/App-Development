@@ -113,6 +113,9 @@ export const pollAnalysisJob = async (jobId, options = {}) => {
         throw new Error(err.response.data.error || 'Backend analysis failed.', { cause: err });
       }
       if (err.response?.status === 404) {
+        if (typeof options.onMissing === 'function') {
+          return options.onMissing(err);
+        }
         throw new Error(err.response.data?.error || 'Analysis job was not found.', { cause: err });
       }
       lastPollError = err;
@@ -293,8 +296,14 @@ export const fetchGithubFilesPublic = async (url, path = '', ref = '') => {
   }
 };
 
+const postGithubAnalysis = async (payload) => {
+  const response = await api.post('/api/analyze/github', payload, { timeout: 0 });
+  return response.data;
+};
+
 export const analyzeGithub = async (url, path = '', ref = '') => {
-  const payload = { url, async: true };
+  const selectedFile = isSupportedGithubPath(path);
+  const payload = { url, async: !selectedFile };
   if (path) payload.path = path;
   if (ref) payload.ref = ref;
 
@@ -303,6 +312,7 @@ export const analyzeGithub = async (url, path = '', ref = '') => {
     return pollAnalysisJob(response.data.job_id, {
       intervalMs: 2500,
       timeoutMs: 600000,
+      onMissing: () => postGithubAnalysis({ ...payload, async: false }),
     });
   }
   return response.data;

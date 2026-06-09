@@ -12,11 +12,13 @@ from app.ai_explainer import (
     start_ai_budget,
 )
 import copy
+import json
 import zipfile
 import io
 import os
 import posixpath
 import re
+import tempfile
 import threading
 import time
 import uuid
@@ -25,6 +27,7 @@ from collections import defaultdict
 main = Blueprint('main', __name__)
 
 ANALYSIS_JOB_TTL_SECONDS = 10 * 60
+ANALYSIS_JOB_DIR = os.path.join(tempfile.gettempdir(), 'codescope-analysis-jobs')
 ANALYSIS_JOBS = {}
 ANALYSIS_JOBS_LOCK = threading.Lock()
 
@@ -381,15 +384,17 @@ def _analyzer_function_explanations(function_details):
 def _start_analysis_job(code, filename, concrete_inputs=None, include_ai=False, include_ai_explanations=False):
     _cleanup_analysis_jobs()
     job_id = uuid.uuid4().hex
+    job = {
+        'status': 'queued',
+        'created_at': time.time(),
+        'updated_at': time.time(),
+        'filename': filename,
+        'result': None,
+        'error': None,
+    }
     with ANALYSIS_JOBS_LOCK:
-        ANALYSIS_JOBS[job_id] = {
-            'status': 'queued',
-            'created_at': time.time(),
-            'updated_at': time.time(),
-            'filename': filename,
-            'result': None,
-            'error': None,
-        }
+        ANALYSIS_JOBS[job_id] = job
+    _persist_analysis_job(job_id, job)
     thread = threading.Thread(
         target=_run_analysis_job,
         args=(job_id, code, filename, concrete_inputs, include_ai, include_ai_explanations),
@@ -440,15 +445,17 @@ def _run_analysis_job(job_id, code, filename, concrete_inputs=None, include_ai=F
 def _start_github_analysis_job(url, selected_path='', selected_ref=None):
     _cleanup_analysis_jobs()
     job_id = uuid.uuid4().hex
+    job = {
+        'status': 'queued',
+        'created_at': time.time(),
+        'updated_at': time.time(),
+        'filename': selected_path or url,
+        'result': None,
+        'error': None,
+    }
     with ANALYSIS_JOBS_LOCK:
-        ANALYSIS_JOBS[job_id] = {
-            'status': 'queued',
-            'created_at': time.time(),
-            'updated_at': time.time(),
-            'filename': selected_path or url,
-            'result': None,
-            'error': None,
-        }
+        ANALYSIS_JOBS[job_id] = job
+    _persist_analysis_job(job_id, job)
     thread = threading.Thread(
         target=_run_github_analysis_job,
         args=(job_id, url, selected_path, selected_ref),
@@ -468,19 +475,33 @@ def _run_github_analysis_job(job_id, url, selected_path='', selected_ref=None):
 
 
 def _update_analysis_job(job_id, **updates):
+    updated = None
     with ANALYSIS_JOBS_LOCK:
         job = ANALYSIS_JOBS.get(job_id)
         if not job:
             return
         job.update(updates)
         job['updated_at'] = time.time()
+        updated = dict(job)
+    _persist_analysis_job(job_id, updated)
 
 
 def _get_analysis_job(job_id):
     _cleanup_analysis_jobs()
     with ANALYSIS_JOBS_LOCK:
         job = ANALYSIS_JOBS.get(job_id)
-        return dict(job) if job else None
+        memory_job = dict(job) if job else None
+
+    disk_job = _read_persisted_analysis_job(job_id)
+    if disk_job and (
+        not memory_job or
+        disk_job.get('updated_at', 0) >= memory_job.get('updated_at', 0)
+    ):
+        with ANALYSIS_JOBS_LOCK:
+            ANALYSIS_JOBS[job_id] = disk_job
+        return dict(disk_job)
+
+    return memory_job
 
 
 def _cleanup_analysis_jobs():
@@ -492,6 +513,64 @@ def _cleanup_analysis_jobs():
         ]
         for job_id in expired:
             ANALYSIS_JOBS.pop(job_id, None)
+    try:
+        for filename in os.listdir(ANALYSIS_JOB_DIR):
+            if not filename.endswith('.json'):
+                continue
+            path = os.path.join(ANALYSIS_JOB_DIR, filename)
+            job = _read_persisted_analysis_job(filename[:-5], cleanup=False)
+            updated_at = (job or {}).get('updated_at') or os.path.getmtime(path)
+            if updated_at < cutoff:
+                os.remove(path)
+    except FileNotFoundError:
+        return
+    except OSError:
+        return
+
+
+def _analysis_job_path(job_id):
+    safe_job_id = str(job_id or '').strip().lower()
+    if not re.fullmatch(r'[a-f0-9]{32}', safe_job_id):
+        return None
+    return os.path.join(ANALYSIS_JOB_DIR, f'{safe_job_id}.json')
+
+
+def _persist_analysis_job(job_id, job):
+    path = _analysis_job_path(job_id)
+    if not path:
+        return
+    try:
+        os.makedirs(ANALYSIS_JOB_DIR, exist_ok=True)
+        tmp_path = f'{path}.{os.getpid()}.{threading.get_ident()}.tmp'
+        with open(tmp_path, 'w', encoding='utf-8') as handle:
+            json.dump(job, handle)
+        os.replace(tmp_path, path)
+    except (TypeError, OSError):
+        try:
+            if 'tmp_path' in locals() and os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except OSError:
+            pass
+
+
+def _read_persisted_analysis_job(job_id, cleanup=True):
+    path = _analysis_job_path(job_id)
+    if not path:
+        return None
+    try:
+        with open(path, 'r', encoding='utf-8') as handle:
+            job = json.load(handle)
+        if not isinstance(job, dict):
+            return None
+        if cleanup and job.get('updated_at', job.get('created_at', 0)) < time.time() - ANALYSIS_JOB_TTL_SECONDS:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+            return None
+        return job
+    except (OSError, json.JSONDecodeError):
+        return None
 
 
 def _wants_async_analysis(data):
@@ -501,6 +580,11 @@ def _wants_async_analysis(data):
     if isinstance(value, str):
         return value.strip().lower() in ('1', 'true', 'yes')
     return False
+
+
+def _is_supported_code_path(path):
+    ext = posixpath.splitext(_normalize_project_path(path))[1].lower()
+    return ext in SUPPORTED_CODE_EXTENSIONS
 
 
 def _issue_problem_only(issue):
@@ -1607,7 +1691,7 @@ def analyze_github():
         )
         selected_ref = data.get('ref') or data.get('branch')
 
-        if _wants_async_analysis(data):
+        if _wants_async_analysis(data) and not _is_supported_code_path(selected_path):
             job_id = _start_github_analysis_job(url, selected_path, selected_ref)
             return jsonify({
                 'success': True,
