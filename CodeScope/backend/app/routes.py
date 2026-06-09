@@ -2,9 +2,11 @@ from flask import Blueprint, request, jsonify, send_file
 from app.analyzer import CodeAnalyzer
 from app.github_fetcher import MAX_GITHUB_FILES, fetch_github_code, get_github_folders
 from app.ai_explainer import (
+    _expensive_function_targets,
     enhance_optimizations_with_ai,
     get_ai_explanation,
     get_function_level_explanations,
+    get_last_ai_rewrite_run_summary,
     get_last_ai_provider_error,
     reset_ai_budget,
     start_ai_budget,
@@ -53,6 +55,15 @@ def _analyze_with_extras(code, filename, concrete_inputs=None, include_ai=True, 
         _attach_ai_rewrites(result, code, language)
     else:
         result['optimizations'] = []
+        result['ai_optimized_functions'] = []
+        result['ai_rewrite_summary'] = {
+            'checked_count': 0,
+            'checked_functions': [],
+            'modified_count': 0,
+            'modified_functions': [],
+            'scope': 'functions',
+            'reason': '',
+        }
         result['ai_transformed_code'] = {
             'available': False,
             'source': 'manual_trigger',
@@ -102,6 +113,7 @@ def _analyze_with_extras(code, filename, concrete_inputs=None, include_ai=True, 
 def _attach_ai_rewrites(result, code, language):
     ai_budget_token = start_ai_budget()
     try:
+        planned_functions = _ai_checked_function_facts(_expensive_function_targets(result))
         ai_discovery_result = {
             **result,
             'optimizations': [],
@@ -109,11 +121,33 @@ def _attach_ai_rewrites(result, code, language):
         }
         enhanced_optimizations = enhance_optimizations_with_ai(ai_discovery_result, code, language)
         ai_provider_error = get_last_ai_provider_error()
+        rewrite_run_summary = get_last_ai_rewrite_run_summary()
+        checked_functions = rewrite_run_summary.get('checked_functions') or planned_functions
+        checked_count = int(rewrite_run_summary.get('checked_count') or len(checked_functions))
         ai_only_optimizations = [
             opt for opt in enhanced_optimizations
             if opt.get('ai_generated') and opt.get('example')
         ]
         result['optimizations'] = ai_only_optimizations
+        result['ai_optimized_functions'] = [
+            _ai_optimization_to_function_solution(opt)
+            for opt in ai_only_optimizations
+            if opt.get('ai_generated') and opt.get('example')
+        ]
+        result['ai_rewrite_summary'] = {
+            'checked_count': checked_count,
+            'checked_functions': checked_functions,
+            'planned_count': int(rewrite_run_summary.get('planned_count') or len(planned_functions)),
+            'modified_count': len(result['ai_optimized_functions']),
+            'modified_functions': [
+                item.get('function')
+                for item in result['ai_optimized_functions']
+                if item.get('function')
+            ],
+            'scope': 'functions',
+            'mode': rewrite_run_summary.get('mode') or 'sequential',
+            'reason': '',
+        }
 
         ai_optimization = next(
             (opt for opt in ai_only_optimizations if opt.get('ai_generated') and opt.get('example')),
@@ -136,19 +170,59 @@ def _attach_ai_rewrites(result, code, language):
             }
             _attach_ai_solution_to_issue(result, ai_optimization)
             result['optimizations'] = _additional_distinct_ai_optimizations(ai_only_optimizations, ai_optimization)
+            if ai_provider_error:
+                result['ai_rewrite_summary']['reason'] = ai_provider_error
         else:
-            reason = ai_provider_error or (
-                'No configured AI provider returned a verified same-behavior lower-complexity rewrite '
-                'for the detected functions.'
-            )
+            if ai_provider_error:
+                reason = ai_provider_error
+            elif checked_functions:
+                reason = (
+                    'No configured AI provider returned an accepted same-behavior lower-complexity rewrite '
+                    'for the functions checked in this run.'
+                )
+            else:
+                reason = 'No function rewrite target was detected for this code.'
             result['ai_transformed_code'] = {
                 'available': False,
                 'source': 'ai_discovery',
                 'reason': reason,
             }
+            result['ai_rewrite_summary']['reason'] = reason
             _attach_ai_solution_status(result, result['ai_transformed_code']['reason'])
     finally:
         reset_ai_budget(ai_budget_token)
+
+
+def _ai_checked_function_facts(function_targets):
+    facts = []
+    for detail in function_targets or []:
+        if not isinstance(detail, dict):
+            continue
+        facts.append({
+            'function': detail.get('function'),
+            'line': detail.get('line'),
+            'own_complexity': detail.get('own_complexity') or detail.get('complexity'),
+            'effective_complexity': detail.get('effective_complexity') or detail.get('complexity') or detail.get('own_complexity'),
+        })
+    return facts
+
+
+def _ai_optimization_to_function_solution(ai_optimization):
+    source = ai_optimization.get('source', 'ai')
+    source_label = ai_optimization.get('source_label') or _ai_provider_label(source)
+    return {
+        'available': True,
+        'source': source,
+        'source_label': source_label,
+        'function': ai_optimization.get('function'),
+        'title': ai_optimization.get('title') or f'{source_label} optimized rewrite',
+        'description': ai_optimization.get('solution') or ai_optimization.get('problem') or '',
+        'complexity_before': ai_optimization.get('complexity_before'),
+        'complexity_after': ai_optimization.get('complexity_after'),
+        'code': ai_optimization.get('example'),
+        'notes': ai_optimization.get('ai_note') or f'Generated by {source_label} from analyzer-detected function facts.',
+        'validation': ai_optimization.get('validation'),
+    }
 
 
 def _analyzer_only_explanation(result):

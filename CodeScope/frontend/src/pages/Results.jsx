@@ -27,6 +27,15 @@ const looksLikeNextFunction = (line = '') => {
   );
 };
 
+const looksLikePythonSectionBoundary = (line = '') => {
+  const text = String(line).trim();
+  if (!text.startsWith('#')) return false;
+  const marker = text.replace(/^#+/, '').trim();
+  if (!marker) return false;
+  if (/^[=\-_*]+$/.test(marker)) return true;
+  return marker === marker.toUpperCase() || /(FUNCTIONS|DEMO FUNCTIONS|MAIN MENU)$/.test(marker);
+};
+
 const exactFunctionSnippet = (snippet = '') => {
   const lines = formatCode(snippet).split('\n');
   if (lines.length <= 1) return formatCode(snippet);
@@ -82,12 +91,23 @@ const sourceFunctionSnippet = (sourceCode = '', startLine = 1, language = '') =>
   const hardEnd = lines.length;
 
   if (isPython) {
+    let seenBody = false;
     for (let index = start + 1; index < hardEnd; index += 1) {
       const line = lines[index];
       const text = line.trim();
       if (!text) continue;
+      if (
+        seenBody &&
+        lineIndent(line) <= baseIndent &&
+        looksLikePythonSectionBoundary(line)
+      ) {
+        return lines.slice(start, index).join('\n').trim();
+      }
       if (lineIndent(line) <= baseIndent && looksLikeNextFunction(line)) {
         return lines.slice(start, index).join('\n').trim();
+      }
+      if (lineIndent(line) > baseIndent) {
+        seenBody = true;
       }
     }
     return lines.slice(start, hardEnd).join('\n').trim();
@@ -337,6 +357,28 @@ const hotspotsFor = (result, functionRows) => {
     }));
 };
 
+const functionHotspotKey = (item = {}) => (
+  `${String(item.function || '').trim().toLowerCase()}::${Number(item.line || 0) || ''}`
+);
+
+const functionsWithoutHotspots = (functions, hotspots) => {
+  if (!Array.isArray(functions) || functions.length === 0) return [];
+  if (!Array.isArray(hotspots) || hotspots.length === 0) return functions;
+
+  const hotspotKeys = new Set(hotspots.map(functionHotspotKey));
+  const hotspotNames = new Set(
+    hotspots.map(item => String(item.function || '').trim().toLowerCase()).filter(Boolean)
+  );
+
+  return functions.filter(fn => {
+    const name = String(fn.function || '').trim().toLowerCase();
+    if (!name) return true;
+    const exactKey = functionHotspotKey(fn);
+    if (hotspotKeys.has(exactKey)) return false;
+    return !hotspotNames.has(name);
+  });
+};
+
 const aiSolutionsFor = (result, hotspots, functionRows) => {
   const aiTransformed = result?.ai_transformed_code;
   const optimizations = Array.isArray(result?.optimizations) ? result.optimizations : [];
@@ -364,6 +406,13 @@ const aiSolutionsFor = (result, hotspots, functionRows) => {
   });
 };
 
+const solutionIdentity = (solution) => [
+  String(solution?.function || '').toLowerCase(),
+  formatCode(solution?.code),
+  solution?.complexity_before || '',
+  solution?.complexity_after || '',
+].join('|');
+
 const functionTextFor = (solution = '') => (
   `${solution.title || ''} ${solution.description || ''} ${solution.solution || ''} ${solution.problem || ''} ${solution.notes || ''}`
 ).toLowerCase();
@@ -382,18 +431,6 @@ const attachSolutionsToFunctions = (functions, solutions) => {
 
   solutions.forEach(solution => {
     let target = rows.find(fn => solutionMatchesFunction(solution, fn));
-
-    if (!target && rows.length === 1) {
-      target = rows[0];
-    }
-
-    if (!target && solution.complexity_before) {
-      target = rows.find(fn => (
-        fn.effective_complexity === solution.complexity_before ||
-        fn.own_complexity === solution.complexity_before ||
-        fn.complexity === solution.complexity_before
-      ));
-    }
 
     if (!target) return;
     target.ai_solutions.push(solution);
@@ -523,7 +560,7 @@ function HotCodeSection({ hotspots, sourceCode = '', language = '' }) {
   );
 }
 
-function FunctionBreakdown({ functions, groqStatus = '', sourceCode = '', language = '' }) {
+function FunctionBreakdown({ functions, groqStatus = '', sourceCode = '', language = '', hiddenHotspotCount = 0 }) {
   const hasAiSolution = functions.some(fn => Array.isArray(fn.ai_solutions) && fn.ai_solutions.length > 0);
 
   return (
@@ -549,7 +586,9 @@ function FunctionBreakdown({ functions, groqStatus = '', sourceCode = '', langua
       )}
       {functions.length === 0 ? (
         <p className="empty-state">
-          No named functions were detected. The file-level complexity is shown above.
+          {hiddenHotspotCount > 0
+            ? 'All highest-complexity functions are shown in the Hot Code section above.'
+            : 'No named functions were detected. The file-level complexity is shown above.'}
         </p>
       ) : functions.map((fn, index) => {
         const displaySnippet = functionDisplaySnippet(fn, sourceCode, language);
@@ -599,6 +638,27 @@ function FunctionBreakdown({ functions, groqStatus = '', sourceCode = '', langua
   );
 }
 
+function StandaloneAiRewrites({ solutions }) {
+  if (!solutions.length) return null;
+
+  return (
+    <section className="card report-section">
+      <div className="report-section-head">
+        <div>
+          <span className="eyebrow">Modified functions</span>
+          <h3>Groq Modified Functions</h3>
+        </div>
+      </div>
+      {solutions.map((solution, index) => (
+        <FunctionAiRewrite
+          key={`${solution.function || 'standalone-rewrite'}-${index}`}
+          solution={solution}
+        />
+      ))}
+    </section>
+  );
+}
+
 function FunctionAiRewrite({ solution }) {
   return (
     <div className="rewrite-card">
@@ -626,12 +686,18 @@ function FunctionAiRewrite({ solution }) {
   );
 }
 
-function ModifiedCodeAction({ loading, error, status, hasSolutions, checked, onClick }) {
+function ModifiedCodeAction({ loading, error, status, hasSolutions, checked, rewriteSummary, checkedFunctionCount = 0, onClick }) {
+  const noRewriteReason = rewriteSummary?.reason || '';
+  const providerProblem = /api limit|rate limit|token-per-minute|api key|connection failed|api error|timed out/i.test(noRewriteReason);
   const completedWithSolutions = hasSolutions;
-  const completedWithoutSolution = checked && !hasSolutions && !error && !status;
-  const showStatus = !error && Boolean(status) && !hasSolutions;
+  const completedWithoutSolution = checked && !hasSolutions && !error && !status && !providerProblem;
+  const showStatus = !error && (Boolean(status) || providerProblem) && !hasSolutions;
   const showError = Boolean(error) && !hasSolutions;
-  const showButton = !hasSolutions && (loading || Boolean(error) || Boolean(status) || !checked);
+  const showButton = !hasSolutions;
+  const summaryCheckedCount = Number(rewriteSummary?.checked_count || 0);
+  const hasSummaryCheckedCount = rewriteSummary && Object.prototype.hasOwnProperty.call(rewriteSummary, 'checked_count');
+  const checkedCount = hasSummaryCheckedCount ? summaryCheckedCount : checkedFunctionCount;
+  const checkedLabel = 'function';
   const actionClassName = [
     'card modified-action',
     completedWithSolutions ? 'modified-complete' : '',
@@ -648,18 +714,21 @@ function ModifiedCodeAction({ loading, error, status, hasSolutions, checked, onC
       )}
       {showStatus && (
         <div className="modified-action-copy warning-copy">
-          {status}
+          {status || `Groq could not finish this rewrite run. ${noRewriteReason}`}
         </div>
       )}
       {completedWithoutSolution && (
         <div className="modified-action-copy muted-copy">
-          No lower-complexity modified function was found for this code. This can be correct when the current output already requires the detected complexity or when no same-behavior rewrite passes CodeScope validation.
+          Groq checked {checkedCount || 'the detected'} {checkedLabel}{checkedCount === 1 ? '' : 's'} with their complexities, but no accepted lower-complexity rewrite was returned for this run.{noRewriteReason ? ` ${noRewriteReason}` : ''}
         </div>
       )}
       {completedWithSolutions && (
         <div className="modified-complete-copy">
           <span>Modified functions ready</span>
-          <strong>Groq returned verified lower-complexity functions. They are shown below the matching original functions.</strong>
+          <strong>
+            Groq returned accepted lower-complexity functions. They are shown below the matching original functions.
+            {noRewriteReason ? ` Groq stopped after those results: ${noRewriteReason}` : ''}
+          </strong>
         </div>
       )}
       {showButton && (
@@ -670,7 +739,7 @@ function ModifiedCodeAction({ loading, error, status, hasSolutions, checked, onC
           className="btn btn-primary"
           style={{ opacity: loading ? 0.75 : 1 }}
         >
-          {loading ? 'Getting Modified Code...' : error || status ? 'Try Again' : 'Get Modified Code'}
+          {loading ? 'Getting Modified Code...' : error || status || checked ? 'Run Groq Again' : 'Get Modified Code'}
         </button>
       )}
     </section>
@@ -778,12 +847,22 @@ export default function Results() {
     const initialHotspots = hotspotsFor(fileResult, functions);
     const aiSolutions = aiSolutionsFor(fileResult, initialHotspots, functions);
     const functionsWithAiSolutions = attachSolutionsToFunctions(functions, aiSolutions);
+    const attachedSolutionIds = new Set(
+      functionsWithAiSolutions.flatMap(fn => (
+        (fn.ai_solutions || []).map(solutionIdentity)
+      ))
+    );
+    const standaloneAiSolutions = aiSolutions.filter(solution => (
+      !attachedSolutionIds.has(solutionIdentity(solution))
+    ));
     const hotspots = hotspotsFor(fileResult, functionsWithAiSolutions);
     const groqReason = fileResult?.ai_transformed_code?.reason || '';
     const groqStatus = isGroqFailureReason(groqReason) ? groqReason : '';
-    const hasAiSolutions = functionsWithAiSolutions.some(fn => (
+    const hasAttachedAiSolutions = functionsWithAiSolutions.some(fn => (
       Array.isArray(fn.ai_solutions) && fn.ai_solutions.length > 0
     ));
+    const hasAiSolutions = hasAttachedAiSolutions || standaloneAiSolutions.length > 0;
+    const functionTableRows = functionsWithoutHotspots(functionsWithAiSolutions, hotspots);
 
     return (
       <div data-filename={safeFilename}>
@@ -801,11 +880,13 @@ export default function Results() {
           language={fileResult?.language || ''}
         />
         <FunctionBreakdown
-          functions={functionsWithAiSolutions}
+          functions={functionTableRows}
           groqStatus={groqStatus}
           sourceCode={sourceCode}
           language={fileResult?.language || ''}
+          hiddenHotspotCount={hotspots.length}
         />
+        <StandaloneAiRewrites solutions={standaloneAiSolutions} />
         {isCodeResult && (
           <ModifiedCodeAction
             loading={modifiedLoading}
@@ -813,6 +894,8 @@ export default function Results() {
             status={groqStatus}
             hasSolutions={hasAiSolutions}
             checked={modifiedChecked}
+            rewriteSummary={fileResult?.ai_rewrite_summary}
+            checkedFunctionCount={functionsWithAiSolutions.length}
             onClick={handleGetModifiedCode}
           />
         )}

@@ -264,6 +264,44 @@ class CodeAnalyzer:
                 names.append(name)
         return names
 
+    def _class_names(self, code, language=None):
+        patterns = []
+        if language in (None, 'python', 'unknown'):
+            patterns.append(r'^\s*class\s+([A-Za-z_]\w*)\b')
+        if language in (None, 'javascript', 'typescript', 'java', 'cpp', 'c', 'unknown'):
+            patterns.append(r'^\s*(?:export\s+)?class\s+([A-Za-z_]\w*)\b')
+
+        names = []
+        seen = set()
+        for pattern in patterns:
+            for match in re.finditer(pattern, code, re.MULTILINE):
+                name = match.group(1)
+                if name not in seen:
+                    seen.add(name)
+                    names.append(name)
+        return names
+
+    def _strip_string_literals(self, code):
+        return re.sub(
+            r'(?s)(?:[rubfRUBF]{0,3}"""(?:\\.|(?!""").)*"""|'
+            r"[rubfRUBF]{0,3}'''(?:\\.|(?!''').)*'''|"
+            r'[rubfRUBF]{0,3}"(?:\\.|[^"\\])*"|'
+            r"[rubfRUBF]{0,3}'(?:\\.|[^'\\])*')",
+            '""',
+            str(code or ''),
+        )
+
+    def _has_explicit_loop_statement(self, code):
+        return any(re.match(r'\s*(?:for|while)\b', line) for line in str(code or '').splitlines())
+
+    def _mask_known_call_names(self, code, names):
+        masked = str(code or '')
+        for name in sorted((names or []), key=len, reverse=True):
+            if not name:
+                continue
+            masked = re.sub(rf'\b{re.escape(name)}\s*(?=\()', 'local_call', masked)
+        return masked
+
     def _is_non_function_signature_match(self, code, match, language=None):
         language = language or 'unknown'
         line_start = code.rfind('\n', 0, match.start()) + 1
@@ -313,7 +351,35 @@ class CodeAnalyzer:
                 'hpp': 'cpp', 'hh': 'cpp', 'hxx': 'cpp', 'ipp': 'cpp',
                 'c': 'c', 'h': 'c'
             }
-            return lang_map.get(ext, 'unknown')
+            detected = lang_map.get(ext)
+            if detected:
+                return detected
+        return self._detect_language_from_content(code)
+
+    def _detect_language_from_content(self, code):
+        text = str(code or '')
+        if not text.strip():
+            return 'unknown'
+
+        if re.search(r'^\s*(?:from\s+[\w.]+\s+import|import\s+[\w., ]+)\b', text, re.MULTILINE):
+            if re.search(r'^\s*(?:async\s+)?def\s+\w+\s*\([^)]*\)\s*:', text, re.MULTILINE):
+                return 'python'
+        if re.search(r'^\s*(?:async\s+)?def\s+\w+\s*\([^)]*\)\s*:', text, re.MULTILINE):
+            return 'python'
+        if re.search(r'^\s*class\s+\w+(?:\([^)]*\))?\s*:', text, re.MULTILINE):
+            return 'python'
+        if re.search(r'if\s+__name__\s*==\s*[\'"]__main__[\'"]', text):
+            return 'python'
+
+        if re.search(r'\bpublic\s+class\s+\w+|\bSystem\.out\.println\s*\(|\bpublic\s+static\s+void\s+main\s*\(', text):
+            return 'java'
+        if re.search(r'^\s*#\s*include\b|\bstd::|\bcout\s*<<|\bint\s+main\s*\(', text, re.MULTILINE):
+            return 'cpp'
+        if re.search(r'\binterface\s+\w+|\btype\s+\w+\s*=|:\s*(?:string|number|boolean|Array<|[A-Z]\w*(?:\[\])?)\s*[=,)]', text):
+            return 'typescript'
+        if re.search(r'\bfunction\s+\w+\s*\(|(?:const|let|var)\s+\w+\s*=\s*(?:\([^)]*\)|\w+)\s*=>|\bconsole\.log\s*\(', text):
+            return 'javascript'
+
         return 'unknown'
 
     def analyze(self, code, filename=None, concrete_inputs=None):
@@ -879,6 +945,9 @@ class CodeAnalyzer:
                 'complexity': 'O(1)',
                 'reason': 'OrderedDict recency operations use hash-table lookup plus linked-order updates'
             }
+        file_io = self.detect_file_io_complexity(body, language)
+        if file_io.get('detected'):
+            return file_io
         binary_search = self.detect_binary_search_pattern(body, language)
         if binary_search.get('detected'):
             return binary_search
@@ -923,6 +992,7 @@ class CodeAnalyzer:
             self.detect_ordered_tree_drain,
             self.detect_hash_table_access,
             self.detect_binary_search_pattern,
+            self.detect_sqrt_iteration_complexity,
             self.detect_priority_queue_operations,
             self.detect_linear_front_insert,
             self.detect_immutable_string_concat,
@@ -933,12 +1003,70 @@ class CodeAnalyzer:
             self.detect_bitmask_subset_enumeration,
             self.detect_reduce_accumulator_copy,
             self.detect_java_stream_pipeline,
+            self.detect_file_io_complexity,
             self.detect_implicit_iteration_complexity,
         ):
             detected = detector(body, language)
             if detected.get('detected'):
                 return detected
         return None
+
+    def detect_sqrt_iteration_complexity(self, code, language):
+        if language != 'python':
+            return {'detected': False}
+        compact = re.sub(r'\s+', ' ', str(code or ''))
+        if re.search(r'\brange\s*\([^)]*(?:math\.)?sqrt\s*\(', compact):
+            return {
+                'detected': True,
+                'complexity': 'O(√n)',
+                'space': 'O(1)',
+                'reason': 'Loop bound uses sqrt(n), so the loop performs O(√n) iterations.',
+            }
+        return {'detected': False}
+
+    def detect_file_io_complexity(self, code, language):
+        compact = re.sub(r'\s+', ' ', str(code or ''))
+        if not compact:
+            return {'detected': False}
+
+        reads_whole_file = bool(re.search(
+            r'\.\s*(?:read|readlines)\s*\(\s*\)|\bread_text\s*\(|\breadFile(?:Sync)?\s*\(',
+            compact,
+            re.IGNORECASE,
+        ))
+        writes_content = bool(re.search(
+            r'\.\s*(?:write|writelines)\s*\(|\bwrite_text\s*\(|\bwriteFile(?:Sync)?\s*\(',
+            compact,
+            re.IGNORECASE,
+        ))
+
+        if reads_whole_file:
+            return {
+                'detected': True,
+                'complexity': 'O(n)',
+                'space': 'O(n)',
+                'reason': 'Reads the file contents into memory; n is the number of bytes/characters read from the file.',
+            }
+
+        if writes_content:
+            return {
+                'detected': True,
+                'complexity': 'O(n)',
+                'space': 'O(1)',
+                'reason': 'Writes the provided content to storage; n is the number of bytes/characters written.',
+            }
+
+        opens_file = bool(re.search(r'\bopen\s*\(|\bFileInputStream\s*\(|\bFileOutputStream\s*\(', compact))
+        exists_check = bool(re.search(r'\b(?:os\.path\.)?exists\s*\(|\bPath\s*\([^)]*\)\.exists\s*\(', compact))
+        if opens_file or exists_check:
+            return {
+                'detected': True,
+                'complexity': 'O(1)',
+                'space': 'O(1)',
+                'reason': 'File open/existence checks are modeled as constant setup work; bulk read/write payload cost is counted separately when visible.',
+            }
+
+        return {'detected': False}
 
     def _looks_like_ordered_dict_constant_method(self, name, body, full_code, language):
         if language != 'python' or 'OrderedDict' not in full_code:
@@ -967,6 +1095,7 @@ class CodeAnalyzer:
     def _extract_function_own_complexities(self, code, language):
         complexities = {}
         func_names = self._function_names(code, language)
+        file_local_callables = set(func_names) | set(self._class_names(code, language))
 
         for name in func_names:
             body = self._extract_function_body(code, name, language)
@@ -979,7 +1108,11 @@ class CodeAnalyzer:
                 if recursion_result:
                     complexities[name] = recursion_result['complexity']
                 else:
-                    time_result = self.detect_time_complexity(body, language)
+                    time_result = self.detect_time_complexity(
+                        body,
+                        language,
+                        extra_known_defs=file_local_callables,
+                    )
                     complexities[name] = time_result['complexity']
 
         return complexities
@@ -1078,14 +1211,21 @@ class CodeAnalyzer:
 
         if language == 'python' or self._line_starts_python_block(lines[start]):
             base_indent = self._line_indent(lines[start])
+            seen_body = False
             for index in range(start + 1, hard_end):
-                if not lines[index].strip():
+                line = lines[index]
+                text = line.strip()
+                if not text:
                     continue
+                if seen_body and self._line_indent(line) <= base_indent and self._line_starts_python_section_boundary(line):
+                    return index
                 if (
-                    self._line_indent(lines[index]) <= base_indent and
-                    self._line_starts_python_block(lines[index])
+                    self._line_indent(line) <= base_indent and
+                    self._line_starts_python_block(line)
                 ):
                     return index
+                if self._line_indent(line) > base_indent:
+                    seen_body = True
             return hard_end
 
         if language in ('java', 'cpp', 'c', 'javascript', 'typescript') or self._line_starts_function(lines[start], language):
@@ -1123,6 +1263,17 @@ class CodeAnalyzer:
     def _line_starts_python_block(self, line):
         stripped = line.strip()
         return stripped.startswith(('def ', 'async def ', 'class '))
+
+    def _line_starts_python_section_boundary(self, line):
+        stripped = line.strip()
+        if not stripped.startswith('#'):
+            return False
+        marker = stripped.lstrip('#').strip()
+        if not marker:
+            return False
+        if set(marker) <= {'=', '-', '_', '*'}:
+            return True
+        return marker.isupper() or marker.endswith(('FUNCTIONS', 'DEMO FUNCTIONS', 'MAIN MENU'))
 
     def _build_hotspots(self, details):
         if isinstance(details, dict):
@@ -2199,7 +2350,7 @@ class CodeAnalyzer:
                 'note': "Already optimal. Prim's with priority queue is better for dense graphs."
             }
         # Prim
-        if re.search(r'prim|minimum.?spanning', code, re.IGNORECASE):
+        if re.search(r"\bprim(?:_?mst|'?s)?\b|minimum.?spanning", code, re.IGNORECASE):
             return {
                 'detected': True, 'algorithm': "Prim's MST",
                 'complexity': 'O((V + E) log V)', 'space': 'O(V)',
@@ -3594,6 +3745,13 @@ class CodeAnalyzer:
             ):
                 in_func = True
                 base_indent = len(line) - len(line.lstrip())
+                if language == 'python':
+                    inline_body = re.match(
+                        rf'(?:async\s+)?def\s+{re.escape(func_name)}\s*\([^)]*\)\s*(?:->\s*[^:]+)?\s*:\s*(.+)$',
+                        stripped,
+                    )
+                    if inline_body and inline_body.group(1).strip():
+                        return inline_body.group(1).strip()
                 continue
             if in_func:
                 if not stripped:
@@ -4128,7 +4286,16 @@ class CodeAnalyzer:
             return ('const', 0)
         if isinstance(s, tuple):
             return s
-        normalized = str(s).replace('^2', '²').replace('^3', '³')
+        normalized = (
+            str(s)
+            .replace('²', '²')
+            .replace('³', '³')
+            .replace('√', 'âˆš')
+            .replace('φⁿ', 'Ï†â¿')
+            .replace('α', 'Î±')
+            .replace('^2', '²')
+            .replace('^3', '³')
+        )
         if re.fullmatch(r'O\(n²\) average,\s*O\(n³\) worst', normalized):
             return ('n', 3)
         mapping = {
@@ -4372,6 +4539,7 @@ class CodeAnalyzer:
 
     def detect_implicit_iteration_complexity(self, code, language):
         if language == 'python':
+            has_explicit_loop = self._has_explicit_loop_statement(code)
             if re.search(r'\[[^\]]*\bfor\b[^\]]*\bfor\b[^\]]*\]', code, re.DOTALL):
                 return {
                     'detected': True, 'complexity': self._quadratic(), 'space': self._quadratic(),
@@ -4381,6 +4549,21 @@ class CodeAnalyzer:
                 return {
                     'detected': True, 'complexity': 'O(n)', 'space': 'O(n)',
                     'reason': 'Python comprehension materializes one output element per input element'
+                }
+            if re.search(r'\.\s*join\s*\(', code) and re.search(r'\bfor\b.+\bin\b', code, re.DOTALL):
+                return {
+                    'detected': True, 'complexity': 'O(n)', 'space': 'O(n)',
+                    'reason': 'join over a generator visits each generated item and materializes an output string'
+                }
+            if not has_explicit_loop and re.search(r'\[[^\]\n]*:[^\]\n]*\]', code):
+                return {
+                    'detected': True, 'complexity': 'O(n)', 'space': 'O(n)',
+                    'reason': 'Python slicing copies an input-sized sequence or string'
+                }
+            if not has_explicit_loop and re.search(r'\.\s*(?:lower|upper|casefold|replace|split)\s*\(', code):
+                return {
+                    'detected': True, 'complexity': 'O(n)', 'space': 'O(n)',
+                    'reason': 'String transformation scans the input and returns a new string/list'
                 }
             if re.search(r'\b(?:list|tuple|set)\s*\(', code):
                 return {
@@ -4392,7 +4575,17 @@ class CodeAnalyzer:
                     'detected': True, 'complexity': 'O(n)', 'space': 'O(1)',
                     'reason': 'Built-in consumes an iterable with an implicit O(n) scan'
                 }
-            if re.search(r'\b\w+\s+in\s+\w+', code) and not re.search(r'\bfor\s+\w+\s+in\b', code):
+            compact = re.sub(r'\s+', ' ', str(code or ''))
+            constant_sequence_vars = set(re.findall(
+                r'\b(\w+)\s*=\s*(?:[rubfRUBF]{0,3})?[\'"][^\'"]*[\'"]',
+                compact,
+            ))
+            for match in re.finditer(r'\b(\w+)\s+in\s+(\w+)\b', code):
+                prefix = code[max(0, match.start() - 40):match.start()]
+                if re.search(r'\bfor\b[^:;\n]*$', prefix):
+                    continue
+                if match.group(2) in constant_sequence_vars:
+                    continue
                 return {
                     'detected': True, 'complexity': 'O(n)', 'space': 'O(1)',
                     'reason': 'Membership test over a sequence may scan O(n) elements'
@@ -4441,13 +4634,17 @@ class CodeAnalyzer:
             hash_vars = set(re.findall(r'\b(\w+)\s*=\s*(?:set|dict)\s*\(', compact))
             hash_vars.update(re.findall(r'\b(\w+)\s*=\s*\{', compact))
             hash_vars.update(re.findall(r'\b(\w+)\s*\.\s*add\s*\(', compact))
+            constant_sequence_vars = set(re.findall(
+                r'\b(\w+)\s*=\s*(?:[rubfRUBF]{0,3})?[\'"][^\'"]*[\'"]',
+                compact,
+            ))
             list_vars = set(re.findall(r'\b(\w+)\s*=\s*\[\s*\]', compact))
             for match in re.finditer(r'\b(\w+)\s+in\s+(\w+)\b', compact):
-                prefix = compact[max(0, match.start() - 8):match.start()]
-                if re.search(r'\bfor\s*$', prefix):
+                prefix = compact[max(0, match.start() - 40):match.start()]
+                if re.search(r'\bfor\b[^:;]*$', prefix):
                     continue
                 target = match.group(2)
-                if target in hash_vars:
+                if target in hash_vars or target in constant_sequence_vars:
                     continue
                 depth = self._max_operation_loop_depth(code, rf'\b\w+\s+in\s+{re.escape(target)}\b')
                 complexity = self._polynomial_complexity(depth + 1)
@@ -5060,14 +5257,20 @@ class CodeAnalyzer:
             return 'O(n)'
         return 'O(log n)'
 
-    def _unknown_call_names(self, code, language):
+    def _unknown_call_names(self, code, language, extra_known_defs=None):
         known_defs = set(self._function_names(code, language))
+        known_defs.update(self._class_names(code, language))
+        if extra_known_defs:
+            known_defs.update(extra_known_defs)
         builtins = {
             'range', 'len', 'sum', 'min', 'max', 'print', 'str', 'int', 'float',
             'list', 'dict', 'set', 'tuple', 'sorted', 'Math', 'console',
-            'Set', 'Map', 'JSON', 'slice', 'stringify', 'add'
+            'Set', 'Map', 'JSON', 'slice', 'stringify', 'add', 'open', 'input',
+            'enumerate', 'zip', 'map', 'filter', 'any', 'all', 'abs', 'round',
+            'bool', 'isinstance', 'choice', 'randint'
         }
-        calls = set(re.findall(r'(?<!\.)\b([A-Za-z_]\w*)\s*\(', code))
+        searchable = self._strip_string_literals(code)
+        calls = set(re.findall(r'(?<!\.)\b([A-Za-z_]\w*)\s*\(', searchable))
         keywords = {'if', 'for', 'while', 'switch', 'return', 'function'}
         return sorted(c for c in calls if c not in known_defs and c not in builtins and c not in keywords)
 
@@ -5374,16 +5577,20 @@ class CodeAnalyzer:
     # MAIN TIME COMPLEXITY DETECTION
     # ─────────────────────────────────────────────
 
-    def detect_time_complexity(self, code, language):
-        graph = self.detect_graph_algorithm(code)
+    def detect_time_complexity(self, code, language, extra_known_defs=None):
+        detection_code = self._strip_string_literals(code)
+        if extra_known_defs:
+            detection_code = self._mask_known_call_names(detection_code, extra_known_defs)
+
+        graph = self.detect_graph_algorithm(detection_code)
         if graph['detected']:
             return {'complexity': graph['complexity'], 'reason': graph['reason'], 'graph': graph, 'recursion': None}
 
-        known = self.detect_known_algorithm(code)
+        known = self.detect_known_algorithm(detection_code)
         if known['detected'] and known.get('algorithm') != 'Dynamic Programming':
             return {'complexity': known['complexity'], 'reason': known['reason'], 'known': known, 'recursion': None}
 
-        bit_clear = self._find_bit_clear_function(code, language)
+        bit_clear = self._find_bit_clear_function(detection_code, language)
         if bit_clear:
             return {
                 'complexity': 'O(popcount(n)), worst-case O(log n)',
@@ -5439,6 +5646,7 @@ class CodeAnalyzer:
             self.detect_ordered_tree_drain,
             self.detect_hash_table_access,
             self.detect_binary_search_pattern,
+            self.detect_sqrt_iteration_complexity,
             self.detect_priority_queue_operations,
             self.detect_linear_front_insert,
             self.detect_immutable_string_concat,
@@ -5449,6 +5657,7 @@ class CodeAnalyzer:
             self.detect_bitmask_subset_enumeration,
             self.detect_reduce_accumulator_copy,
             self.detect_java_stream_pipeline,
+            self.detect_file_io_complexity,
             self.detect_implicit_iteration_complexity,
         ):
             detected = detector(code, language)
@@ -5465,10 +5674,10 @@ class CodeAnalyzer:
 
         loops = self.extract_loop_tree(code, language)
         loop_complexity = self.compute_loop_complexity(loops)
-        sorting_complexity = self._sorting_complexity(code)
+        sorting_complexity = self._sorting_complexity(detection_code)
 
         if not loops and not recursion['is_recursive'] and not sorting_complexity:
-            unknown_calls = self._unknown_call_names(code, language)
+            unknown_calls = self._unknown_call_names(code, language, extra_known_defs=extra_known_defs)
             if unknown_calls:
                 return {
                     'complexity': 'O(unknown)',
@@ -5537,6 +5746,7 @@ class CodeAnalyzer:
             if self._looks_like_recursive_slice_partition(name, body):
                 return 'O(n log n)'
 
+        detected_spaces = []
         for detector in (
             self.detect_recursive_shared_collection_growth,
             self.detect_recursive_ordered_map_access,
@@ -5544,6 +5754,7 @@ class CodeAnalyzer:
             self.detect_ordered_tree_drain,
             self.detect_hash_table_access,
             self.detect_binary_search_pattern,
+            self.detect_sqrt_iteration_complexity,
             self.detect_priority_queue_operations,
             self.detect_linear_front_insert,
             self.detect_immutable_string_concat,
@@ -5554,12 +5765,15 @@ class CodeAnalyzer:
             self.detect_bitmask_subset_enumeration,
             self.detect_reduce_accumulator_copy,
             self.detect_java_stream_pipeline,
+            self.detect_file_io_complexity,
             self.detect_implicit_iteration_complexity,
             self.detect_mutable_container_growth,
         ):
             detected = detector(code, language)
             if detected.get('detected') and detected.get('space'):
-                return detected['space']
+                detected_spaces.append(detected['space'])
+        if detected_spaces:
+            return self._max_complexity(detected_spaces)
 
         has_2d = bool(re.search(r'\[\s*\[|\[\s*\]\s*\*\s*n', code))
         has_dict = bool(re.search(r'\{\}|new\s+HashMap|new\s+Map\(\)|new\s+Set\s*\(|dict\(\)|set\(\)', code))

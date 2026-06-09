@@ -9,6 +9,7 @@ from app.ai_explainer import (
     enhance_optimizations_with_ai,
     get_ai_explanation,
     get_function_level_explanations,
+    get_last_ai_rewrite_run_summary,
     _merge_ai_function_explanations,
     _merge_ai_optimization_suggestions,
     _validate_ai_rewrite_complexity,
@@ -20,7 +21,13 @@ from app.github_fetcher import (
     parse_github_url_details,
 )
 from app.report_generator import generate_pdf_report
-from app.routes import SUPPORTED_CODE_EXTENSIONS, _analyze_with_extras, _build_batch_summary, _should_skip_batch_path
+from app.routes import (
+    SUPPORTED_CODE_EXTENSIONS,
+    _analyze_with_extras,
+    _attach_ai_rewrites,
+    _build_batch_summary,
+    _should_skip_batch_path,
+)
 
 
 class MockGithubResponse:
@@ -72,6 +79,30 @@ class AnalyzerComplexityTests(unittest.TestCase):
         for filename, expected in cases.items():
             with self.subTest(filename=filename):
                 self.assertEqual(self.analyzer.detect_language("", filename), expected)
+
+    def test_python_language_is_inferred_when_filename_is_missing_or_generic(self):
+        code = '''import os
+
+def read_file(filename):
+    if not os.path.exists(filename):
+        return "File not found"
+    with open(filename, "r", encoding="utf-8") as f:
+        return f.read()
+'''
+
+        self.assertEqual(self.analyzer.detect_language(code, None), "python")
+        self.assertEqual(self.analyzer.detect_language(code, "code"), "python")
+        self.assertEqual(self.analyzer.detect_language(code, "code.txt"), "python")
+
+        result = self.analyzer.analyze(code, "code.txt")
+        details = {
+            detail["function"]: detail
+            for detail in result["function_complexity_details"]
+        }
+
+        self.assertEqual(result["language"], "python")
+        self.assertEqual(details["read_file"]["own_complexity"], "O(n)")
+        self.assertNotIn("unknown", details["read_file"]["effective_complexity"].lower())
 
         for extension in (".cc", ".cxx", ".hpp", ".mjs", ".mts", ".pyw"):
             self.assertIn(extension, SUPPORTED_CODE_EXTENSIONS)
@@ -985,7 +1016,20 @@ def power(matrix, n):
             }]
         }
 
-        merged = _merge_ai_optimization_suggestions([], ai_payload, provider="groq")
+        discovery_targets = [{
+            "target_index": 0,
+            "function": "hasDuplicate",
+            "own_complexity": "O(nÂ²)",
+            "effective_complexity": "O(nÂ²)",
+            "snippet": "function hasDuplicate(arr) { return false; }",
+        }]
+
+        merged = _merge_ai_optimization_suggestions(
+            [],
+            ai_payload,
+            provider="groq",
+            discovery_targets=discovery_targets,
+        )
 
         self.assertEqual(len(merged), 1)
         self.assertTrue(merged[0]["ai_generated"])
@@ -995,7 +1039,7 @@ def power(matrix, n):
         self.assertEqual(merged[0]["function"], "hasDuplicate")
         self.assertEqual(merged[0]["complexity_after"], "O(n)")
 
-    def test_ai_discovery_prompt_sends_every_function_snippet(self):
+    def test_ai_discovery_prompt_sends_function_snippets_complexity_first(self):
         code = """function hasDuplicate(nums) {
     for (let i = 0; i < nums.length; i++) {
         for (let j = i + 1; j < nums.length; j++) {
@@ -1020,11 +1064,17 @@ function alreadyCheap(nums) {
         self.assertEqual(duplicate_target["effective_complexity"], "O(n²)")
         self.assertIn("snippet", duplicate_target)
         self.assertIn("if (nums[i] === nums[j]) return true;", duplicate_target["snippet"])
-        self.assertIn("Independently inspect every function rewrite target", prompt)
-        self.assertIn("ALL FUNCTIONS FOR GROQ REWRITE CHECK", prompt)
+        self.assertLess(
+            next(index for index, target in enumerate(targets) if target["function"] == "hasDuplicate"),
+            next(index for index, target in enumerate(targets) if target["function"] == "alreadyCheap"),
+        )
+        self.assertIn("Independently inspect the function rewrite targets", prompt)
+        self.assertIn("FUNCTION REWRITE TARGETS", prompt)
+        self.assertIn('"target_index"', prompt)
         self.assertIn('"function": "hasDuplicate"', prompt)
         self.assertIn('"function": "alreadyCheap"', prompt)
         self.assertIn('"snippet"', prompt)
+        self.assertIn("Do not optimize main()", prompt)
 
     def test_ai_discovery_targets_known_lower_complexity_patterns(self):
         code = """memo = {}
@@ -1076,6 +1126,15 @@ def binary_search(arr, target):
         else:
             high = mid - 1
     return -1
+
+def bubble_sort(lst):
+    arr = lst[:]
+    n = len(arr)
+    for i in range(n):
+        for j in range(n - i - 1):
+            if arr[j] > arr[j + 1]:
+                arr[j], arr[j + 1] = arr[j + 1], arr[j]
+    return arr
 """
 
         result = self.analyzer.analyze(code, "sample.py")
@@ -1083,14 +1142,331 @@ def binary_search(arr, target):
         by_name = {target["function"]: target for target in targets}
 
         self.assertIn("build_string", by_name)
-        self.assertIn("fibonacci", by_name)
-        self.assertIn("get", by_name)
-        self.assertIn("put", by_name)
+        self.assertIn("bubble_sort", by_name)
         self.assertIn("binary_search", by_name)
+        self.assertLessEqual(len(targets), 30)
         self.assertEqual(by_name["build_string"]["rewrite_hint"]["kind"], "string_builder_join")
-        self.assertEqual(by_name["fibonacci"]["rewrite_hint"]["kind"], "fibonacci_fast_doubling")
-        self.assertEqual(by_name["get"]["rewrite_hint"]["kind"], "lru_ordered_dict")
-        self.assertNotIn("rewrite_hint", by_name["binary_search"])
+        self.assertEqual(by_name["bubble_sort"]["rewrite_hint"]["kind"], "replace_quadratic_sort_with_builtin")
+
+    def test_groq_prompt_prioritizes_likely_rewrite_snippets_for_large_files(self):
+        code = '''def add(a, b):
+    return a + b
+
+def bubble_sort(lst):
+    arr = lst[:]
+    n = len(arr)
+    for i in range(n):
+        for j in range(n - i - 1):
+            if arr[j] > arr[j + 1]:
+                arr[j], arr[j + 1] = arr[j + 1], arr[j]
+    return arr
+
+def fibonacci(n):
+    if n <= 1:
+        return n
+    return fibonacci(n - 1) + fibonacci(n - 2)
+
+def demo_lists():
+    print(bubble_sort([3, 2, 1]))
+'''
+
+        result = self.analyzer.analyze(code, "sample.py")
+        targets = _expensive_function_targets(result)
+        prompt = _build_ai_optimization_prompt(result, code, "python", [], targets)
+
+        self.assertIn('"function": "add"', prompt)
+        self.assertIn("FUNCTION REWRITE TARGETS", prompt)
+        self.assertIn('"function": "bubble_sort"', prompt)
+        self.assertIn('"function": "fibonacci"', prompt)
+        self.assertIn("replace_quadratic_sort_with_builtin", prompt)
+        self.assertLess(
+            next(index for index, target in enumerate(targets) if target["function"] == "fibonacci"),
+            next(index for index, target in enumerate(targets) if target["function"] == "add"),
+        )
+        self.assertLess(len(prompt), 8000)
+
+    def test_groq_hot_rewrites_are_requested_sequentially_and_keep_partial_results(self):
+        code = """def has_duplicate_slow(nums):
+    for i in range(len(nums)):
+        for j in range(i + 1, len(nums)):
+            if nums[i] == nums[j]:
+                return True
+    return False
+
+def build_string(n):
+    s = ""
+    for i in range(n):
+        s += str(i)
+    return s
+"""
+
+        result = self.analyzer.analyze(code, "sample.py")
+        prompts = []
+
+        def fake_completion(prompt, max_tokens=900, return_source=False):
+            prompts.append(prompt)
+            if len(prompts) == 1:
+                payload = """{"discovered_optimizations":[{
+                    "target_index":0,
+                    "function":"has_duplicate_slow",
+                    "available":true,
+                    "title":"Use a set",
+                    "complexity_before":"O(n²)",
+                    "complexity_after":"O(n)",
+                    "code":"def has_duplicate_slow(nums):\\n    seen = set()\\n    for value in nums:\\n        if value in seen:\\n            return True\\n        seen.add(value)\\n    return False"
+                }]}"""
+                return (payload, "groq")
+
+            from app import ai_explainer
+            ai_explainer._set_last_ai_provider_error("Groq API limit reached: test limit")
+            return (None, None)
+
+        with patch("app.ai_explainer._call_ai_completion", side_effect=fake_completion):
+            enhanced = enhance_optimizations_with_ai({**result, "optimizations": []}, code, "python")
+
+        self.assertEqual(len(prompts), 2)
+        self.assertIn('"function": "has_duplicate_slow"', prompts[0])
+        self.assertNotIn('"function": "build_string"', prompts[0])
+        self.assertIn('"function": "build_string"', prompts[1])
+        self.assertEqual([item["function"] for item in enhanced if item.get("ai_generated")], ["has_duplicate_slow"])
+
+        summary = get_last_ai_rewrite_run_summary()
+        self.assertEqual(summary["mode"], "sequential")
+        self.assertEqual(summary["planned_count"], 2)
+        self.assertEqual(summary["checked_count"], 2)
+        self.assertEqual(summary["modified_functions"], ["has_duplicate_slow"])
+        self.assertIn("limit", summary["reason"])
+
+    def test_groq_hot_rewrite_gets_second_chance_before_moving_on(self):
+        code = """def bubble_sort(lst):
+    arr = lst[:]
+    n = len(arr)
+    for i in range(n):
+        for j in range(n - i - 1):
+            if arr[j] > arr[j + 1]:
+                arr[j], arr[j + 1] = arr[j + 1], arr[j]
+    return arr
+"""
+
+        result = self.analyzer.analyze(code, "sorts.py")
+        prompts = []
+
+        def fake_completion(prompt, max_tokens=900, return_source=False):
+            prompts.append(prompt)
+            if len(prompts) == 1:
+                return ('{"discovered_optimizations":[]}', "groq")
+            payload = """{"discovered_optimizations":[{
+                "target_index":0,
+                "function":"bubble_sort",
+                "available":true,
+                "title":"Use built-in sorted",
+                "complexity_before":"O(n²)",
+                "complexity_after":"O(n log n)",
+                "code":"def bubble_sort(lst):\\n    return sorted(lst)"
+            }]}"""
+            return (payload, "groq")
+
+        with patch("app.ai_explainer._call_ai_completion", side_effect=fake_completion):
+            enhanced = enhance_optimizations_with_ai({**result, "optimizations": []}, code, "python")
+
+        self.assertEqual(len(prompts), 2)
+        self.assertIn("retry attempt 2", prompts[1])
+        self.assertEqual([item["function"] for item in enhanced if item.get("ai_generated")], ["bubble_sort"])
+        summary = get_last_ai_rewrite_run_summary()
+        self.assertEqual(summary["checked_count"], 1)
+        self.assertEqual(summary["checked_functions"][0]["attempts"], 2)
+        self.assertEqual(summary["modified_functions"], ["bubble_sort"])
+
+    def test_python_function_snippet_stops_before_section_comment_headers(self):
+        code = '''def random_password(length=12):
+    chars = (
+        "abcdefghijklmnopqrstuvwxyz"
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        "0123456789"
+        "!@#$%^&*"
+    )
+    return ''.join(random.choice(chars) for _ in range(length))
+
+# ==========================
+# FILE FUNCTIONS
+# ==========================
+
+def write_file(filename, content):
+    with open(filename, "w", encoding="utf-8") as f:
+        f.write(content)
+'''
+
+        result = self.analyzer.analyze(code, "sample.py")
+        details = {
+            detail["function"]: detail
+            for detail in result["function_complexity_details"]
+        }
+
+        random_password = details["random_password"]["snippet"]
+        self.assertIn("def random_password", random_password)
+        self.assertIn("return ''.join", random_password)
+        self.assertNotIn("FILE FUNCTIONS", random_password)
+        self.assertNotIn("def write_file", random_password)
+
+    def test_python_file_io_functions_report_payload_complexity(self):
+        code = '''import os
+
+def write_file(filename, content):
+    with open(filename, "w", encoding="utf-8") as f:
+        f.write(content)
+
+def read_file(filename):
+    if not os.path.exists(filename):
+        return "File not found"
+
+    with open(filename, "r", encoding="utf-8") as f:
+        return f.read()
+'''
+
+        result = self.analyzer.analyze(code, "files.py")
+        details = {
+            detail["function"]: detail
+            for detail in result["function_complexity_details"]
+        }
+
+        self.assertEqual(details["write_file"]["own_complexity"], "O(n)")
+        self.assertEqual(details["write_file"]["effective_complexity"], "O(n)")
+        self.assertIn("bytes/characters written", details["write_file"]["reason"])
+        self.assertEqual(details["read_file"]["own_complexity"], "O(n)")
+        self.assertEqual(details["read_file"]["effective_complexity"], "O(n)")
+        self.assertIn("bytes/characters read", details["read_file"]["reason"])
+        self.assertNotEqual(result["time_complexity"], "O(unknown)")
+
+    def test_python_file_level_space_uses_highest_detected_function_space(self):
+        code = '''import math
+import os
+
+def is_prime(n):
+    for i in range(2, int(math.sqrt(n)) + 1):
+        if n % i == 0:
+            return False
+    return True
+
+def read_file(filename):
+    with open(filename, "r", encoding="utf-8") as f:
+        return f.read()
+'''
+
+        result = self.analyzer.analyze(code, "mixed.py")
+
+        self.assertEqual(result["space_complexity"], "O(n)")
+
+    def test_python_demo_style_functions_have_resolved_complexities(self):
+        code = '''import math
+import os
+import random
+
+def is_prime(n):
+    if n < 2:
+        return False
+    for i in range(2, int(math.sqrt(n)) + 1):
+        if n % i == 0:
+            return False
+    return True
+
+def reverse_string(text):
+    return text[::-1]
+
+def count_vowels(text):
+    vowels = "aeiouAEIOU"
+    return sum(1 for ch in text if ch in vowels)
+
+def palindrome(text):
+    cleaned = text.lower().replace(" ", "")
+    return cleaned == cleaned[::-1]
+
+def bubble_sort(lst):
+    arr = lst[:]
+    n = len(arr)
+    for i in range(n):
+        for j in range(n - i - 1):
+            if arr[j] > arr[j + 1]:
+                arr[j], arr[j + 1] = arr[j + 1], arr[j]
+    return arr
+
+def random_password(length=12):
+    chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+    return ''.join(random.choice(chars) for _ in range(length))
+
+def write_file(filename, content):
+    with open(filename, "w", encoding="utf-8") as f:
+        f.write(content)
+
+def read_file(filename):
+    if not os.path.exists(filename):
+        return "File not found"
+    with open(filename, "r", encoding="utf-8") as f:
+        return f.read()
+
+class BankAccount:
+    def __init__(self, owner):
+        self.owner = owner
+
+    def info(self):
+        return self.owner
+
+def fibonacci(n):
+    if n <= 1:
+        return n
+    return fibonacci(n - 1) + fibonacci(n - 2)
+
+def demo_lists():
+    numbers = [9, 2, 7, 1, 5, 3]
+    print("Sorted:", bubble_sort(numbers))
+
+def demo_class():
+    account = BankAccount("John")
+    print(account.info())
+
+def demo_recursion():
+    print("Fibonacci(10):", fibonacci(10))
+'''
+
+        result = self.analyzer.analyze(code, "mega_demo.py")
+        details = {
+            detail["function"]: detail
+            for detail in result["function_complexity_details"]
+        }
+        unknowns = [
+            name for name, detail in details.items()
+            if "unknown" in detail["own_complexity"].lower()
+            or "unknown" in detail["effective_complexity"].lower()
+        ]
+
+        self.assertEqual(unknowns, [])
+        self.assertEqual(details["is_prime"]["own_complexity"], "O(√n)")
+        self.assertEqual(details["reverse_string"]["own_complexity"], "O(n)")
+        self.assertEqual(details["count_vowels"]["own_complexity"], "O(n)")
+        self.assertEqual(details["palindrome"]["own_complexity"], "O(n)")
+        self.assertEqual(details["random_password"]["own_complexity"], "O(n)")
+        self.assertEqual(details["write_file"]["own_complexity"], "O(n)")
+        self.assertEqual(details["read_file"]["own_complexity"], "O(n)")
+        self.assertEqual(details["bubble_sort"]["own_complexity"], self.analyzer._quadratic())
+        self.assertEqual(details["demo_lists"]["own_complexity"], "O(1)")
+        self.assertEqual(details["demo_lists"]["effective_complexity"], self.analyzer._quadratic())
+        self.assertEqual(details["demo_class"]["own_complexity"], "O(1)")
+        self.assertEqual(details["demo_recursion"]["own_complexity"], "O(1)")
+
+    def test_python_inline_function_body_is_analyzed(self):
+        code = '''def reverse_string(text): return text[::-1]
+def fibonacci(n): return n if n <= 1 else fibonacci(n - 1) + fibonacci(n - 2)
+def demo_recursion(): print("Fibonacci(10):", fibonacci(10))
+'''
+
+        result = self.analyzer.analyze(code, "inline.py")
+        details = {
+            detail["function"]: detail
+            for detail in result["function_complexity_details"]
+        }
+
+        self.assertEqual(details["reverse_string"]["own_complexity"], "O(n)")
+        self.assertEqual(details["demo_recursion"]["own_complexity"], "O(1)")
+        self.assertNotIn("unknown", details["demo_recursion"]["effective_complexity"].lower())
 
     def test_ordered_dict_lru_rewrite_validates_function_complexity(self):
         original = """class LRUCache:
@@ -1187,6 +1563,217 @@ class LRUCache:
         self.assertTrue(enhanced[0]["ai_generated"])
         self.assertEqual(enhanced[0]["source"], "groq")
         self.assertEqual(enhanced[0]["source_label"], "Groq")
+
+    def test_groq_discovery_accepts_common_response_variants(self):
+        code = """def has_duplicate_slow(nums):
+    for i in range(len(nums)):
+        for j in range(i + 1, len(nums)):
+            if nums[i] == nums[j]:
+                return True
+    return False
+"""
+
+        result = self.analyzer.analyze(code, "dupes.py")
+        groq_payload = {
+            "discovered_optimizations": [{
+                "target_index": 0,
+                "function": "has_duplicate_slow",
+                "available": "true",
+                "title": "Use a set",
+                "problem": "Nested duplicate scan",
+                "solution": "Track seen values",
+                "complexity_before": "O(n²)",
+                "complexity_after": "O(n)",
+                "modified_code": (
+                    "def has_duplicate_slow(nums):\n"
+                    "    seen = set()\n"
+                    "    for value in nums:\n"
+                    "        if value in seen:\n"
+                    "            return True\n"
+                    "        seen.add(value)\n"
+                    "    return False"
+                ),
+                "notes": "Same duplicate result.",
+            }]
+        }
+
+        enhanced = _merge_ai_optimization_suggestions(
+            [],
+            groq_payload,
+            language="python",
+            discovery_targets=_expensive_function_targets(result),
+            original_code=code,
+            provider="groq",
+        )
+
+        self.assertEqual(len(enhanced), 1)
+        self.assertTrue(enhanced[0]["ai_generated"])
+        self.assertEqual(enhanced[0]["function"], "has_duplicate_slow")
+        self.assertIn("seen = set()", enhanced[0]["example"])
+
+    def test_groq_discovery_accepts_modified_functions_shape_for_single_target(self):
+        code = """def build_string(n):
+    s = ""
+    for i in range(n):
+        s += str(i)
+    return s
+"""
+
+        result = self.analyzer.analyze(code, "strings.py")
+        target = _expensive_function_targets(result)[0]
+        target["target_index"] = 7
+        groq_payload = {
+            "modified_functions": [{
+                "target_index": 0,
+                "available": True,
+                "complexity_after": "O(n)",
+                "modified_code": (
+                    "def build_string(n):\n"
+                    "    parts = []\n"
+                    "    for i in range(n):\n"
+                    "        parts.append(str(i))\n"
+                    "    return ''.join(parts)"
+                ),
+            }]
+        }
+
+        enhanced = _merge_ai_optimization_suggestions(
+            [],
+            groq_payload,
+            language="python",
+            discovery_targets=[target],
+            original_code=code,
+            provider="groq",
+        )
+
+        self.assertEqual(len(enhanced), 1)
+        self.assertEqual(enhanced[0]["function"], "build_string")
+        self.assertEqual(enhanced[0]["target_index"], 7)
+
+    def test_groq_discovery_accepts_bubble_sort_builtin_rewrite(self):
+        code = """def bubble_sort(lst):
+    arr = lst[:]
+    n = len(arr)
+    for i in range(n):
+        for j in range(n - i - 1):
+            if arr[j] > arr[j + 1]:
+                arr[j], arr[j + 1] = arr[j + 1], arr[j]
+    return arr
+"""
+
+        result = self.analyzer.analyze(code, "sorts.py")
+        targets = _expensive_function_targets(result)
+        groq_payload = {
+            "discovered_optimizations": [{
+                "target_index": 0,
+                "function": "bubble_sort",
+                "available": True,
+                "title": "Use built-in sorted",
+                "complexity_before": "O(n²)",
+                "complexity_after": "O(n log n)",
+                "code": "def bubble_sort(lst):\n    return sorted(lst)",
+            }]
+        }
+
+        enhanced = _merge_ai_optimization_suggestions(
+            [],
+            groq_payload,
+            language="python",
+            discovery_targets=targets,
+            original_code=code,
+            provider="groq",
+        )
+
+        self.assertEqual(len(enhanced), 1)
+        self.assertEqual(enhanced[0]["function"], "bubble_sort")
+        self.assertEqual(enhanced[0]["complexity_after"], "O(n log n)")
+        self.assertIn("return sorted(lst)", enhanced[0]["example"])
+
+    def test_groq_discovery_keeps_exact_function_when_local_validation_is_conservative(self):
+        code = """def build_string(n):
+    s = ""
+    for i in range(n):
+        s += str(i)
+    return s
+"""
+        result = self.analyzer.analyze(code, "strings.py")
+        groq_payload = {
+            "discovered_optimizations": [{
+                "target_index": 0,
+                "function": "build_string",
+                "available": True,
+                "title": "Use join",
+                "solution": "Append parts and join once.",
+                "complexity_before": "O(n²)",
+                "complexity_after": "O(n)",
+                "code": (
+                    "def build_string(n):\n"
+                    "    parts = []\n"
+                    "    for i in range(n):\n"
+                    "        parts.append(str(i))\n"
+                    "    return ''.join(parts)"
+                ),
+            }]
+        }
+
+        with patch(
+            "app.ai_explainer._validate_ai_rewrite_complexity",
+            return_value={"valid": False, "reason": "Local analyzer was conservative."},
+        ):
+            enhanced = _merge_ai_optimization_suggestions(
+                [],
+                groq_payload,
+                language="python",
+                discovery_targets=_expensive_function_targets(result),
+                original_code=code,
+                provider="groq",
+            )
+
+        self.assertEqual(len(enhanced), 1)
+        self.assertTrue(enhanced[0]["ai_generated"])
+        self.assertFalse(enhanced[0]["validation"]["strictly_verified"])
+        self.assertEqual(enhanced[0]["complexity_after"], "O(n)")
+
+    def test_groq_discovery_rejects_rewrite_for_wrong_target_function(self):
+        discovery_targets = [{
+            "target_index": 0,
+            "function": "pair_sums_required_output",
+            "own_complexity": "O(n^2)",
+            "effective_complexity": "O(n^2)",
+            "snippet": (
+                "def pair_sums_required_output(nums):\n"
+                "    result = []\n"
+                "    for i in range(len(nums)):\n"
+                "        for j in range(len(nums)):\n"
+                "            result.append(nums[i] + nums[j])\n"
+                "    return result"
+            ),
+        }]
+        ai_payload = {
+            "discovered_optimizations": [{
+                "target_index": 0,
+                "function": "main",
+                "available": True,
+                "title": "Optimize Main Function",
+                "problem": "Optimizes the driver instead of the target function.",
+                "solution": "Use optimized helpers.",
+                "complexity_before": "O(n^3)",
+                "complexity_after": "O(n)",
+                "code": "def main():\n    return None",
+                "notes": "Wrong target.",
+            }]
+        }
+
+        merged = _merge_ai_optimization_suggestions(
+            [],
+            ai_payload,
+            language="python",
+            discovery_targets=discovery_targets,
+            original_code=discovery_targets[0]["snippet"],
+            provider="groq",
+        )
+
+        self.assertEqual(merged, [])
 
     def test_route_hides_analyzer_fallback_optimizations_when_grok_returns_none(self):
         code = """public class Test {
@@ -1661,6 +2248,186 @@ def run(n):
         pdf = generate_pdf_report(analysis_data, "github")
 
         self.assertGreater(len(pdf), 1000)
+
+    def test_pdf_report_accepts_function_breakdown_and_groq_rewrite(self):
+        result = {
+            "filename": "sample.py",
+            "language": "python",
+            "lines_of_code": 14,
+            "time_complexity": "O(n^2)",
+            "space_complexity": "O(n)",
+            "rating": 6,
+            "time_complexity_reason": "Nested loops compare each pair.",
+            "overall_complexity": {
+                "scalable_time": "O(n^2)",
+                "scalable_space": "O(n)",
+            },
+            "function_complexity_details": [{
+                "function": "has_duplicate_slow",
+                "line": 1,
+                "own_complexity": "O(n^2)",
+                "effective_complexity": "O(n^2)",
+                "complexity": "O(n^2)",
+                "reason": "Nested loops compare every pair.",
+                "calls": [],
+                "snippet": (
+                    "def has_duplicate_slow(nums):\n"
+                    "    for i in range(len(nums)):\n"
+                    "        for j in range(i + 1, len(nums)):\n"
+                    "            if nums[i] == nums[j]:\n"
+                    "                return True\n"
+                    "    return False"
+                ),
+            }],
+            "hotspots": [{
+                "function": "has_duplicate_slow",
+                "line": 1,
+                "complexity": "O(n^2)",
+                "reason": "This function dominates the detected complexity.",
+                "snippet": "def has_duplicate_slow(nums):\n    for i in range(len(nums)):\n        pass",
+            }],
+            "ai_transformed_code": {
+                "available": True,
+                "source": "groq",
+                "source_label": "Groq",
+                "function": "has_duplicate_slow",
+                "title": "Use a set",
+                "description": "Track seen values once.",
+                "complexity_before": "O(n²)",
+                "complexity_after": "O(n)",
+                "code": (
+                    "def has_duplicate_slow(nums):\n"
+                    "    seen = set()\n"
+                    "    for value in nums:\n"
+                    "        if value in seen:\n"
+                    "            return True\n"
+                    "        seen.add(value)\n"
+                    "    return False"
+                ),
+            },
+        }
+
+        from app import report_generator
+
+        rows = report_generator._attach_solutions_to_functions(
+            report_generator._function_rows_for(result),
+            report_generator._ai_solutions_for(result),
+        )
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(len(rows[0]["ai_solutions"]), 1)
+        self.assertEqual(rows[0]["ai_solutions"][0]["source_label"], "Groq")
+
+        pdf = generate_pdf_report({"filename": "sample.py", "result": result}, "code")
+
+        self.assertGreater(len(pdf), 4000)
+
+    def test_pdf_report_accepts_zip_file_listing_and_function_tables(self):
+        first = self.analyzer.analyze(
+            "def linear(nums):\n    total = 0\n    for value in nums:\n        total += value\n    return total\n",
+            "src/linear.py",
+        )
+        second = self.analyzer.analyze(
+            "def nested(nums):\n    out = []\n    for a in nums:\n        for b in nums:\n            out.append((a, b))\n    return out\n",
+            "src/nested.py",
+        )
+        for result in (first, second):
+            result["rating"] = self.analyzer.calculate_rating(result)
+
+        analysis_data = {
+            "total_files": 2,
+            "total_lines": first["lines_of_code"] + second["lines_of_code"],
+            "total_issues": 0,
+            "average_rating": 7,
+            "project_summary": {
+                "summary": "Two source files were analyzed.",
+                "worst_time_complexity": second["time_complexity"],
+                "hotspot_count": len(second.get("hotspots") or []),
+            },
+            "files": [
+                {"filename": "src/linear.py", "result": first},
+                {"filename": "src/nested.py", "result": second},
+            ],
+        }
+
+        pdf = generate_pdf_report(analysis_data, "zip")
+
+        self.assertGreater(len(pdf), 5000)
+
+    def test_ai_rewrite_response_preserves_all_function_rewrites(self):
+        result = {
+            "time_complexity": "O(n^2)",
+            "space_complexity": "O(n)",
+            "function_complexity_details": [
+                {
+                    "function": "has_duplicate",
+                    "own_complexity": "O(n^2)",
+                    "effective_complexity": "O(n^2)",
+                    "complexity": "O(n^2)",
+                    "line": 1,
+                    "snippet": "def has_duplicate(nums):\n    return False",
+                },
+                {
+                    "function": "build_string",
+                    "own_complexity": "O(n^2)",
+                    "effective_complexity": "O(n^2)",
+                    "complexity": "O(n^2)",
+                    "line": 4,
+                    "snippet": "def build_string(n):\n    return ''",
+                },
+            ],
+            "issues": [],
+        }
+        fake_rewrites = [
+            {
+                "ai_generated": True,
+                "source": "groq",
+                "source_label": "Groq",
+                "function": "has_duplicate",
+                "title": "Use a set",
+                "solution": "Track seen values once.",
+                "complexity_before": "O(n^2)",
+                "complexity_after": "O(n)",
+                "example": (
+                    "def has_duplicate(nums):\n"
+                    "    seen = set()\n"
+                    "    for value in nums:\n"
+                    "        if value in seen:\n"
+                    "            return True\n"
+                    "        seen.add(value)\n"
+                    "    return False"
+                ),
+            },
+            {
+                "ai_generated": True,
+                "source": "groq",
+                "source_label": "Groq",
+                "function": "build_string",
+                "title": "Use join",
+                "solution": "Build parts and join once.",
+                "complexity_before": "O(n^2)",
+                "complexity_after": "O(n)",
+                "example": (
+                    "def build_string(n):\n"
+                    "    parts = []\n"
+                    "    for i in range(n):\n"
+                    "        parts.append(str(i))\n"
+                    "    return ''.join(parts)"
+                ),
+            },
+        ]
+
+        with patch("app.routes.enhance_optimizations_with_ai", return_value=fake_rewrites), \
+             patch("app.routes.get_last_ai_provider_error", return_value=""):
+            _attach_ai_rewrites(result, "def has_duplicate(nums):\n    return False\n", "python")
+
+        self.assertTrue(result["ai_transformed_code"]["available"])
+        self.assertEqual(result["ai_transformed_code"]["function"], "has_duplicate")
+        self.assertEqual(len(result["ai_optimized_functions"]), 2)
+        self.assertEqual(
+            {item["function"] for item in result["ai_optimized_functions"]},
+            {"has_duplicate", "build_string"},
+        )
 
     def test_union_find_structure_is_inverse_ackermann_without_name_hints(self):
         code = """parent = {}
