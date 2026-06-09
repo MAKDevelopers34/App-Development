@@ -150,11 +150,13 @@ def _attach_ai_rewrites(result, code, language, progress_callback=None):
         if progress_callback:
             progress_callback(result)
         latest_rewrite_summary = dict(initial_summary)
+        latest_optimizations = []
 
         def publish_progress(partial_optimizations, partial_summary):
-            nonlocal latest_rewrite_summary
+            nonlocal latest_rewrite_summary, latest_optimizations
             if partial_summary:
                 latest_rewrite_summary = dict(partial_summary)
+            latest_optimizations = list(partial_optimizations or [])
             _apply_ai_rewrite_state(
                 result,
                 partial_optimizations,
@@ -180,6 +182,30 @@ def _attach_ai_rewrites(result, code, language, progress_callback=None):
                 code,
                 language,
             )
+        except Exception as exc:
+            exc_text = str(exc).strip()
+            last_provider_error = get_last_ai_provider_error()
+            ai_provider_error = (
+                last_provider_error
+                if last_provider_error and exc_text and exc_text.lower() in last_provider_error.lower()
+                else f'Groq API error: {exc_text or "provider request failed"}'
+            )
+            rewrite_run_summary = {
+                **latest_rewrite_summary,
+                'status': 'stopped',
+                'reason': ai_provider_error,
+            }
+            _apply_ai_rewrite_state(
+                result,
+                latest_optimizations,
+                rewrite_run_summary,
+                planned_functions,
+                ai_provider_error=ai_provider_error,
+                final=True,
+            )
+            if progress_callback:
+                progress_callback(result)
+            return
         ai_provider_error = get_last_ai_provider_error()
         rewrite_run_summary = get_last_ai_rewrite_run_summary()
         if (

@@ -985,13 +985,16 @@ export default function Results() {
   const fileStateKey = (filename, index = selectedFile) => `${index}:${filename || 'file'}`;
 
   const handleGetModifiedCode = async (fileData = null, fileIndex = null) => {
-    const targetResult = fileData?.result || fileData || result || {};
     const isFileResult = fileData && !isCodeResult;
+    const targetResult = isFileResult
+      ? (fileData?.result || fileData || {})
+      : (result?.result || result || {});
     const targetIndex = fileIndex ?? selectedFile;
-    const filename = fileData?.filename || targetResult?.filename || result?.filename || 'code.py';
+    const filename = fileData?.filename || result?.filename || targetResult?.filename || 'code.py';
     const stateKey = fileStateKey(filename, targetIndex);
     const sourceCode = (
       targetResult?.source_code ||
+      result?.result?.source_code ||
       fileData?.source_code ||
       result?.source_code ||
       stateData.source_code ||

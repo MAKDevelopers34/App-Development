@@ -2237,6 +2237,44 @@ class LRUCache:
         self.assertFalse(result["ai_transformed_code"]["available"])
         self.assertEqual(result["ai_transformed_code"]["source"], "ai_discovery")
 
+    def test_route_returns_partial_rewrite_status_when_provider_fails(self):
+        code = """def slow(nums):
+    total = 0
+    for i in range(len(nums)):
+        for j in range(len(nums)):
+            total += nums[i] + nums[j]
+    return total
+"""
+
+        def provider_down(analysis_result, code_text, language, progress_callback=None):
+            if progress_callback:
+                progress_callback([], {
+                    "scope": "functions",
+                    "mode": "sequential",
+                    "planned_count": 1,
+                    "total_detected_count": 1,
+                    "checked_count": 1,
+                    "completed_count": 0,
+                    "checked_functions": [{
+                        "function": "slow",
+                        "effective_complexity": self.analyzer._quadratic(),
+                    }],
+                    "modified_count": 0,
+                    "modified_functions": [],
+                    "status": "running",
+                    "current_function": "slow",
+                    "reason": "",
+                })
+            raise RuntimeError("Service Unavailable")
+
+        with patch("app.routes.enhance_optimizations_with_ai", side_effect=provider_down):
+            result = _analyze_with_extras(code, "slow.py", include_ai=True, include_ai_explanations=False)
+
+        self.assertFalse(result["ai_transformed_code"]["available"])
+        self.assertEqual(result["ai_rewrite_summary"]["status"], "stopped")
+        self.assertEqual(result["ai_rewrite_summary"]["checked_count"], 1)
+        self.assertIn("Service Unavailable", result["ai_rewrite_summary"]["reason"])
+
     def test_route_uses_primary_groq_rewrite_once(self):
         code = """public class Test {
     public static int tricky(int n) {
