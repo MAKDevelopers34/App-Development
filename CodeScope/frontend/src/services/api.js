@@ -134,16 +134,22 @@ export const analyzeZip = async (file) => {
 };
 
 export const fetchGithubFolders = async (url) => {
-  const response = await api.post('/api/analyze/github/folders', { url });
+  const response = await api.post('/api/analyze/github/folders', { url }, { timeout: 0 });
   return response.data;
 };
 
 export const analyzeGithub = async (url, path = '', ref = '') => {
-  const payload = { url };
+  const payload = { url, async: true };
   if (path) payload.path = path;
   if (ref) payload.ref = ref;
 
-  const response = await api.post('/api/analyze/github', payload);
+  const response = await api.post('/api/analyze/github', payload, { timeout: 0 });
+  if (response.data?.job_id) {
+    return pollAnalysisJob(response.data.job_id, {
+      intervalMs: 2500,
+      timeoutMs: 600000,
+    });
+  }
   return response.data;
 };
 

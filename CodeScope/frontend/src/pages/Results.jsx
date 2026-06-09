@@ -762,6 +762,7 @@ export default function Results() {
   const [modifiedLoading, setModifiedLoading] = useState(false);
   const [modifiedError, setModifiedError] = useState('');
   const [modifiedChecked, setModifiedChecked] = useState(false);
+  const [modifiedFileStates, setModifiedFileStates] = useState({});
   const [selectedFile, setSelectedFile] = useState(0);
 
   const result = currentResult;
@@ -796,42 +797,108 @@ export default function Results() {
     }
   };
 
-  const handleGetModifiedCode = async () => {
-    const sourceCode = result?.source_code || stateData.source_code || routeSourceCode || '';
-    const filename = result?.filename || 'code.py';
+  const fileStateKey = (filename, index = selectedFile) => `${index}:${filename || 'file'}`;
+
+  const handleGetModifiedCode = async (fileData = null, fileIndex = null) => {
+    const targetResult = fileData?.result || fileData || result || {};
+    const isFileResult = fileData && !isCodeResult;
+    const targetIndex = fileIndex ?? selectedFile;
+    const filename = fileData?.filename || targetResult?.filename || result?.filename || 'code.py';
+    const stateKey = fileStateKey(filename, targetIndex);
+    const sourceCode = (
+      targetResult?.source_code ||
+      fileData?.source_code ||
+      result?.source_code ||
+      stateData.source_code ||
+      routeSourceCode ||
+      ''
+    );
 
     if (!sourceCode.trim()) {
-      setModifiedError('Original pasted code is not available for this result. Please analyze the code again.');
-      setModifiedChecked(true);
+      const message = 'Original source code is not available for this result. Please analyze it again.';
+      if (isFileResult) {
+        setModifiedFileStates(prev => ({
+          ...prev,
+          [stateKey]: { loading: false, error: message, checked: true },
+        }));
+      } else {
+        setModifiedError(message);
+        setModifiedChecked(true);
+      }
       return;
     }
 
-    setModifiedLoading(true);
-    setModifiedError('');
-    setModifiedChecked(false);
+    if (isFileResult) {
+      setModifiedFileStates(prev => ({
+        ...prev,
+        [stateKey]: { ...(prev[stateKey] || {}), loading: true, error: '', checked: false },
+      }));
+    } else {
+      setModifiedLoading(true);
+      setModifiedError('');
+      setModifiedChecked(false);
+    }
     try {
       const payload = await getModifiedCode(
         sourceCode,
         filename,
-        result?.concrete_inputs || stateData.concrete_inputs || ''
+        targetResult?.concrete_inputs || result?.concrete_inputs || stateData.concrete_inputs || ''
       );
-      setCurrentResult({
-        ...payload,
-        source_code: sourceCode,
-        concrete_inputs: result?.concrete_inputs || stateData.concrete_inputs || '',
-      });
-      setModifiedChecked(true);
+      if (isFileResult) {
+        const optimizedFileResult = {
+          ...(payload?.result || {}),
+          source_code: sourceCode,
+          concrete_inputs: targetResult?.concrete_inputs || result?.concrete_inputs || stateData.concrete_inputs || '',
+        };
+        setCurrentResult(prev => {
+          const nextFiles = Array.isArray(prev?.files) ? [...prev.files] : [];
+          if (!nextFiles[targetIndex]) return prev;
+          nextFiles[targetIndex] = {
+            ...nextFiles[targetIndex],
+            result: optimizedFileResult,
+          };
+          return { ...prev, files: nextFiles };
+        });
+        setModifiedFileStates(prev => ({
+          ...prev,
+          [stateKey]: { loading: false, error: '', checked: true },
+        }));
+      } else {
+        setCurrentResult({
+          ...payload,
+          source_code: sourceCode,
+          concrete_inputs: result?.concrete_inputs || stateData.concrete_inputs || '',
+        });
+        setModifiedChecked(true);
+      }
     } catch (err) {
-      setModifiedError(getApiErrorMessage(err, 'Could not get modified code from Groq. Please try again.'));
-      setModifiedChecked(true);
+      const message = getApiErrorMessage(err, 'Could not get modified code from Groq. Please try again.');
+      if (isFileResult) {
+        setModifiedFileStates(prev => ({
+          ...prev,
+          [stateKey]: { ...(prev[stateKey] || {}), loading: false, error: message, checked: true },
+        }));
+      } else {
+        setModifiedError(message);
+        setModifiedChecked(true);
+      }
     } finally {
-      setModifiedLoading(false);
+      if (!isFileResult) {
+        setModifiedLoading(false);
+      }
     }
   };
 
-  const renderSingleResult = (data, filename) => {
+  const renderSingleResult = (data, filename, options = {}) => {
     const fileResult = data?.result || data || {};
     const safeFilename = filename || getSafeFilename(data);
+    const allowModifiedAction = options.allowModifiedAction ?? isCodeResult;
+    const modifiedState = options.modifiedState || {
+      loading: modifiedLoading,
+      error: modifiedError,
+      checked: modifiedChecked,
+    };
+    const onModifiedClick = options.onModifiedClick || (() => handleGetModifiedCode());
     const sourceCode = (
       stateData.source_code ||
       data?.source_code ||
@@ -870,7 +937,7 @@ export default function Results() {
           functions={functionsWithAiSolutions}
           hotspots={hotspots}
           hasAiSolutions={hasAiSolutions}
-          modifiedChecked={modifiedChecked}
+          modifiedChecked={modifiedState.checked}
           providerStatus={groqStatus}
         />
         <ComplexitySummary result={fileResult} filename={safeFilename} />
@@ -887,16 +954,16 @@ export default function Results() {
           hiddenHotspotCount={hotspots.length}
         />
         <StandaloneAiRewrites solutions={standaloneAiSolutions} />
-        {isCodeResult && (
+        {allowModifiedAction && (
           <ModifiedCodeAction
-            loading={modifiedLoading}
-            error={modifiedError}
+            loading={modifiedState.loading}
+            error={modifiedState.error}
             status={groqStatus}
             hasSolutions={hasAiSolutions}
-            checked={modifiedChecked}
+            checked={modifiedState.checked}
             rewriteSummary={fileResult?.ai_rewrite_summary}
             checkedFunctionCount={functionsWithAiSolutions.length}
-            onClick={handleGetModifiedCode}
+            onClick={onModifiedClick}
           />
         )}
       </div>
@@ -907,6 +974,13 @@ export default function Results() {
     const files = Array.isArray(result?.files) ? result.files : [];
     const projectSummary = result?.project_summary || {};
     const selected = files[selectedFile] || files[0];
+    const selectedFilename = selected?.filename || `File ${selectedFile + 1}`;
+    const selectedStateKey = fileStateKey(selectedFilename, selectedFile);
+    const selectedModifiedState = modifiedFileStates[selectedStateKey] || {
+      loading: false,
+      error: '',
+      checked: Boolean(selected?.result?.ai_rewrite_summary),
+    };
 
     return (
       <div>
@@ -953,7 +1027,11 @@ export default function Results() {
             ))}
           </div>
           {selected
-            ? renderSingleResult(selected, selected.filename)
+            ? renderSingleResult(selected, selected.filename, {
+              allowModifiedAction: true,
+              modifiedState: selectedModifiedState,
+              onModifiedClick: () => handleGetModifiedCode(selected, selectedFile),
+            })
             : <p style={{ fontSize: '13px', color: 'var(--gray)', margin: 0 }}>No files were returned for this analysis.</p>}
         </section>
       </div>

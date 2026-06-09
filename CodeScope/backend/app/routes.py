@@ -304,6 +304,36 @@ def _run_analysis_job(job_id, code, filename, concrete_inputs=None, include_ai=F
         _update_analysis_job(job_id, status='failed', error=str(exc))
 
 
+def _start_github_analysis_job(url, selected_path='', selected_ref=None):
+    _cleanup_analysis_jobs()
+    job_id = uuid.uuid4().hex
+    with ANALYSIS_JOBS_LOCK:
+        ANALYSIS_JOBS[job_id] = {
+            'status': 'queued',
+            'created_at': time.time(),
+            'updated_at': time.time(),
+            'filename': selected_path or url,
+            'result': None,
+            'error': None,
+        }
+    thread = threading.Thread(
+        target=_run_github_analysis_job,
+        args=(job_id, url, selected_path, selected_ref),
+        daemon=True,
+    )
+    thread.start()
+    return job_id
+
+
+def _run_github_analysis_job(job_id, url, selected_path='', selected_ref=None):
+    _update_analysis_job(job_id, status='running')
+    try:
+        result = _analyze_github_repository(url, selected_path, selected_ref)
+        _update_analysis_job(job_id, status='completed', result=result)
+    except Exception as exc:
+        _update_analysis_job(job_id, status='failed', error=str(exc))
+
+
 def _update_analysis_job(job_id, **updates):
     with ANALYSIS_JOBS_LOCK:
         job = ANALYSIS_JOBS.get(job_id)
@@ -1322,44 +1352,58 @@ def analyze_github():
         )
         selected_ref = data.get('ref') or data.get('branch')
 
-        files = fetch_github_code(url, path=selected_path, ref=selected_ref)
-        if not files:
-            return jsonify({'error': 'Could not fetch code from GitHub'}), 400
+        if _wants_async_analysis(data):
+            job_id = _start_github_analysis_job(url, selected_path, selected_ref)
+            return jsonify({
+                'success': True,
+                'async': True,
+                'job_id': job_id,
+                'status': 'queued',
+                'filename': selected_path or url,
+            }), 202
 
-        results = []
-        source_files = []
-        for file in files:
-            result = _analyze_with_extras(
-                file['code'],
-                file['filename'],
-                include_ai=False,
-                include_ai_explanations=False,
-            )
-            result['source_code'] = file['code']
-
-            results.append({'filename': file['filename'], 'result': result})
-            source_files.append({'filename': file['filename'], 'code': file['code']})
-
-        avg_rating = round(
-            sum(r['result']['rating'] for r in results) / len(results))
-        total_lines = sum(r['result']['lines_of_code'] for r in results)
-        all_issues = sum(len(r['result']['issues']) for r in results)
-
-        return jsonify({
-            'success': True,
-            'github_url': url,
-            'selected_path': selected_path,
-            'branch': selected_ref,
-            'total_files': len(results),
-            'total_lines': total_lines,
-            'total_issues': all_issues,
-            'average_rating': avg_rating,
-            'project_summary': _build_batch_summary(results, 'github', source_files),
-            'files': results
-        })
+        return jsonify(_analyze_github_repository(url, selected_path, selected_ref))
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+def _analyze_github_repository(url, selected_path='', selected_ref=None):
+    files = fetch_github_code(url, path=selected_path, ref=selected_ref)
+    if not files:
+        raise ValueError('Could not fetch code from GitHub')
+
+    results = []
+    source_files = []
+    for file in files:
+        result = _analyze_with_extras(
+            file['code'],
+            file['filename'],
+            include_ai=False,
+            include_ai_explanations=False,
+        )
+        result['source_code'] = file['code']
+
+        results.append({'filename': file['filename'], 'result': result})
+        source_files.append({'filename': file['filename'], 'code': file['code']})
+
+    avg_rating = round(
+        sum(r['result']['rating'] for r in results) / len(results))
+    total_lines = sum(r['result']['lines_of_code'] for r in results)
+    all_issues = sum(len(r['result']['issues']) for r in results)
+
+    return {
+        'success': True,
+        'github_url': url,
+        'selected_path': selected_path,
+        'branch': selected_ref,
+        'total_files': len(results),
+        'total_lines': total_lines,
+        'total_issues': all_issues,
+        'average_rating': avg_rating,
+        'project_summary': _build_batch_summary(results, 'github', source_files),
+        'files': results
+    }
 
 
 # ─── Generate PDF Report ────────────────────────────────────
