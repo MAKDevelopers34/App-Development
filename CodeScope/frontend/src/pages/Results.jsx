@@ -299,6 +299,63 @@ const codeDefinedFunctionName = (code = '') => {
   return '';
 };
 
+const compactSource = (code = '') => String(code || '').replace(/\s+/g, ' ');
+
+const looksLikeResidualMatrixBfs = (row = {}) => {
+  const name = String(row.function || '').toLowerCase();
+  const code = String(row.snippet || row.code || '');
+  const compact = compactSource(code).toLowerCase();
+  const hasBfsContext = /\bbfs\b/.test(name) || /\b(deque|queue|popleft)\b/.test(compact);
+  const hasQueueLoop = /\bwhile\s+\w*queue\w*\s*:/.test(code);
+  const scansRangeRow = /\bfor\s+\w+\s+in\s+range\s*\(\s*\w+\s*\)\s*:/.test(code);
+  const scansEnumeratedRow = /\bfor\s+\w+\s*,\s*\w+\s+in\s+enumerate\s*\(\s*\w+\s*\[\s*\w+\s*\]\s*\)\s*:/.test(code);
+  const readsMatrixCapacity = /\b\w+\s*\[\s*\w+\s*\]\s*\[\s*\w+\s*\]\s*(?:>|!=|>=)\s*0/.test(code);
+  const hasFlowNames = /\b(residual|capacity|cap|sink|source|parent)\b/.test(compact);
+  return hasBfsContext && hasQueueLoop && hasFlowNames && (readsMatrixCapacity || scansEnumeratedRow) && (scansRangeRow || scansEnumeratedRow);
+};
+
+const looksLikeEdmondsKarpMatrixDriver = (row = {}) => {
+  const name = String(row.function || '').toLowerCase();
+  const code = String(row.snippet || row.code || '');
+  const compact = compactSource(code).toLowerCase();
+  const namedLikeFlow = /edmonds|karp|max_?flow|ford/.test(name);
+  const callsBfsInAugmentLoop = /\bwhile\s+bfs\s*\(/.test(code);
+  const hasFlowState = /\b(residual|capacity|max_flow|path_flow|parent)\b/.test(compact);
+  const hasReverseUpdate = /\b\w+\s*\[\s*\w+\s*\]\s*\[\s*\w+\s*\]\s*\+=\s*(?:path_flow|flow)/.test(code);
+  const hasMatrixResidual = /\b\w+\s*=\s*\[\s*\[.*?\bfor\b.*?\]\s*\bfor\b/.test(compact) || /\b\w+\s*\[\s*\w+\s*\]\s*\[\s*\w+\s*\]/.test(code);
+  return namedLikeFlow && callsBfsInAugmentLoop && hasFlowState && hasReverseUpdate && hasMatrixResidual;
+};
+
+const normalizeFunctionFacts = (row = {}) => {
+  if (looksLikeEdmondsKarpMatrixDriver(row)) {
+    return {
+      ...row,
+      own_complexity: 'O(V E²)',
+      effective_complexity: 'O(V E²)',
+      complexity: 'O(V E²)',
+      own_space_complexity: 'O(V^2)',
+      effective_space_complexity: 'O(V^2)',
+      space_complexity: 'O(V^2)',
+      explanation: 'Edmonds-Karp performs O(VE) augmentations; BFS over the residual network gives the standard O(V E²) bound.',
+      reason: 'Edmonds-Karp performs O(VE) augmentations; BFS over the residual network gives the standard O(V E²) bound.',
+    };
+  }
+  if (looksLikeResidualMatrixBfs(row)) {
+    return {
+      ...row,
+      own_complexity: 'O(V^2)',
+      effective_complexity: 'O(V^2)',
+      complexity: 'O(V^2)',
+      own_space_complexity: 'O(V)',
+      effective_space_complexity: 'O(V)',
+      space_complexity: 'O(V)',
+      explanation: 'Adjacency-matrix BFS may visit V vertices and scans a full V-capacity row for each vertex.',
+      reason: 'Adjacency-matrix BFS may visit V vertices and scans a full V-capacity row for each vertex.',
+    };
+  }
+  return row;
+};
+
 const normalizeAiSolution = (solution) => {
   if (!solution) return null;
   const code = solution.code || solution.example;
@@ -343,7 +400,7 @@ const functionRowsFor = (result) => {
   };
 
   if (details.length === 0) {
-    return explanations.map(item => ({
+    return explanations.map(item => normalizeFunctionFacts({
       ...item,
       target_index: item.target_index ?? targetIndexForFunction(item.function),
       own_complexity: item.own_complexity || item.complexity || 'O(1)',
@@ -363,7 +420,7 @@ const functionRowsFor = (result) => {
     const effective = detail.effective_complexity || detail.complexity || explanation.effective_complexity || explanation.complexity || own;
     const ownSpace = detail.own_space_complexity || detail.space_complexity || explanation.own_space_complexity || explanation.space_complexity || 'O(1)';
     const effectiveSpace = detail.effective_space_complexity || detail.space_complexity || explanation.effective_space_complexity || explanation.space_complexity || ownSpace;
-    return {
+    return normalizeFunctionFacts({
       ...explanation,
       ...detail,
       target_index: detail.target_index ?? explanation.target_index ?? targetIndexForFunction(detail.function),
@@ -376,7 +433,7 @@ const functionRowsFor = (result) => {
       explanation: detail.reason || explanation.explanation || '',
       snippet: detail.snippet || explanation.snippet || '',
       calls: detail.calls || explanation.calls || [],
-    };
+    });
   });
 };
 
@@ -1172,7 +1229,10 @@ export default function Results() {
           modifiedChecked={modifiedState.checked}
           providerStatus={visibleGroqStatus}
         />
-        <ComplexitySummary result={fileResult} filename={safeFilename} />
+        <ComplexitySummary
+          result={fileResult}
+          filename={safeFilename}
+        />
         <HotCodeSection
           hotspots={hotspots}
           sourceCode={sourceCode}

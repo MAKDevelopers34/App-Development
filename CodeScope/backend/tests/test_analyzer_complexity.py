@@ -4171,12 +4171,12 @@ def edmonds_karp(capacity, source, sink):
         }
 
         self.assertFalse(known["detected"])
-        self.assertEqual(result["time_complexity"], "O(V^3 E)")
+        self.assertEqual(result["time_complexity"], "O(V E²)")
         self.assertEqual(result["space_complexity"], "O(V^2)")
         self.assertEqual(list(details), ["bfs", "edmonds_karp"])
         self.assertEqual(details["bfs"]["own_complexity"], "O(V^2)")
         self.assertEqual(details["bfs"]["effective_space_complexity"], "O(V)")
-        self.assertEqual(details["edmonds_karp"]["effective_complexity"], "O(V^3 E)")
+        self.assertEqual(details["edmonds_karp"]["effective_complexity"], "O(V E²)")
         self.assertEqual(details["edmonds_karp"]["effective_space_complexity"], "O(V^2)")
         self.assertEqual(result["hotspots"][0]["function"], "edmonds_karp")
 

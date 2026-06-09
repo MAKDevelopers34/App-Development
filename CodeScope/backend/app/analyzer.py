@@ -1040,8 +1040,8 @@ class CodeAnalyzer:
             }
         if self._looks_like_edmonds_karp_matrix_driver(name, body, full_code, language):
             return {
-                'complexity': 'O(V^3 E)',
-                'reason': 'Edmonds-Karp performs O(VE) augmentations; each matrix BFS scans O(V^2) capacity entries'
+                'complexity': 'O(V E²)',
+                'reason': 'Edmonds-Karp performs O(VE) augmentations; each BFS over the residual network gives O(E), so total time is O(V E²)'
             }
         if self._looks_like_graph_dfs_function(name, body, full_code, language):
             return {
@@ -2591,8 +2591,8 @@ class CodeAnalyzer:
             if self._looks_like_edmonds_karp_matrix_driver('', code, code, 'python'):
                 return {
                     'detected': True, 'algorithm': 'Max-Flow (Edmonds-Karp, adjacency matrix)',
-                    'complexity': 'O(V^3 E)', 'space': 'O(V^2)',
-                    'reason': 'O(VE) augmenting paths and each BFS scans the V by V residual-capacity matrix',
+                    'complexity': 'O(V E²)', 'space': 'O(V^2)',
+                    'reason': 'Edmonds-Karp uses O(VE) augmenting paths and an O(E) BFS per augmentation',
                     'can_optimize': True, 'optimized_to': "O(V²E) with Dinic's on adjacency lists",
                     'note': 'Use adjacency lists plus Dinic for better asymptotic behavior on sparse graphs.'
                 }
