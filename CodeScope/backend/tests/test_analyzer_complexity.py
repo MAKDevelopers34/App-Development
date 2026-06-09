@@ -2810,6 +2810,54 @@ def run(n):
 
         self.assertGreater(len(pdf), 4000)
 
+    def test_report_attaches_rewrite_by_target_index_before_text_guessing(self):
+        from app import report_generator
+
+        result = {
+            "language": "python",
+            "function_complexity_details": [
+                {
+                    "function": "first_target",
+                    "line": 1,
+                    "own_complexity": "O(n^2)",
+                    "effective_complexity": "O(n^2)",
+                    "snippet": "def first_target(nums):\n    return nums",
+                },
+                {
+                    "function": "second_target",
+                    "line": 4,
+                    "own_complexity": "O(n^2)",
+                    "effective_complexity": "O(n^2)",
+                    "snippet": "def second_target(nums):\n    return nums",
+                },
+            ],
+            "ai_rewrite_summary": {
+                "checked_functions": [
+                    {"target_index": 0, "function": "first_target"},
+                    {"target_index": 1, "function": "second_target"},
+                ],
+            },
+            "ai_optimized_functions": [{
+                "source": "groq",
+                "source_label": "Groq",
+                "target_index": 1,
+                "function": "first_target",
+                "title": "Rewrite should attach by target index",
+                "complexity_before": "O(n^2)",
+                "complexity_after": "O(n)",
+                "code": "def first_target(nums):\n    return list(dict.fromkeys(nums))",
+            }],
+        }
+
+        rows = report_generator._attach_solutions_to_functions(
+            report_generator._function_rows_for(result),
+            report_generator._ai_solutions_for(result),
+        )
+
+        self.assertEqual(len(rows[0]["ai_solutions"]), 0)
+        self.assertEqual(len(rows[1]["ai_solutions"]), 1)
+        self.assertEqual(rows[1]["function"], "second_target")
+
     def test_pdf_report_accepts_zip_file_listing_and_function_tables(self):
         first = self.analyzer.analyze(
             "def linear(nums):\n    total = 0\n    for value in nums:\n        total += value\n    return total\n",
@@ -2872,6 +2920,7 @@ def run(n):
                 "source": "groq",
                 "source_label": "Groq",
                 "function": "has_duplicate",
+                "target_index": 0,
                 "title": "Use a set",
                 "solution": "Track seen values once.",
                 "complexity_before": "O(n^2)",
@@ -2891,6 +2940,7 @@ def run(n):
                 "source": "groq",
                 "source_label": "Groq",
                 "function": "build_string",
+                "target_index": 1,
                 "title": "Use join",
                 "solution": "Build parts and join once.",
                 "complexity_before": "O(n^2)",
@@ -2911,10 +2961,15 @@ def run(n):
 
         self.assertTrue(result["ai_transformed_code"]["available"])
         self.assertEqual(result["ai_transformed_code"]["function"], "has_duplicate")
+        self.assertEqual(result["ai_transformed_code"]["target_index"], 0)
         self.assertEqual(len(result["ai_optimized_functions"]), 2)
         self.assertEqual(
             {item["function"] for item in result["ai_optimized_functions"]},
             {"has_duplicate", "build_string"},
+        )
+        self.assertEqual(
+            {item["function"]: item["target_index"] for item in result["ai_optimized_functions"]},
+            {"has_duplicate": 0, "build_string": 1},
         )
 
     def test_union_find_structure_is_inverse_ackermann_without_name_hints(self):

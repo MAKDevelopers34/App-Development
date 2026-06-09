@@ -274,6 +274,7 @@ def _apply_ai_rewrite_state(
             'source': source,
             'source_label': source_label,
             'function': ai_optimization.get('function'),
+            'target_index': ai_optimization.get('target_index'),
             'title': ai_optimization.get('title', 'AI Optimized Code'),
             'description': ai_optimization.get('solution') or ai_optimization.get('title', ''),
             'complexity_before': ai_optimization.get('complexity_before'),
@@ -302,10 +303,17 @@ def _ai_checked_function_facts(function_targets):
         if not isinstance(detail, dict):
             continue
         facts.append({
+            'target_index': detail.get('target_index'),
             'function': detail.get('function'),
             'line': detail.get('line'),
             'own_complexity': detail.get('own_complexity') or detail.get('complexity'),
             'effective_complexity': detail.get('effective_complexity') or detail.get('complexity') or detail.get('own_complexity'),
+            'space_complexity': (
+                detail.get('effective_space_complexity') or
+                detail.get('space_complexity') or
+                detail.get('own_space_complexity') or
+                'O(1)'
+            ),
         })
     return facts
 
@@ -318,6 +326,7 @@ def _ai_optimization_to_function_solution(ai_optimization):
         'source': source,
         'source_label': source_label,
         'function': ai_optimization.get('function'),
+        'target_index': ai_optimization.get('target_index'),
         'title': ai_optimization.get('title') or f'{source_label} optimized rewrite',
         'description': ai_optimization.get('solution') or ai_optimization.get('problem') or '',
         'complexity_before': ai_optimization.get('complexity_before'),
@@ -557,6 +566,7 @@ def _attach_ai_solution_to_issue(result, ai_optimization):
         'source': source,
         'source_label': source_label,
         'function': ai_optimization.get('function'),
+        'target_index': ai_optimization.get('target_index'),
     }
 
     target_function = str(ai_optimization.get('function') or '').lower()

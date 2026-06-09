@@ -264,6 +264,12 @@ const namesMatch = (left = '', right = '') => {
   return aliasesFor(left).some(alias => rightAliases.has(alias));
 };
 
+const normalizedTargetIndex = (value) => {
+  if (value === null || value === undefined || value === '') return '';
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? String(numeric) : String(value);
+};
+
 const escapeRegExp = (value = '') => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 const codeMentionsFunction = (code = '', functionName = '') => {
@@ -276,6 +282,21 @@ const codeMentionsFunction = (code = '', functionName = '') => {
       new RegExp(`\\bfunction\\s+${escaped}\\s*\\(`, 'i').test(text)
     );
   });
+};
+
+const codeDefinedFunctionName = (code = '') => {
+  const text = String(code || '').trim();
+  const patterns = [
+    /^(?:async\s+def|def)\s+([A-Za-z_]\w*)\s*\(/m,
+    /^function\s+\*?\s*([A-Za-z_$][\w$]*)\s*\(/m,
+    /^(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=/m,
+    /^(?:(?:public|private|protected)\s+)?(?:static\s+)?[\w:<>,[\]\s*&?]+\s+([A-Za-z_$][\w$]*)\s*\([^;]*\)\s*\{/m,
+  ];
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match?.[1]) return match[1];
+  }
+  return '';
 };
 
 const normalizeAiSolution = (solution) => {
@@ -311,10 +332,20 @@ const functionRowsFor = (result) => {
   const explanations = Array.isArray(result?.function_explanations)
     ? result.function_explanations
     : [];
+  const checkedFunctions = Array.isArray(result?.ai_rewrite_summary?.checked_functions)
+    ? result.ai_rewrite_summary.checked_functions
+    : [];
+  const targetIndexForFunction = (functionName = '') => {
+    const checked = checkedFunctions.find(item => (
+      item?.target_index !== undefined && namesMatch(item?.function, functionName)
+    ));
+    return checked ? checked.target_index : undefined;
+  };
 
   if (details.length === 0) {
     return explanations.map(item => ({
       ...item,
+      target_index: item.target_index ?? targetIndexForFunction(item.function),
       own_complexity: item.own_complexity || item.complexity || 'O(1)',
       effective_complexity: item.effective_complexity || item.complexity || item.own_complexity || 'O(1)',
       complexity: item.effective_complexity || item.complexity || item.own_complexity || 'O(1)',
@@ -335,6 +366,7 @@ const functionRowsFor = (result) => {
     return {
       ...explanation,
       ...detail,
+      target_index: detail.target_index ?? explanation.target_index ?? targetIndexForFunction(detail.function),
       own_complexity: own,
       effective_complexity: effective,
       complexity: effective,
@@ -356,6 +388,7 @@ const hotspotsFor = (result, functionRows) => {
       const complexity = fn.effective_complexity || fn.complexity || fn.own_complexity || hotspot.complexity;
       return {
         function: fn.function,
+        target_index: fn.target_index,
         line: fn.line || hotspot.line || 1,
         complexity,
         space_complexity: fn.effective_space_complexity || fn.space_complexity || hotspot.space_complexity || 'O(1)',
@@ -381,8 +414,12 @@ const hotspotsFor = (result, functionRows) => {
     .filter(item => item.rank === maxRank)
     .map(item => ({
       function: item.function,
+      target_index: item.target_index,
       line: item.line,
       complexity: item.complexity,
+      space_complexity: item.space_complexity,
+      own_space_complexity: item.own_space_complexity,
+      effective_space_complexity: item.effective_space_complexity,
       reason: item.reason,
       snippet: item.snippet,
       ai_solution: item.ai_solution,
@@ -429,6 +466,16 @@ const aiSolutionsFor = (result, hotspots, functionRows) => {
 
   return uniqueSolutions(candidates).map(solution => {
     if (solution.function) return solution;
+    const targetIndex = normalizedTargetIndex(solution.target_index);
+    if (targetIndex) {
+      const matchedByIndex = functionRows.find(fn => normalizedTargetIndex(fn.target_index) === targetIndex);
+      if (matchedByIndex?.function) return { ...solution, function: matchedByIndex.function };
+    }
+    const definedName = codeDefinedFunctionName(solution.code);
+    if (definedName) {
+      const matchedByDefinition = functionRows.find(fn => namesMatch(fn.function, definedName));
+      if (matchedByDefinition?.function) return { ...solution, function: matchedByDefinition.function };
+    }
     const matched = functionRows.find(fn =>
       codeMentionsFunction(solution.code, fn.function) ||
       aliasesFor(fn.function).some(alias =>
@@ -452,18 +499,42 @@ const functionTextFor = (solution = '') => (
 
 const solutionMatchesFunction = (solution, fn) => {
   if (!solution || !fn?.function) return false;
-  if (solution.function && namesMatch(solution.function, fn.function)) return true;
+  const solutionTargetIndex = normalizedTargetIndex(solution.target_index);
+  const functionTargetIndex = normalizedTargetIndex(fn.target_index);
+  if (solutionTargetIndex || functionTargetIndex) {
+    return Boolean(solutionTargetIndex && functionTargetIndex && solutionTargetIndex === functionTargetIndex);
+  }
+  if (solution.function) return namesMatch(solution.function, fn.function);
+  const definedName = codeDefinedFunctionName(solution.code);
+  if (definedName) return namesMatch(definedName, fn.function);
   if (codeMentionsFunction(solution.code, fn.function)) return true;
 
   const text = functionTextFor(solution);
   return aliasesFor(fn.function).some(alias => text.includes(alias));
 };
 
+const solutionTargetForFunction = (rows, solution) => {
+  const solutionTargetIndex = normalizedTargetIndex(solution?.target_index);
+  if (solutionTargetIndex) {
+    const indexed = rows.find(fn => normalizedTargetIndex(fn.target_index) === solutionTargetIndex);
+    if (indexed) return indexed;
+  }
+  if (solution?.function) {
+    return rows.find(fn => namesMatch(solution.function, fn.function));
+  }
+  const definedName = codeDefinedFunctionName(solution?.code);
+  if (definedName) {
+    const defined = rows.find(fn => namesMatch(definedName, fn.function));
+    if (defined) return defined;
+  }
+  return rows.find(fn => solutionMatchesFunction(solution, fn));
+};
+
 const attachSolutionsToFunctions = (functions, solutions) => {
   const rows = functions.map(fn => ({ ...fn, ai_solutions: [] }));
 
   solutions.forEach(solution => {
-    let target = rows.find(fn => solutionMatchesFunction(solution, fn));
+    const target = solutionTargetForFunction(rows, solution);
 
     if (!target) return;
     target.ai_solutions.push(solution);

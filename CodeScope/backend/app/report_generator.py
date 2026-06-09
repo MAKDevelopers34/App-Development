@@ -637,16 +637,28 @@ def _function_rows_for(result):
     result = result or {}
     details = result.get('function_complexity_details') or []
     explanations = result.get('function_explanations') or []
+    checked_functions = (result.get('ai_rewrite_summary') or {}).get('checked_functions') or []
 
     if isinstance(details, dict):
         details = list(details.values())
     if isinstance(explanations, dict):
         explanations = list(explanations.values())
 
+    def target_index_for(function_name):
+        for item in checked_functions:
+            if (
+                isinstance(item, dict) and
+                item.get('target_index') is not None and
+                _names_match(item.get('function'), function_name)
+            ):
+                return item.get('target_index')
+        return None
+
     if not details:
         return [
             {
                 **item,
+                'target_index': item.get('target_index') if item.get('target_index') is not None else target_index_for(item.get('function')),
                 'own_complexity': item.get('own_complexity') or item.get('complexity') or 'O(1)',
                 'effective_complexity': (
                     item.get('effective_complexity') or
@@ -713,6 +725,13 @@ def _function_rows_for(result):
         rows.append({
             **explanation,
             **detail,
+            'target_index': (
+                detail.get('target_index')
+                if detail.get('target_index') is not None
+                else explanation.get('target_index')
+                if explanation.get('target_index') is not None
+                else target_index_for(detail.get('function'))
+            ),
             'own_complexity': own,
             'effective_complexity': effective,
             'complexity': effective,
@@ -750,6 +769,7 @@ def _highest_hotspots(result, functions):
         complexity = item.get('effective_complexity') or item.get('complexity') or hotspot.get('complexity')
         merged.append({
             'function': item.get('function') or hotspot.get('function'),
+            'target_index': item.get('target_index') if item.get('target_index') is not None else hotspot.get('target_index'),
             'line': item.get('line') or hotspot.get('line') or 1,
             'complexity': complexity or 'O(1)',
             'space_complexity': (
@@ -766,6 +786,7 @@ def _highest_hotspots(result, functions):
         merged = [
             {
                 'function': item.get('function'),
+                'target_index': item.get('target_index'),
                 'line': item.get('line') or 1,
                 'complexity': item.get('complexity') or 'O(1)',
                 'space_complexity': item.get('space_complexity') or 'O(1)',
@@ -836,10 +857,7 @@ def _normalize_solution(solution):
 def _attach_solutions_to_functions(functions, solutions):
     rows = [{**item, 'ai_solutions': []} for item in functions]
     for solution in solutions:
-        target = next(
-            (item for item in rows if _solution_matches_function(solution, item)),
-            None,
-        )
+        target = _solution_target_for_function(rows, solution)
         if target:
             target['ai_solutions'].append(solution)
 
@@ -867,12 +885,65 @@ def _attach_solutions_to_hotspots(hotspots, solutions, functions):
 def _solution_matches_function(solution, item):
     if not solution or not item or not item.get('function'):
         return False
-    if solution.get('function') and _names_match(solution.get('function'), item.get('function')):
-        return True
+    solution_target_index = _normalized_target_index(solution.get('target_index'))
+    item_target_index = _normalized_target_index(item.get('target_index'))
+    if solution_target_index or item_target_index:
+        return bool(solution_target_index and item_target_index and solution_target_index == item_target_index)
+    if solution.get('function'):
+        return _names_match(solution.get('function'), item.get('function'))
+    defined_name = _code_defined_function_name(solution.get('code'))
+    if defined_name:
+        return _names_match(defined_name, item.get('function'))
     if _code_mentions_function(solution.get('code'), item.get('function')):
         return True
     text = ' '.join(_pdf_text(solution.get(key)) for key in ('title', 'description', 'solution', 'notes')).lower()
     return any(alias in text for alias in _aliases_for(item.get('function')))
+
+
+def _solution_target_for_function(rows, solution):
+    solution_target_index = _normalized_target_index((solution or {}).get('target_index'))
+    if solution_target_index:
+        indexed = next(
+            (item for item in rows if _normalized_target_index(item.get('target_index')) == solution_target_index),
+            None,
+        )
+        if indexed:
+            return indexed
+    if (solution or {}).get('function'):
+        return next(
+            (item for item in rows if _names_match(solution.get('function'), item.get('function'))),
+            None,
+        )
+    defined_name = _code_defined_function_name((solution or {}).get('code'))
+    if defined_name:
+        matched = next((item for item in rows if _names_match(defined_name, item.get('function'))), None)
+        if matched:
+            return matched
+    return next((item for item in rows if _solution_matches_function(solution, item)), None)
+
+
+def _normalized_target_index(value):
+    if value is None or value == '':
+        return ''
+    try:
+        numeric = int(value)
+    except (TypeError, ValueError):
+        return str(value)
+    return str(numeric)
+
+
+def _code_defined_function_name(code):
+    text = _code_text(code).strip()
+    for pattern in (
+        r'(?m)^(?:async\s+def|def)\s+([A-Za-z_]\w*)\s*\(',
+        r'(?m)^function\s+\*?\s*([A-Za-z_$][\w$]*)\s*\(',
+        r'(?m)^(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=',
+        r'(?m)^(?:(?:public|private|protected)\s+)?(?:static\s+)?[\w:<>,\[\]\s*&?]+\s+([A-Za-z_$][\w$]*)\s*\([^;]*\)\s*\{',
+    ):
+        match = re.search(pattern, text)
+        if match:
+            return match.group(1)
+    return ''
 
 
 def _unique_solutions(solutions):
