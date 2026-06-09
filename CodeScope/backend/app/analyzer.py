@@ -1033,6 +1033,16 @@ class CodeAnalyzer:
             return {'complexity': self._alpha(), 'reason': 'path compression and union by rank'}
         if re.search(r'parent\s*\[[^\]]+\]\s*=\s*find\s*\(\s*parent\s*\[', body):
             return {'complexity': self._alpha(), 'reason': 'path compression'}
+        if self._looks_like_residual_matrix_bfs(name, body, full_code, language):
+            return {
+                'complexity': 'O(V^2)',
+                'reason': 'Adjacency-matrix BFS may visit V vertices and scans a full V-capacity row for each vertex'
+            }
+        if self._looks_like_edmonds_karp_matrix_driver(name, body, full_code, language):
+            return {
+                'complexity': 'O(V^3 E)',
+                'reason': 'Edmonds-Karp performs O(VE) augmentations; each matrix BFS scans O(V^2) capacity entries'
+            }
         if self._looks_like_graph_dfs_function(name, body, full_code, language):
             return {
                 'complexity': 'O(V + E)',
@@ -1111,6 +1121,58 @@ class CodeAnalyzer:
             detected = detector(body, language)
             if detected.get('detected'):
                 return detected
+        return None
+
+    def _looks_like_residual_matrix_bfs(self, name, body, full_code, language):
+        if language != 'python':
+            return False
+        compact = self._compact_ws(body)
+        has_bfs_context = re.search(r'\bbfs\b|breadth.?first', str(name or ''), re.IGNORECASE) or re.search(
+            r'\b(?:deque|queue|popleft)\b', compact, re.IGNORECASE
+        )
+        has_queue_loop = bool(re.search(r'\bwhile\s+\w*queue\w*\s*:', body))
+        scans_range_row = bool(re.search(r'\bfor\s+\w+\s+in\s+range\s*\(\s*\w+\s*\)\s*:', body))
+        scans_enumerated_row = bool(re.search(
+            r'\bfor\s+\w+\s*,\s*\w+\s+in\s+enumerate\s*\(\s*\w+\s*\[\s*\w+\s*\]\s*\)\s*:',
+            body
+        ))
+        reads_matrix_capacity = bool(re.search(
+            r'\b\w+\s*\[\s*\w+\s*\]\s*\[\s*\w+\s*\]\s*(?:>|!=|>=)\s*0',
+            body
+        ))
+        has_flow_names = bool(re.search(r'\b(?:residual|capacity|cap|sink|source|parent)\b', compact, re.IGNORECASE))
+        return has_bfs_context and has_queue_loop and has_flow_names and (
+            reads_matrix_capacity or scans_enumerated_row
+        ) and (scans_range_row or scans_enumerated_row)
+
+    def _looks_like_edmonds_karp_matrix_driver(self, name, body, full_code, language):
+        if language != 'python':
+            return False
+        compact = self._compact_ws(body)
+        named_like_flow = bool(re.search(r'edmonds|karp|max_?flow|ford', str(name or ''), re.IGNORECASE))
+        calls_bfs_in_augment_loop = bool(re.search(r'\bwhile\s+bfs\s*\(', body))
+        has_flow_state = bool(re.search(r'\b(?:residual|capacity|max_flow|path_flow|parent)\b', compact, re.IGNORECASE))
+        has_reverse_update = bool(re.search(
+            r'\b\w+\s*\[\s*\w+\s*\]\s*\[\s*\w+\s*\]\s*\+=\s*(?:path_flow|flow)',
+            body
+        ))
+        has_matrix_residual = bool(re.search(
+            r'\b\w+\s*=\s*\[\s*\[.*?\bfor\b.*?\]\s*\bfor\b',
+            compact
+        )) or bool(re.search(r'\b\w+\s*\[\s*\w+\s*\]\s*\[\s*\w+\s*\]', body))
+        return (
+            calls_bfs_in_augment_loop and
+            has_flow_state and
+            has_reverse_update and
+            has_matrix_residual and
+            (named_like_flow or re.search(r'edmonds|karp|max.?flow', full_code, re.IGNORECASE))
+        )
+
+    def _function_special_space_complexity(self, name, body, full_code, language):
+        if self._looks_like_edmonds_karp_matrix_driver(name, body, full_code, language):
+            return 'O(V^2)'
+        if self._looks_like_residual_matrix_bfs(name, body, full_code, language):
+            return 'O(V)'
         return None
 
     def detect_dynamic_execution_complexity(self, code, language):
@@ -1309,7 +1371,10 @@ class CodeAnalyzer:
             line = self._find_function_line(code, name, language)
             snippet = self._function_snippet(code, line, language)
             space_subject = snippet or body
-            own_space = self._detect_function_space_complexity(space_subject, language) if space_subject else 'O(1)'
+            own_space = (
+                self._function_special_space_complexity(name, body, code, language) or
+                (self._detect_function_space_complexity(space_subject, language) if space_subject else 'O(1)')
+            )
             own_space_complexities[name] = own_space
             pending[name] = {
                 'function': name,
@@ -2523,6 +2588,14 @@ class CodeAnalyzer:
             }
         # Max-flow
         if re.search(r'max.?flow|ford.?fulkerson|edmonds.?karp|bfs.*flow|flow.*bfs', code, re.IGNORECASE):
+            if self._looks_like_edmonds_karp_matrix_driver('', code, code, 'python'):
+                return {
+                    'detected': True, 'algorithm': 'Max-Flow (Edmonds-Karp, adjacency matrix)',
+                    'complexity': 'O(V^3 E)', 'space': 'O(V^2)',
+                    'reason': 'O(VE) augmenting paths and each BFS scans the V by V residual-capacity matrix',
+                    'can_optimize': True, 'optimized_to': "O(V²E) with Dinic's on adjacency lists",
+                    'note': 'Use adjacency lists plus Dinic for better asymptotic behavior on sparse graphs.'
+                }
             return {
                 'detected': True, 'algorithm': 'Max-Flow (Edmonds-Karp)',
                 'complexity': 'O(V E²)', 'space': 'O(V + E)',
@@ -4559,7 +4632,7 @@ class CodeAnalyzer:
         if not isinstance(complexity, str):
             return False
         return bool(re.search(
-            r'\b(?:average|worst|best|amortized|build|query|preprocess)\b',
+            r'\b(?:average|worst|best|amortized|build|query|preprocess|V|E)\b',
             complexity,
             re.IGNORECASE
         ))
@@ -4629,12 +4702,15 @@ class CodeAnalyzer:
             'O(n² × 2^n)': ('n_exp', 2),
             'O(3ⁿ)': ('exp', 3), 'O(3^n)': ('exp', 3),
             'O((V + E) log V)': ('n_log', 1), 'O(V + E)': ('n', 1),
+            'O(V)': ('n', 1), 'O(E)': ('n', 1),
             'O(E log V)': ('n_log', 1), 'O(E log E)': ('n_log', 1),
             'O(E√V)': ('n', 2),
-            'O(V × E)': ('n', 2), 'O(V * (V + E))': ('v_times_ve', 1),
+            'O(V × E)': ('n', 2), 'O(V^2)': ('n', 2), 'O(V²)': ('n', 2),
+            'O(V * (V + E))': ('v_times_ve', 1),
             'O(V x (V + E))': ('v_times_ve', 1),
             'O(V*(V+E))': ('v_times_ve', 1),
-            'O(V E²)': ('n', 3), 'O(V³)': ('n', 3),
+            'O(V E²)': ('n', 3), 'O(V E^2)': ('n', 3), 'O(V³)': ('n', 3), 'O(V^3)': ('n', 3),
+            'O(V^3 E)': ('n', 4), 'O(V³E)': ('n', 4), 'O(V³ E)': ('n', 4),
             'O(V²E)': ('n', 3), 'O(V² log V + VE)': ('n2_log', 1),
             'O(n + k)': ('n', 1), 'O(n + m)': ('n', 1), 'O(n × m)': ('n', 2),
             'O(n + m + z)': ('n', 1),

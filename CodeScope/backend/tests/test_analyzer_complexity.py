@@ -4165,12 +4165,20 @@ def edmonds_karp(capacity, source, sink):
 
         known = self.analyzer.detect_known_algorithm(code)
         result = self.analyzer.analyze(code, "flow.py")
-        functions = [item["function"] for item in result["function_complexity_details"]]
+        details = {
+            item["function"]: item
+            for item in result["function_complexity_details"]
+        }
 
         self.assertFalse(known["detected"])
-        self.assertEqual(result["time_complexity"], "O(V E\u00b2)")
-        self.assertEqual(result["space_complexity"], "O(V + E)")
-        self.assertEqual(functions, ["bfs", "edmonds_karp"])
+        self.assertEqual(result["time_complexity"], "O(V^3 E)")
+        self.assertEqual(result["space_complexity"], "O(V^2)")
+        self.assertEqual(list(details), ["bfs", "edmonds_karp"])
+        self.assertEqual(details["bfs"]["own_complexity"], "O(V^2)")
+        self.assertEqual(details["bfs"]["effective_space_complexity"], "O(V)")
+        self.assertEqual(details["edmonds_karp"]["effective_complexity"], "O(V^3 E)")
+        self.assertEqual(details["edmonds_karp"]["effective_space_complexity"], "O(V^2)")
+        self.assertEqual(result["hotspots"][0]["function"], "edmonds_karp")
 
     def test_repeated_dfs_with_fresh_visited_repeats_graph_work(self):
         code = """def dfs(graph, node, visited):
