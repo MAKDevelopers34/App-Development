@@ -57,6 +57,11 @@ const attachSourceToPayload = (payload, code, concreteInputs) => ({
   concrete_inputs: concreteInputs,
 });
 
+const postOptimizeCode = async (payload) => {
+  const response = await api.post('/api/optimize/code', payload, { timeout: 0 });
+  return response.data;
+};
+
 export const getModifiedCode = async (code, filename = 'code.py', concreteInputs = '', options = {}) => {
   const payload = { code, filename, async: true };
 
@@ -68,18 +73,22 @@ export const getModifiedCode = async (code, filename = 'code.py', concreteInputs
     }
   }
 
-  const response = await api.post('/api/optimize/code', payload);
-  if (response.data?.job_id) {
-    const jobResult = await pollAnalysisJob(response.data.job_id, {
+  const response = await postOptimizeCode(payload);
+  if (response?.job_id) {
+    const jobResult = await pollAnalysisJob(response.job_id, {
       intervalMs: 700,
       timeoutMs: 900000,
       onProgress: (progressPayload) => {
         options.onProgress?.(attachSourceToPayload(progressPayload, code, payload.concrete_inputs));
       },
+      onMissing: async () => {
+        const directResult = await postOptimizeCode({ ...payload, async: false });
+        return attachSourceToPayload(directResult, code, payload.concrete_inputs);
+      },
     });
     return attachSourceToPayload(jobResult, code, payload.concrete_inputs);
   }
-  return attachSourceToPayload(response.data, code, payload.concrete_inputs);
+  return attachSourceToPayload(response, code, payload.concrete_inputs);
 };
 
 export const pollAnalysisJob = async (jobId, options = {}) => {
