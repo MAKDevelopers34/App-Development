@@ -235,18 +235,22 @@ const normalizeComplexity = (value = '') => String(value)
 const complexityRank = (value = '') => {
   const label = normalizeComplexity(value);
   if (!label || label.includes('unknown')) return 0;
-  if (label.includes('ackermann')) return 12;
-  if (label.includes('n!')) return 11;
-  if (label.includes('3^n')) return 10;
-  if (label.includes('2^n') || label.includes('phi')) return 9;
-  if (label.includes('n^3') || label.includes('v^3')) return 8;
-  if (label.includes('n^2log')) return 7;
-  if (label.includes('n^2') || label.includes('v*e') || label.includes('n*w')) return 6;
-  if (label.includes('nlog') || label.includes('(v+e)log') || label.includes('elog')) return 4;
-  if (label.includes('v+e') || label.includes('n+k') || label.includes('n+m') || label.includes('o(n)')) return 3;
-  if (label.includes('sqrt')) return 2;
-  if (label.includes('log')) return 1;
-  return label.includes('n') ? 3 : 0;
+  if (label.includes('ackermann') || label.includes('a(m,n)')) return 140;
+  if (label.includes('n!')) return 120;
+  if (label.includes('3^n')) return 110;
+  if (label.includes('2^n') || label.includes('phi')) return 100;
+  const powerRanks = Array.from(label.matchAll(/[nvek]\^([0-9]+(?:\.[0-9]+)?)/g))
+    .map(match => Number.parseFloat(match[1]))
+    .filter(Number.isFinite)
+    .map(power => (power * 10) + (label.includes('log') ? 1 : 0));
+  if (powerRanks.length) return Math.max(...powerRanks);
+  if (label.includes('v*(v+e)')) return 30;
+  if (label.includes('v*e') || label.includes('n*w')) return 20;
+  if (label.includes('nlog') || label.includes('n*log') || label.includes('(v+e)log') || label.includes('elog')) return 15;
+  if (label.includes('v+e') || label.includes('n+k') || label.includes('n+m') || label.includes('o(n)')) return 10;
+  if (label.includes('sqrt')) return 6;
+  if (label.includes('log')) return 3;
+  return label.includes('n') ? 10 : 0;
 };
 
 const aliasesFor = (name = '') => {
@@ -314,6 +318,9 @@ const functionRowsFor = (result) => {
       own_complexity: item.own_complexity || item.complexity || 'O(1)',
       effective_complexity: item.effective_complexity || item.complexity || item.own_complexity || 'O(1)',
       complexity: item.effective_complexity || item.complexity || item.own_complexity || 'O(1)',
+      own_space_complexity: item.own_space_complexity || item.space_complexity || 'O(1)',
+      effective_space_complexity: item.effective_space_complexity || item.space_complexity || item.own_space_complexity || 'O(1)',
+      space_complexity: item.effective_space_complexity || item.space_complexity || item.own_space_complexity || 'O(1)',
       snippet: item.snippet || '',
       calls: item.calls || [],
     }));
@@ -323,12 +330,17 @@ const functionRowsFor = (result) => {
     const explanation = explanations.find(item => namesMatch(item?.function, detail.function)) || {};
     const own = detail.own_complexity || detail.complexity || explanation.own_complexity || explanation.complexity || 'O(1)';
     const effective = detail.effective_complexity || detail.complexity || explanation.effective_complexity || explanation.complexity || own;
+    const ownSpace = detail.own_space_complexity || detail.space_complexity || explanation.own_space_complexity || explanation.space_complexity || 'O(1)';
+    const effectiveSpace = detail.effective_space_complexity || detail.space_complexity || explanation.effective_space_complexity || explanation.space_complexity || ownSpace;
     return {
       ...explanation,
       ...detail,
       own_complexity: own,
       effective_complexity: effective,
       complexity: effective,
+      own_space_complexity: ownSpace,
+      effective_space_complexity: effectiveSpace,
+      space_complexity: effectiveSpace,
       explanation: detail.reason || explanation.explanation || '',
       snippet: detail.snippet || explanation.snippet || '',
       calls: detail.calls || explanation.calls || [],
@@ -346,6 +358,9 @@ const hotspotsFor = (result, functionRows) => {
         function: fn.function,
         line: fn.line || hotspot.line || 1,
         complexity,
+        space_complexity: fn.effective_space_complexity || fn.space_complexity || hotspot.space_complexity || 'O(1)',
+        own_space_complexity: fn.own_space_complexity || hotspot.own_space_complexity || 'O(1)',
+        effective_space_complexity: fn.effective_space_complexity || fn.space_complexity || hotspot.effective_space_complexity || 'O(1)',
         reason: fn.explanation || hotspot.reason || '',
         snippet: fn.snippet || hotspot.snippet || '',
         ai_solution: hotspot.ai_solution || fn.ai_solution,
@@ -467,6 +482,7 @@ const buildRewriteStartResult = (targetResult = {}, sourceCode = '', concreteInp
     line: fn.line,
     own_complexity: fn.own_complexity || fn.complexity,
     effective_complexity: fn.effective_complexity || fn.complexity || fn.own_complexity,
+    space_complexity: fn.effective_space_complexity || fn.space_complexity || fn.own_space_complexity || 'O(1)',
   }));
   const functionCount = functions.length;
 
@@ -594,7 +610,10 @@ function HotCodeSection({ hotspots, sourceCode = '', language = '' }) {
               <div style={{ fontFamily: 'var(--font-code)', fontSize: '13px', fontWeight: '800', overflowWrap: 'anywhere' }}>
                 {hotspot.function || 'file scope'}{hotspot.function ? '()' : ''} at line {hotspot.line || 1}
               </div>
-              <ComplexityBadge complexity={hotspot.complexity || 'O(1)'} />
+              <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                <MetricBadge label="Time" value={hotspot.complexity || 'O(1)'} />
+                <MetricBadge label="Space" value={hotspot.effective_space_complexity || hotspot.space_complexity || 'O(1)'} />
+              </div>
             </div>
             {hotspot.reason && (
               <p style={{ fontSize: '13px', color: 'var(--gray)', lineHeight: '1.6', margin: '0 0 10px' }}>
@@ -672,6 +691,7 @@ function FunctionBreakdown({
             <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: fn.explanation ? '8px' : 0 }}>
               <MetricBadge label="Direct Time" value={fn.own_complexity || fn.complexity || 'O(1)'} />
               <MetricBadge label="With Calls" value={fn.effective_complexity || fn.complexity || fn.own_complexity || 'O(1)'} />
+              <MetricBadge label="Space" value={fn.effective_space_complexity || fn.space_complexity || fn.own_space_complexity || 'O(1)'} />
             </div>
             {fn.explanation && (
               <p style={{ fontSize: '13px', color: 'var(--gray)', lineHeight: '1.6', margin: 0, overflowWrap: 'anywhere' }}>
@@ -1136,6 +1156,7 @@ export default function Results() {
               ['Files', result?.total_files || files.length || 0],
               ['Lines', result?.total_lines || 0],
               ['Worst Time', projectSummary.worst_time_complexity || 'O(1)'],
+              ['Worst Space', projectSummary.worst_space_complexity || 'O(1)'],
               ['Average Rating', `${result?.average_rating || 0}/10`],
             ].map(([label, value]) => (
               <div key={label} className="project-stat">

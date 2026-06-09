@@ -21,7 +21,7 @@ from app.github_fetcher import (
     get_github_folders,
     parse_github_url_details,
 )
-from app.report_generator import generate_pdf_report
+from app.report_generator import generate_pdf_report, _complexity_rank as _report_complexity_rank
 from app.routes import (
     SUPPORTED_CODE_EXTENSIONS,
     _analyze_with_extras,
@@ -624,8 +624,29 @@ void multiErase(multiset<int>& s) {
         self.assertIn("hotspots", result)
         self.assertEqual(result["hotspots"][0]["function"], "grow")
         self.assertEqual(result["hotspots"][0]["complexity"], "O(2^n)")
+        self.assertIn("space_complexity", result["hotspots"][0])
+        self.assertEqual(result["hotspots"][0]["space_complexity"], "O(2^n)")
         self.assertEqual(result["hotspots"][0]["line"], 1)
         self.assertIn("arr.push", result["hotspots"][0]["snippet"])
+
+    def test_function_details_include_space_complexity(self):
+        code = """def build_pairs(n):
+    result = []
+    for i in range(n):
+        row = []
+        for j in range(n):
+            row.append((i, j))
+        result.append(row)
+    return result
+"""
+
+        result = self.analyzer.analyze(code, "pairs.py")
+        detail = result["function_complexity_details"][0]
+
+        self.assertEqual(detail["function"], "build_pairs")
+        self.assertEqual(detail["effective_complexity"], self.analyzer._quadratic())
+        self.assertEqual(detail["space_complexity"], self.analyzer._quadratic())
+        self.assertEqual(detail["effective_space_complexity"], self.analyzer._quadratic())
 
     def test_backtracking_pop_keeps_branching_path_space_linear(self):
         code = """function paths(n, path = []) {
@@ -1416,6 +1437,28 @@ def demo_lists():
         )
         self.assertLess(len(prompt), 8000)
 
+    def test_groq_rewrite_targets_use_explicit_time_fields(self):
+        code = """def slow(nums):
+    total = 0
+    for i in range(len(nums)):
+        for j in range(len(nums)):
+            total += nums[i] + nums[j]
+    return total
+"""
+
+        result = self.analyzer.analyze(code, "sample.py")
+        result["space_complexity"] = "O(n^3)"
+        targets = _expensive_function_targets(result)
+        target = next(item for item in targets if item["function"] == "slow")
+        prompt = _build_ai_optimization_prompt(result, code, "python", [], [target])
+
+        self.assertEqual(target["target_time_complexity"], self.analyzer._quadratic())
+        self.assertEqual(target["direct_time_complexity"], self.analyzer._quadratic())
+        self.assertNotIn("space_complexity", target)
+        self.assertIn("target_time_complexity", prompt)
+        self.assertIn("detected_file_space_complexity_for_context_only", prompt)
+        self.assertIn("not a rewrite baseline", prompt)
+
     def test_groq_hot_rewrites_are_requested_sequentially_and_keep_partial_results(self):
         code = """def has_duplicate_slow(nums):
     for i in range(len(nums)):
@@ -2107,6 +2150,59 @@ class LRUCache:
 
         self.assertEqual(merged, [])
 
+    def test_groq_discovery_uses_target_time_not_space_for_before(self):
+        original = """def has_duplicate_slow(nums):
+    for i in range(len(nums)):
+        for j in range(i + 1, len(nums)):
+            if nums[i] == nums[j]:
+                return True
+    return False
+"""
+        optimized = """def has_duplicate_slow(nums):
+    seen = set()
+    for value in nums:
+        if value in seen:
+            return True
+        seen.add(value)
+    return False
+"""
+        discovery_targets = [{
+            "target_index": 0,
+            "function": "has_duplicate_slow",
+            "own_complexity": self.analyzer._quadratic(),
+            "effective_complexity": self.analyzer._quadratic(),
+            "target_time_complexity": self.analyzer._quadratic(),
+            "space_complexity": "O(n^7)",
+            "snippet": original,
+        }]
+        ai_payload = {
+            "discovered_optimizations": [{
+                "target_index": 0,
+                "function": "has_duplicate_slow",
+                "available": True,
+                "title": "Use a set for duplicate detection",
+                "problem": "Nested comparisons repeat work.",
+                "solution": "Track seen values in a set.",
+                "complexity_before": "O(n^7)",
+                "complexity_after": "O(n)",
+                "code": optimized,
+                "notes": "Same duplicate result with linear scan.",
+            }]
+        }
+
+        merged = _merge_ai_optimization_suggestions(
+            [],
+            ai_payload,
+            language="python",
+            discovery_targets=discovery_targets,
+            original_code=original,
+            provider="groq",
+        )
+
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(merged[0]["complexity_before"], self.analyzer._quadratic())
+        self.assertEqual(merged[0]["complexity_after"], "O(n)")
+
     def test_route_hides_analyzer_fallback_optimizations_when_grok_returns_none(self):
         code = """public class Test {
     public static int tricky(int n) {
@@ -2486,6 +2582,66 @@ function b(n) {
         self.assertEqual(summary["worst_time_complexity"], "O(n²)")
         self.assertGreaterEqual(summary["confidence_counts"]["medium"], 1)
         self.assertTrue(any(item["filename"] == "slow.py" for item in summary["high_complexity_files"]))
+
+    def test_batch_summary_keeps_worst_time_separate_from_space(self):
+        result = {
+            "language": "python",
+            "time_complexity": "O(n)",
+            "space_complexity": "O(n^2)",
+            "function_complexity_details": [{
+                "function": "scan",
+                "own_complexity": "O(n)",
+                "effective_complexity": "O(n)",
+            }],
+            "analysis_confidence": {"time": "high"},
+            "hotspots": [],
+            "rating": 8,
+        }
+
+        summary = _build_batch_summary([{"filename": "memory_heavy.py", "result": result}], "github")
+
+        self.assertEqual(summary["worst_time_complexity"], "O(n)")
+        self.assertEqual(summary["worst_space_complexity"], self.analyzer._quadratic())
+
+    def test_batch_summary_uses_function_time_before_file_time_when_functions_exist(self):
+        result = {
+            "language": "python",
+            "time_complexity": "O(n^7)",
+            "space_complexity": "O(n^7)",
+            "overall_complexity": {
+                "time": "O(n^7)",
+                "space": "O(n^7)",
+                "scalable_time": "O(n^7)",
+                "scalable_space": "O(n^7)",
+            },
+            "function_complexity_details": [{
+                "function": "real_hot_function",
+                "own_complexity": "O(n^3)",
+                "effective_complexity": "O(n^3)",
+                "space_complexity": "O(n)",
+                "effective_space_complexity": "O(n)",
+            }],
+            "analysis_confidence": {"time": "high"},
+            "hotspots": [],
+            "rating": 1,
+        }
+
+        summary = _build_batch_summary([{"filename": "mixed.py", "result": result}], "github")
+
+        self.assertEqual(summary["worst_time_complexity"], self.analyzer._cubic())
+        self.assertEqual(summary["worst_space_complexity"], "O(n)")
+
+    def test_report_complexity_rank_handles_arbitrary_polynomial_powers(self):
+        self.assertGreater(_report_complexity_rank("O(n^7)"), _report_complexity_rank("O(n^3)"))
+        self.assertGreater(_report_complexity_rank("O(n^4)"), _report_complexity_rank("O(n^3 log n)"))
+
+    def test_analyzer_complexity_rank_orders_polynomial_logs_correctly(self):
+        rank_n4 = self.analyzer._complexity_rank(self.analyzer._parse_complexity_string("O(n^4)"))
+        rank_n3_log = self.analyzer._complexity_rank(self.analyzer._parse_complexity_string("O(n^3 log n)"))
+        rank_n3 = self.analyzer._complexity_rank(self.analyzer._parse_complexity_string("O(n^3)"))
+
+        self.assertGreater(rank_n4, rank_n3_log)
+        self.assertGreater(rank_n3_log, rank_n3)
 
     def test_batch_summary_builds_cross_file_project_intelligence(self):
         source_files = [

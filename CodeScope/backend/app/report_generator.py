@@ -269,6 +269,8 @@ def _add_project_overview(elements, analysis_data, report_type, styles):
     ]
     if project_summary.get('worst_time_complexity'):
         rows.append(['Worst Big O time', project_summary.get('worst_time_complexity')])
+    if project_summary.get('worst_space_complexity'):
+        rows.append(['Worst Big O space', project_summary.get('worst_space_complexity')])
     if project_summary.get('hotspot_count') is not None:
         rows.append(['Hot code sections', project_summary.get('hotspot_count')])
 
@@ -439,7 +441,9 @@ def _add_hot_code_section(elements, hotspots, styles):
     for index, hotspot in enumerate(hotspots, 1):
         heading = (
             f"{index}. {_function_label(hotspot.get('function'))} "
-            f"at line {hotspot.get('line') or 1} - {hotspot.get('complexity', 'O(1)')}"
+            f"at line {hotspot.get('line') or 1} - "
+            f"time {hotspot.get('complexity', 'O(1)')}, "
+            f"space {hotspot.get('space_complexity', 'O(1)')}"
         )
         elements.append(Paragraph(_e(heading), styles['Subsection']))
         reason = hotspot.get('reason')
@@ -458,7 +462,7 @@ def _add_function_summary_table(elements, functions, styles):
         elements.append(Paragraph('No named functions were detected. File-level complexity is shown above.', styles['Body']))
         return
 
-    rows = [['Function', 'Line', 'Direct Time', 'With Calls', 'Calls', 'Modified']]
+    rows = [['Function', 'Line', 'Direct Time', 'With Calls', 'Space', 'Calls', 'Modified']]
     for item in functions:
         calls = item.get('calls') or []
         call_count = len(calls)
@@ -467,13 +471,14 @@ def _add_function_summary_table(elements, functions, styles):
             item.get('line') or '',
             _complexity_html(item.get('own_complexity') or item.get('complexity') or 'O(1)'),
             _complexity_html(item.get('effective_complexity') or item.get('complexity') or 'O(1)'),
+            _complexity_html(item.get('effective_space_complexity') or item.get('space_complexity') or item.get('own_space_complexity') or 'O(1)'),
             call_count,
             'Yes' if item.get('ai_solutions') else 'No',
         ])
 
     elements.append(_styled_table(
         rows,
-        [1.85 * inch, 0.48 * inch, 1.05 * inch, 1.05 * inch, 0.55 * inch, 0.72 * inch],
+        [1.55 * inch, 0.42 * inch, 0.9 * inch, 0.9 * inch, 0.82 * inch, 0.45 * inch, 0.62 * inch],
         styles,
         font_size=7.2,
     ))
@@ -488,7 +493,8 @@ def _add_function_details(elements, functions, styles):
         heading = (
             f"{_function_label(item.get('function'))} - line {item.get('line') or 1} - "
             f"direct {item.get('own_complexity') or item.get('complexity') or 'O(1)'}, "
-            f"with calls {item.get('effective_complexity') or item.get('complexity') or 'O(1)'}"
+            f"with calls {item.get('effective_complexity') or item.get('complexity') or 'O(1)'}, "
+            f"space {item.get('effective_space_complexity') or item.get('space_complexity') or item.get('own_space_complexity') or 'O(1)'}"
         )
         elements.append(Paragraph(_e(heading), styles['Subsection']))
         explanation = item.get('explanation') or item.get('reason') or ''
@@ -648,6 +654,19 @@ def _function_rows_for(result):
                     item.get('own_complexity') or
                     'O(1)'
                 ),
+                'own_space_complexity': item.get('own_space_complexity') or item.get('space_complexity') or 'O(1)',
+                'effective_space_complexity': (
+                    item.get('effective_space_complexity') or
+                    item.get('space_complexity') or
+                    item.get('own_space_complexity') or
+                    'O(1)'
+                ),
+                'space_complexity': (
+                    item.get('effective_space_complexity') or
+                    item.get('space_complexity') or
+                    item.get('own_space_complexity') or
+                    'O(1)'
+                ),
                 'snippet': item.get('snippet') or '',
                 'calls': item.get('calls') or [],
             }
@@ -677,12 +696,29 @@ def _function_rows_for(result):
             explanation.get('complexity') or
             own
         )
+        own_space = (
+            detail.get('own_space_complexity') or
+            detail.get('space_complexity') or
+            explanation.get('own_space_complexity') or
+            explanation.get('space_complexity') or
+            'O(1)'
+        )
+        effective_space = (
+            detail.get('effective_space_complexity') or
+            detail.get('space_complexity') or
+            explanation.get('effective_space_complexity') or
+            explanation.get('space_complexity') or
+            own_space
+        )
         rows.append({
             **explanation,
             **detail,
             'own_complexity': own,
             'effective_complexity': effective,
             'complexity': effective,
+            'own_space_complexity': own_space,
+            'effective_space_complexity': effective_space,
+            'space_complexity': effective_space,
             'explanation': detail.get('reason') or explanation.get('explanation') or '',
             'snippet': detail.get('snippet') or explanation.get('snippet') or '',
             'calls': detail.get('calls') or explanation.get('calls') or [],
@@ -716,6 +752,12 @@ def _highest_hotspots(result, functions):
             'function': item.get('function') or hotspot.get('function'),
             'line': item.get('line') or hotspot.get('line') or 1,
             'complexity': complexity or 'O(1)',
+            'space_complexity': (
+                item.get('effective_space_complexity') or
+                item.get('space_complexity') or
+                hotspot.get('space_complexity') or
+                'O(1)'
+            ),
             'reason': item.get('explanation') or hotspot.get('reason') or '',
             'snippet': item.get('snippet') or hotspot.get('snippet') or '',
         })
@@ -726,6 +768,7 @@ def _highest_hotspots(result, functions):
                 'function': item.get('function'),
                 'line': item.get('line') or 1,
                 'complexity': item.get('complexity') or 'O(1)',
+                'space_complexity': item.get('space_complexity') or 'O(1)',
                 'reason': item.get('reason') or '',
                 'snippet': item.get('snippet') or '',
             }
@@ -1002,28 +1045,32 @@ def _complexity_rank(value):
     if not label or 'unknown' in label:
         return 0
     if 'ackermann' in label or 'a(m,n)' in label:
-        return 12
+        return 140
     if 'n!' in label:
-        return 11
+        return 120
     if '3^n' in label:
-        return 10
+        return 110
     if '2^n' in label or 'phi' in label:
-        return 9
-    if 'n^3' in label or 'v^3' in label:
-        return 8
-    if 'n^2log' in label:
-        return 7
-    if 'n^2' in label or 'v*e' in label or 'n*w' in label:
-        return 6
-    if 'nlog' in label or '(v+e)log' in label or 'elog' in label:
-        return 4
+        return 100
+    power_ranks = [
+        (float(match.group(1)) * 10) + (1 if 'log' in label else 0)
+        for match in re.finditer(r'[nvek]\^([0-9]+(?:\.[0-9]+)?)', label)
+    ]
+    if power_ranks:
+        return max(power_ranks)
+    if 'v*(v+e)' in label:
+        return 30
+    if 'v*e' in label or 'n*w' in label:
+        return 20
+    if 'nlog' in label or 'n*log' in label or '(v+e)log' in label or 'elog' in label:
+        return 15
     if 'v+e' in label or 'n+k' in label or 'n+m' in label or 'o(n)' in label:
-        return 3
+        return 10
     if 'sqrt' in label:
-        return 2
+        return 6
     if 'log' in label:
-        return 1
-    return 3 if 'n' in label else 0
+        return 3
+    return 10 if 'n' in label else 0
 
 
 def _normalize_complexity(value):

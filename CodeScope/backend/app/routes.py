@@ -353,11 +353,16 @@ def _analyzer_function_explanations(function_details):
     for detail in detail_items:
         own = detail.get('own_complexity', detail.get('complexity', 'O(1)'))
         effective = detail.get('effective_complexity', detail.get('complexity', own))
+        own_space = detail.get('own_space_complexity') or detail.get('space_complexity') or 'O(1)'
+        effective_space = detail.get('effective_space_complexity') or detail.get('space_complexity') or own_space
         explanations.append({
             'function': detail.get('function'),
             'complexity': effective,
             'own_complexity': own,
             'effective_complexity': effective,
+            'own_space_complexity': own_space,
+            'effective_space_complexity': effective_space,
+            'space_complexity': effective_space,
             'calls': detail.get('calls') or [],
             'explanation': detail.get('reason', ''),
         })
@@ -587,6 +592,98 @@ def _ai_provider_label(source):
     return 'AI'
 
 
+def _clean_complexity_values(values):
+    cleaned = []
+    for value in values:
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            cleaned.append(text)
+    return cleaned
+
+
+def _file_worst_time_complexity(result, analyzer=None):
+    analyzer = analyzer or CodeAnalyzer()
+    if not isinstance(result, dict):
+        return 'O(1)'
+
+    function_values = []
+    for detail in result.get('function_complexity_details') or []:
+        if not isinstance(detail, dict):
+            continue
+        function_values.extend([
+            detail.get('effective_complexity'),
+            detail.get('own_complexity'),
+            detail.get('complexity'),
+        ])
+
+    function_values = _clean_complexity_values(function_values)
+    if function_values:
+        return analyzer._max_complexity(function_values)
+
+    overall = result.get('overall_complexity') or {}
+    values = _clean_complexity_values([
+        result.get('time_complexity'),
+        overall.get('scalable_time'),
+        overall.get('time'),
+    ])
+    return analyzer._max_complexity(values) if values else 'O(1)'
+
+
+def _function_space_values(result):
+    values = []
+    if not isinstance(result, dict):
+        return values
+    for detail in result.get('function_complexity_details') or []:
+        if not isinstance(detail, dict):
+            continue
+        values.extend([
+            detail.get('effective_space_complexity'),
+            detail.get('space_complexity'),
+            detail.get('own_space_complexity'),
+        ])
+    return _clean_complexity_values(values)
+
+
+def _function_time_values(result):
+    values = []
+    if not isinstance(result, dict):
+        return values
+    for detail in result.get('function_complexity_details') or []:
+        if not isinstance(detail, dict):
+            continue
+        values.extend([
+            detail.get('effective_complexity'),
+            detail.get('own_complexity'),
+            detail.get('complexity'),
+        ])
+    return _clean_complexity_values(values)
+
+
+def _result_has_function_complexities(result):
+    return bool(_function_time_values(result))
+
+
+def _file_worst_space_complexity(result, analyzer=None):
+    analyzer = analyzer or CodeAnalyzer()
+    if not isinstance(result, dict):
+        return 'O(1)'
+
+    function_values = _function_space_values(result)
+    if function_values:
+        return analyzer._max_complexity(function_values)
+
+    overall = result.get('overall_complexity') or {}
+    values = _clean_complexity_values([
+        result.get('space_complexity'),
+        overall.get('scalable_space'),
+        overall.get('space'),
+    ])
+    values = _clean_complexity_values(values)
+    return analyzer._max_complexity(values) if values else 'O(1)'
+
+
 PROJECT_SKIP_CALLS = {
     'if', 'for', 'while', 'switch', 'catch', 'return', 'throw', 'new', 'delete',
     'print', 'println', 'len', 'range', 'int', 'str', 'list', 'dict', 'set',
@@ -599,12 +696,16 @@ PROJECT_SKIP_CALLS = {
 
 def _build_batch_summary(results, source='batch', source_files=None):
     analyzer = CodeAnalyzer()
-    complexities = [
-        item.get('result', {}).get('time_complexity')
+    time_complexities = [
+        _file_worst_time_complexity(item.get('result') or {}, analyzer)
         for item in results
-        if item.get('result', {}).get('time_complexity')
     ]
-    worst_time = analyzer._max_complexity(complexities) if complexities else 'O(1)'
+    space_complexities = [
+        _file_worst_space_complexity(item.get('result') or {}, analyzer)
+        for item in results
+    ]
+    worst_time = analyzer._max_complexity(time_complexities) if time_complexities else 'O(1)'
+    worst_space = analyzer._max_complexity(space_complexities) if space_complexities else 'O(1)'
     quadratic_rank = analyzer._complexity_rank(analyzer._parse_complexity_string('O(n²)'))
 
     languages = {}
@@ -630,7 +731,7 @@ def _build_batch_summary(results, source='batch', source_files=None):
                 'reason': confidence.get('reason', ''),
             })
 
-        complexity = result.get('time_complexity', 'O(1)')
+        complexity = _file_worst_time_complexity(result, analyzer)
         if 'unknown' in str(complexity).lower():
             unknown_complexity_files.append(filename)
         rank = analyzer._complexity_rank(analyzer._parse_complexity_string(complexity))
@@ -638,6 +739,7 @@ def _build_batch_summary(results, source='batch', source_files=None):
             high_complexity_files.append({
                 'filename': filename,
                 'time_complexity': complexity,
+                'space_complexity': _file_worst_space_complexity(result, analyzer),
                 'rating': result.get('rating', 0),
             })
         hotspot_count += len(result.get('hotspots') or [])
@@ -647,6 +749,7 @@ def _build_batch_summary(results, source='batch', source_files=None):
         'source': source,
         'languages': languages,
         'worst_time_complexity': worst_time,
+        'worst_space_complexity': worst_space,
         'confidence_counts': confidence_counts,
         'needs_review_files': low_confidence_files[:10],
         'unknown_complexity_files': unknown_complexity_files[:10],
@@ -786,7 +889,8 @@ def _build_project_intelligence(results, source_files, analyzer=None, source='ba
                 'classes': item['classes'][:10],
                 'inbound_count': len(inbound.get(item['filename'], set())),
                 'outbound_count': len(direct_deps.get(item['filename'], set())),
-                'worst_complexity': item['result'].get('time_complexity', 'O(1)'),
+                'worst_complexity': _file_worst_time_complexity(item['result'], analyzer),
+                'worst_space_complexity': _file_worst_space_complexity(item['result'], analyzer),
             }
             for item in files
         ][:30],
@@ -1117,7 +1221,8 @@ def _project_bottlenecks(files, inbound, analyzer):
     items = []
     for item in files:
         result = item['result']
-        file_rank = analyzer._complexity_rank(analyzer._parse_complexity_string(result.get('time_complexity', 'O(1)')))
+        file_complexity = _file_worst_time_complexity(result, analyzer)
+        file_rank = analyzer._complexity_rank(analyzer._parse_complexity_string(file_complexity))
         for detail in result.get('function_complexity_details') or []:
             complexity = detail.get('effective_complexity') or detail.get('complexity') or detail.get('own_complexity')
             rank = analyzer._complexity_rank(analyzer._parse_complexity_string(complexity or 'O(1)'))
@@ -1126,16 +1231,27 @@ def _project_bottlenecks(files, inbound, analyzer):
                     'filename': item['filename'],
                     'function': detail.get('function') or 'file scope',
                     'complexity': complexity,
+                    'space_complexity': (
+                        detail.get('effective_space_complexity') or
+                        detail.get('space_complexity') or
+                        detail.get('own_space_complexity') or
+                        'O(1)'
+                    ),
                     'called_by_count': len(inbound.get(item['filename'], set())),
                     'called_by_files': sorted(inbound.get(item['filename'], set()))[:5],
                     'reason': detail.get('reason') or result.get('time_complexity_reason', ''),
                     '_rank': rank,
                 })
-        if file_rank >= quadratic_rank and not any(entry['filename'] == item['filename'] for entry in items):
+        if (
+            file_rank >= quadratic_rank and
+            not _result_has_function_complexities(result) and
+            not any(entry['filename'] == item['filename'] for entry in items)
+        ):
             items.append({
                 'filename': item['filename'],
                 'function': 'file scope',
-                'complexity': result.get('time_complexity', 'O(1)'),
+                'complexity': file_complexity,
+                'space_complexity': _file_worst_space_complexity(result, analyzer),
                 'called_by_count': len(inbound.get(item['filename'], set())),
                 'called_by_files': sorted(inbound.get(item['filename'], set()))[:5],
                 'reason': result.get('time_complexity_reason', ''),

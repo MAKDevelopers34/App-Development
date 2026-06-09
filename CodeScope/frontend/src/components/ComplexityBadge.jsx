@@ -22,8 +22,12 @@ const classifyComplexity = (complexity = '') => {
   const worstCaseRisk = normalized.includes('average') && normalized.includes('worst');
   const hasFactorial = normalized.includes('!') || normalized.includes('factorial');
   const hasExponential = /(\^n|2\*\*n|2\^n|3\^n|phi\^n)/.test(normalized);
-  const hasCubic = /(\^3|n3|v3)/.test(normalized);
-  const hasQuadratic = /(\^2|n2|v2|n\*n|v\*e|n\*w)/.test(normalized);
+  const polynomialPowers = Array.from(normalized.matchAll(/[nv]\^([0-9]+(?:\.[0-9]+)?)/g))
+    .map(match => Number.parseFloat(match[1]))
+    .filter(Number.isFinite);
+  const maxPolynomialPower = polynomialPowers.length ? Math.max(...polynomialPowers) : 0;
+  const hasCubic = maxPolynomialPower >= 3 || /(\^3|n3|v3)/.test(normalized);
+  const hasQuadratic = (maxPolynomialPower >= 2 && maxPolynomialPower < 3) || /(\^2|n2|v2|n\*n|v\*e|n\*w)/.test(normalized);
   const hasNLogN = /(nlog|n\*log|elog|\(v\+e\)log)/.test(normalized);
   const hasLinear = /(o\(n\)|\bn\b|v\+e|n\+m|n\+k|m\+n)/.test(normalized);
   const hasLog = normalized.includes('log') || normalized.includes('sqrt');

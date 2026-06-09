@@ -620,17 +620,21 @@ def _expensive_function_targets(analysis_result):
     for detail in details:
         if not isinstance(detail, dict):
             continue
-        complexity = str(
+        effective = str(
             detail.get('effective_complexity') or detail.get('complexity') or detail.get('own_complexity') or ''
         )
-        own = str(detail.get('own_complexity') or complexity)
+        own = str(detail.get('own_complexity') or effective)
         rewrite_hint = _known_lower_complexity_rewrite_hint(detail)
         snippet = str(detail.get('snippet') or '').strip()
         target = {
             'function': detail.get('function'),
             'line': detail.get('line'),
             'own_complexity': own,
-            'effective_complexity': complexity,
+            'effective_complexity': effective,
+            'target_complexity': own,
+            'direct_time_complexity': own,
+            'with_calls_time_complexity': effective,
+            'target_time_complexity': own,
             'reason': _compact_text(detail.get('reason', ''), 180),
             'calls': _compact_calls(detail.get('calls') or []),
             'snippet': _compact_code_snippet(snippet, AI_REWRITE_SNIPPET_LIMIT),
@@ -738,6 +742,10 @@ def _compact_rewrite_target(target):
         'line': target.get('line'),
         'own_complexity': target.get('own_complexity'),
         'effective_complexity': target.get('effective_complexity'),
+        'target_complexity': target.get('target_complexity') or target.get('own_complexity'),
+        'direct_time_complexity': target.get('direct_time_complexity') or target.get('own_complexity'),
+        'with_calls_time_complexity': target.get('with_calls_time_complexity') or target.get('effective_complexity'),
+        'target_time_complexity': target.get('target_time_complexity') or target.get('target_complexity') or target.get('own_complexity'),
         'reason': _compact_text(target.get('reason', ''), 120),
         'calls': _compact_calls(target.get('calls') or []),
         'snippet': _compact_code_snippet(target.get('snippet', ''), AI_REWRITE_SNIPPET_LIMIT),
@@ -756,6 +764,10 @@ def _compact_function_fact(target):
         'line': target.get('line'),
         'own_complexity': target.get('own_complexity'),
         'effective_complexity': target.get('effective_complexity'),
+        'target_complexity': target.get('target_complexity') or target.get('own_complexity'),
+        'direct_time_complexity': target.get('direct_time_complexity') or target.get('own_complexity'),
+        'with_calls_time_complexity': target.get('with_calls_time_complexity') or target.get('effective_complexity'),
+        'target_time_complexity': target.get('target_time_complexity') or target.get('target_complexity') or target.get('own_complexity'),
         'reason': _compact_text(target.get('reason', ''), 80),
     }
     calls = _compact_calls(target.get('calls') or [])
@@ -930,8 +942,8 @@ def _build_ai_optimization_prompt(analysis_result, code, language, optimizations
     function_rewrite_targets = [_compact_rewrite_target(target) for target in discovery_targets]
     compact_facts = {
         'language': language,
-        'time_complexity': analysis_result.get('time_complexity'),
-        'space_complexity': analysis_result.get('space_complexity'),
+        'detected_file_time_complexity': analysis_result.get('time_complexity'),
+        'detected_file_space_complexity_for_context_only': analysis_result.get('space_complexity'),
         'reason': _compact_text(analysis_result.get('time_complexity_reason', ''), 220),
     }
 
@@ -955,6 +967,8 @@ Rules:
 - Return a code-specific optimized version only when you can preserve the original function/class behavior for the same valid inputs.
 - CodeScope sends functions to Groq one by one, sorted by highest complexity first, to stay inside API limits.
 - FUNCTION REWRITE TARGETS contains the exact function snippet Groq should inspect in this request.
+- direct_time_complexity, with_calls_time_complexity, target_time_complexity, own_complexity, and effective_complexity are CodeScope time-complexity values only.
+- detected_file_space_complexity_for_context_only is not a rewrite baseline. Never copy it into complexity_before and never compare a rewrite against it.
 - Return modified functions for every target in FUNCTION REWRITE TARGETS where a lower-complexity same-behavior rewrite exists.
 - Return discovered_optimizations entries only for functions where you found a lower-complexity same-behavior rewrite.
 - For each returned discovered_optimization, copy the same target_index and function exactly from FUNCTION REWRITE TARGETS.
@@ -968,7 +982,8 @@ Rules:
 - The code field must contain complete code in the same language, not pseudocode and not a comment-only strategy list.
 - Do not invent unrelated features, I/O prompts, console code, tests, or external dependencies.
 - If the candidate is "problem-dependent" and the exact behavior cannot be inferred from the code, return available=false for that candidate.
-- For independent discovery, only return a discovered optimization if you can clearly explain the original behavior and the replacement has lower Big-O than that function's effective_complexity.
+- For independent discovery, only return a discovered optimization if you can clearly explain the original behavior and the replacement has lower Big-O than that function's target_complexity/own_complexity.
+- For independent discovery, complexity_before must match the target's target_time_complexity exactly.
 - If a function is already asymptotically optimal for its required output, do not return a rewrite.
 - It is allowed to improve complexity_after when the code-specific rewrite makes the target more precise, but never change the current code's detected complexity_before.
 - Do not wrap code in markdown fences.
@@ -997,7 +1012,7 @@ Return this JSON shape:
       "title": "short code-specific title",
       "problem": "what the function currently does inefficiently",
       "solution": "what lower-complexity version changes",
-      "complexity_before": "detected current complexity",
+      "complexity_before": "detected current target_complexity",
       "complexity_after": "lower replacement complexity",
       "code": "complete optimized code",
       "notes": "why this preserves behavior"
@@ -1139,8 +1154,12 @@ def _merge_ai_optimization_suggestions(
             if not function:
                 continue
             before = str(
-                target.get('effective_complexity') or
+                target.get('target_time_complexity') or
+                target.get('direct_time_complexity') or
+                target.get('target_complexity') or
                 target.get('own_complexity') or
+                target.get('with_calls_time_complexity') or
+                target.get('effective_complexity') or
                 _ai_complexity_before(item) or ''
             )
             validation = _validate_ai_rewrite_complexity(
@@ -3015,6 +3034,8 @@ def _merge_ai_function_explanations(function_details, ai_items):
         explanation = str(ai_item.get('explanation') or '').strip()
         own = detail.get('own_complexity', detail.get('complexity', 'O(1)'))
         effective = detail.get('effective_complexity', detail.get('complexity', own))
+        own_space = detail.get('own_space_complexity') or detail.get('space_complexity') or 'O(1)'
+        effective_space = detail.get('effective_space_complexity') or detail.get('space_complexity') or own_space
         if not explanation or _function_explanation_conflicts_with_facts(explanation, detail):
             explanation = _explain_detailed_function(detail)
         merged.append({
@@ -3022,6 +3043,9 @@ def _merge_ai_function_explanations(function_details, ai_items):
             'complexity': effective,
             'own_complexity': own,
             'effective_complexity': effective,
+            'own_space_complexity': own_space,
+            'effective_space_complexity': effective_space,
+            'space_complexity': effective_space,
             'calls': detail.get('calls') or [],
             'explanation': explanation
         })
@@ -3031,7 +3055,11 @@ def _merge_ai_function_explanations(function_details, ai_items):
 def _function_explanation_conflicts_with_facts(explanation, detail):
     fake_result = {
         'time_complexity': detail.get('effective_complexity') or detail.get('complexity'),
-        'space_complexity': None,
+        'space_complexity': (
+            detail.get('effective_space_complexity') or
+            detail.get('space_complexity') or
+            detail.get('own_space_complexity')
+        ),
         'function_complexity_details': [detail],
         'optimizations': [],
     }

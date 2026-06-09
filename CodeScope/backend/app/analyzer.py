@@ -1249,11 +1249,8 @@ class CodeAnalyzer:
             target_names.discard(name)
             call_contexts[name] = self._call_loop_contexts(body, target_names, current_func=name)
 
-        effective_cache = {}
-        visiting = set()
-
         def call_cost(callee, multiplier):
-            callee_complexity = effective_for(callee)
+            callee_complexity = complexities.get(callee, 'O(1)')
             if multiplier == 'O(1)':
                 return callee_complexity
             return self._tuple_to_string(self._multiply_complexity(
@@ -1262,19 +1259,12 @@ class CodeAnalyzer:
             ))
 
         def effective_for(name):
-            if name in effective_cache:
-                return effective_cache[name]
             own = complexities.get(name, 'O(1)')
-            if name in visiting:
-                return own
-            visiting.add(name)
             combined_inputs = [own]
             for callee, multiplier in call_contexts.get(name, []):
                 if callee in complexities:
                     combined_inputs.append(call_cost(callee, multiplier))
-            visiting.discard(name)
-            effective_cache[name] = self._max_complexity(combined_inputs)
-            return effective_cache[name]
+            return self._max_complexity(combined_inputs)
 
         complexities = {
             name: effective_for(name)
@@ -1301,7 +1291,8 @@ class CodeAnalyzer:
                 complexities[name] = 'O(k³ log n)'
 
     def _build_function_complexity_details(self, code, language, own_complexities, effective_complexities):
-        details = {}
+        pending = {}
+        own_space_complexities = {}
         repeated_dfs = self._repeated_fresh_graph_search_info(code, 'dfs')
         for name in self._function_names(code, language):
             body = self._extract_function_body(code, name, language)
@@ -1316,7 +1307,11 @@ class CodeAnalyzer:
                     'complexity': 'O(V + E)',
                 }]
             line = self._find_function_line(code, name, language)
-            details[name] = {
+            snippet = self._function_snippet(code, line, language)
+            space_subject = snippet or body
+            own_space = self._detect_function_space_complexity(space_subject, language) if space_subject else 'O(1)'
+            own_space_complexities[name] = own_space
+            pending[name] = {
                 'function': name,
                 'own_complexity': own,
                 'effective_complexity': effective,
@@ -1324,9 +1319,50 @@ class CodeAnalyzer:
                 'reason': reason,
                 'calls': calls,
                 'line': line,
-                'snippet': self._function_snippet(code, line, language),
+                'snippet': snippet,
+                'own_space_complexity': own_space,
+                'space_complexity': own_space,
+            }
+
+        effective_space_cache = {}
+        visiting = set()
+
+        def effective_space_for(name):
+            if name in effective_space_cache:
+                return effective_space_cache[name]
+            own_space = own_space_complexities.get(name, 'O(1)')
+            if name in visiting:
+                return own_space
+            visiting.add(name)
+            values = [own_space]
+            for call in pending.get(name, {}).get('calls') or []:
+                callee = call.get('function')
+                if callee in pending:
+                    values.append(effective_space_for(callee))
+            visiting.discard(name)
+            effective_space_cache[name] = self._max_complexity(values)
+            return effective_space_cache[name]
+
+        details = {}
+        for name, detail in pending.items():
+            effective_space = effective_space_for(name)
+            details[name] = {
+                **detail,
+                'effective_space_complexity': effective_space,
+                'space_complexity': effective_space,
             }
         return details
+
+    def _detect_function_space_complexity(self, code, language):
+        saved_complexities = dict(getattr(self, 'last_func_complexities', {}) or {})
+        saved_own_complexities = dict(getattr(self, 'last_func_own_complexities', {}) or {})
+        saved_details = dict(getattr(self, 'last_func_complexity_details', {}) or {})
+        try:
+            return self.detect_space_complexity(code, language)
+        finally:
+            self.last_func_complexities = saved_complexities
+            self.last_func_own_complexities = saved_own_complexities
+            self.last_func_complexity_details = saved_details
 
     def _find_function_line(self, code, func_name, language):
         cache_key = (str(code or ''), str(func_name or ''), str(language or ''))
@@ -1470,6 +1506,9 @@ class CodeAnalyzer:
                 'function': detail.get('function') or 'anonymous',
                 'line': detail.get('line') or 1,
                 'complexity': complexity,
+                'space_complexity': detail.get('effective_space_complexity') or detail.get('space_complexity') or 'O(1)',
+                'own_space_complexity': detail.get('own_space_complexity') or detail.get('space_complexity') or 'O(1)',
+                'effective_space_complexity': detail.get('effective_space_complexity') or detail.get('space_complexity') or 'O(1)',
                 'reason': detail.get('reason') or 'This function dominates the detected complexity.',
                 'snippet': detail.get('snippet') or '',
                 '_rank': rank,
@@ -3875,6 +3914,7 @@ class CodeAnalyzer:
         contexts = []
         loop_stack = []
         lines = body.split('\n')
+        constant_iterables = self._constant_local_iterable_names(body)
         for index, line in enumerate(lines):
             stripped = line.strip()
             if not stripped:
@@ -3884,7 +3924,7 @@ class CodeAnalyzer:
             for name in target_names:
                 if name == current_func:
                     continue
-                if re.search(rf'\b{name}\s*\(', stripped):
+                if self._line_has_direct_function_call(stripped, name):
                     multiplier = ('const', 0)
                     for loop in loop_stack:
                         multiplier = self._multiply_complexity(multiplier, loop['complexity'])
@@ -3897,12 +3937,36 @@ class CodeAnalyzer:
                     if stripped.startswith('for')
                     else self.classify_while_loop(stripped, body_after_header, lines, 'unknown')
                 )
+                loop_complexity = self._loop_bound_complexity(stripped, loop_type)
+                iter_match = re.search(
+                    r'for\s+(?:\w+\s*,\s*)?\w+\s+in\s+([A-Za-z_]\w*)\b',
+                    stripped
+                )
+                if iter_match and iter_match.group(1) in constant_iterables:
+                    loop_complexity = ('const', 0)
                 loop_stack.append({
                     'indent': indent,
-                    'complexity': ('log', 1) if loop_type == 'logarithmic' else ('n', 1)
+                    'complexity': loop_complexity
                 })
         self._call_context_cache[cache_key] = contexts
         return contexts
+
+    def _line_has_direct_function_call(self, line, name):
+        pattern = re.compile(rf'\b{re.escape(str(name))}\s*\(')
+        for match in pattern.finditer(str(line or '')):
+            start = match.start()
+            if start > 0 and line[start - 1] == '.':
+                if start >= 3 and line[start - 3:start] == '...':
+                    return True
+                continue
+            return True
+        return False
+
+    def _constant_local_iterable_names(self, body):
+        names = set()
+        for match in re.finditer(r'(?m)^\s*([A-Za-z_]\w*)\s*=\s*([\[\(\{])', str(body or '')):
+            names.add(match.group(1))
+        return names
 
     # ─────────────────────────────────────────────
     # FUNCTION BODY EXTRACTION
@@ -4285,7 +4349,7 @@ class CodeAnalyzer:
             args = [arg.strip() for arg in range_match.group(1).split(',')]
             bound = args[0] if len(args) == 1 else args[1] if len(args) >= 2 else ''
             power = self._polynomial_bound_power(bound)
-            if power:
+            if power is not None:
                 return ('n', power)
         js_match = re.search(r'for\s*\([^;]*;([^;]*);[^)]*\)', header)
         if js_match:
@@ -4294,7 +4358,7 @@ class CodeAnalyzer:
             if control:
                 bound = self._condition_bound_expression(condition, control)
                 power = self._polynomial_bound_power(bound)
-                if power:
+                if power is not None:
                     return ('n', power)
         return ('n', 1)
 
@@ -4314,6 +4378,8 @@ class CodeAnalyzer:
         if re.fullmatch(r'\d+', expression):
             return 0
         expr = re.sub(r'\s+', '', expression)
+        if re.fullmatch(r'[A-Z_][A-Z0-9_]*', expr):
+            return 0
         exponent_match = re.fullmatch(r'\w+(?:\*\*|\^)(\d+)', expr)
         if exponent_match:
             return int(exponent_match.group(1))
@@ -4458,9 +4524,9 @@ class CodeAnalyzer:
         ranks = {
             'const': 0, 'alpha': 0.05, 'loglog': 0.5, 'log': 1,
             'log2': 2, 'log3': 2.2, 'log4': 2.3, 'logp': 2.4, 'sqrt': 2.5,
-            'n': 10, 'n_log': 20, 'n_log2': 25,
-            'n2_log': 35, 'n3_log': 45,
-            'strassen': 28, 'k3_log': 45,
+            'n': 10, 'n_log': 15, 'n_log2': 16,
+            'n2_log': 25, 'n3_log': 35,
+            'strassen': 28, 'k3_log': 35,
             'v_times_ve': 30,
             'quasi_log_fact': 90, 'quasi_poly_half': 89, 'quasi_poly': 90,
             'phi_exp': 95, 'exp': 100, 'n_exp': 105,
@@ -4634,6 +4700,8 @@ class CodeAnalyzer:
         if type_c == 'logp':
             return f'O(log^{pow_c} n)'
         if type_c == 'n':
+            if isinstance(pow_c, float) and pow_c.is_integer():
+                pow_c = int(pow_c)
             if pow_c == 1: return 'O(n)'
             if pow_c == 2: return 'O(n²)'
             if pow_c == 3: return 'O(n³)'
@@ -4650,6 +4718,8 @@ class CodeAnalyzer:
         return self._tuple_to_string(('alpha', 1))
 
     def _polynomial_complexity(self, power):
+        if isinstance(power, float) and power.is_integer():
+            power = int(power)
         if power <= 0:
             return 'O(1)'
         if power == 1:
