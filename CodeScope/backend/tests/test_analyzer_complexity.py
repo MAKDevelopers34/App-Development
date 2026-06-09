@@ -17,6 +17,7 @@ from app.ai_explainer import (
 from app.github_fetcher import (
     SUPPORTED_EXTENSIONS as GITHUB_SUPPORTED_EXTENSIONS,
     fetch_github_code,
+    get_github_file_options,
     get_github_folders,
     parse_github_url_details,
 )
@@ -165,11 +166,241 @@ def read_file(filename):
         tree = get_github_folders("https://github.com/acme/widgets")
 
         self.assertEqual(
-            [folder["path"] for folder in tree["folders"]],
+            [folder["path"] for folder in tree["directories"]],
             ["", "backend", "backend/app", "frontend", "frontend/src"],
         )
+        self.assertEqual(
+            [file["path"] for file in tree["files"]],
+            ["backend/app/routes.py", "frontend/src/App.jsx"],
+        )
+        self.assertEqual(
+            [file["label"] for file in tree["files_by_folder"]["backend"]],
+            ["app/routes.py"],
+        )
+        self.assertEqual(
+            [file["label"] for file in tree["files_by_folder"]["frontend/src"]],
+            ["App.jsx"],
+        )
+        self.assertEqual(
+            [item["type"] for item in tree["paths"]],
+            ["folder", "folder", "file", "folder", "file", "folder", "folder"],
+        )
+        self.assertEqual(tree["folders"], tree["paths"])
         self.assertEqual(tree["ref"], "main")
         self.assertEqual(tree["limits"]["max_files"], 20)
+
+    @patch("app.github_fetcher.requests.get")
+    def test_github_path_listing_reserves_slots_for_files_when_many_folders(self, mock_get):
+        mock_get.side_effect = [
+            MockGithubResponse({"default_branch": "main"}),
+            MockGithubResponse({
+                "truncated": False,
+                "tree": (
+                    [{"type": "tree", "path": f"folder_{index}"} for index in range(20)] +
+                    [
+                        {"type": "blob", "path": "src/main.py", "size": 20},
+                        {"type": "blob", "path": "src/app/routes.py", "size": 30},
+                    ]
+                ),
+            }),
+        ]
+
+        tree = get_github_folders("https://github.com/acme/widgets", max_folders=10)
+
+        self.assertTrue(any(item["type"] == "file" for item in tree["paths"]))
+        self.assertIn("src/main.py", [item["path"] for item in tree["files"]])
+
+    @patch("app.github_fetcher.requests.get")
+    def test_github_folder_listing_returns_files_for_selected_folder(self, mock_get):
+        mock_get.side_effect = [
+            MockGithubResponse({"default_branch": "main"}),
+            MockGithubResponse({
+                "truncated": False,
+                "tree": [
+                    {"type": "tree", "path": "CodeScope/backend"},
+                    {"type": "tree", "path": "CodeScope/backend/app"},
+                    {"type": "tree", "path": "CodeScope/frontend"},
+                    {"type": "blob", "path": "CodeScope/backend/app/routes.py", "size": 30},
+                    {"type": "blob", "path": "CodeScope/backend/README.md", "size": 20},
+                    {"type": "blob", "path": "CodeScope/frontend/src/App.jsx", "size": 40},
+                ],
+            }),
+            MockGithubResponse([
+                {
+                    "type": "file",
+                    "name": "routes.py",
+                    "path": "CodeScope/backend/app/routes.py",
+                    "size": 30,
+                }
+            ]),
+        ]
+
+        tree = get_github_folders(
+            "https://github.com/acme/widgets",
+            selected_path="CodeScope/backend",
+        )
+
+        self.assertEqual(
+            [file["path"] for file in tree["files"]],
+            ["CodeScope/backend/app/routes.py"],
+        )
+        self.assertEqual(tree["files"][0]["label"], "app/routes.py")
+        self.assertEqual(
+            [file["label"] for file in tree["files_by_folder"]["CodeScope/backend"]],
+            ["app/routes.py"],
+        )
+
+    @patch("app.github_fetcher.requests.get")
+    def test_github_folder_listing_returns_files_for_nested_selected_folder(self, mock_get):
+        mock_get.side_effect = [
+            MockGithubResponse({"default_branch": "main"}),
+            MockGithubResponse({
+                "truncated": False,
+                "tree": [
+                    {"type": "tree", "path": "CodeScope/backend"},
+                    {"type": "tree", "path": "CodeScope/backend/app"},
+                    {"type": "blob", "path": "CodeScope/backend/app/__init__.py", "size": 10},
+                    {"type": "blob", "path": "CodeScope/backend/app/ai_explainer.py", "size": 30},
+                    {"type": "blob", "path": "CodeScope/backend/app/github_fetcher.py", "size": 30},
+                    {"type": "blob", "path": "CodeScope/backend/app/report_generator.py", "size": 30},
+                    {"type": "blob", "path": "CodeScope/backend/app/routes.py", "size": 30},
+                    {"type": "blob", "path": "CodeScope/backend/README.md", "size": 20},
+                ],
+            }),
+            MockGithubResponse([
+                {
+                    "type": "file",
+                    "name": "__init__.py",
+                    "path": "CodeScope/backend/app/__init__.py",
+                    "size": 10,
+                },
+                {
+                    "type": "file",
+                    "name": "ai_explainer.py",
+                    "path": "CodeScope/backend/app/ai_explainer.py",
+                    "size": 30,
+                },
+                {
+                    "type": "file",
+                    "name": "github_fetcher.py",
+                    "path": "CodeScope/backend/app/github_fetcher.py",
+                    "size": 30,
+                },
+                {
+                    "type": "file",
+                    "name": "report_generator.py",
+                    "path": "CodeScope/backend/app/report_generator.py",
+                    "size": 30,
+                },
+                {
+                    "type": "file",
+                    "name": "routes.py",
+                    "path": "CodeScope/backend/app/routes.py",
+                    "size": 30,
+                },
+            ]),
+        ]
+
+        tree = get_github_folders(
+            "https://github.com/acme/widgets",
+            selected_path="CodeScope/backend/app",
+        )
+
+        self.assertEqual(
+            [file["label"] for file in tree["files"]],
+            ["__init__.py", "ai_explainer.py", "github_fetcher.py", "report_generator.py", "routes.py"],
+        )
+        self.assertEqual(
+            [file["path"] for file in tree["files_by_folder"]["CodeScope/backend/app"]],
+            [
+                "CodeScope/backend/app/__init__.py",
+                "CodeScope/backend/app/ai_explainer.py",
+                "CodeScope/backend/app/github_fetcher.py",
+                "CodeScope/backend/app/report_generator.py",
+                "CodeScope/backend/app/routes.py",
+            ],
+        )
+
+    @patch("app.github_fetcher.requests.get")
+    def test_github_file_options_returns_files_for_selected_folder(self, mock_get):
+        mock_get.side_effect = [
+            MockGithubResponse({"default_branch": "main"}),
+            MockGithubResponse([
+                {
+                    "type": "file",
+                    "name": "__init__.py",
+                    "path": "CodeScope/backend/app/__init__.py",
+                    "size": 10,
+                },
+                {
+                    "type": "file",
+                    "name": "routes.py",
+                    "path": "CodeScope/backend/app/routes.py",
+                    "size": 30,
+                },
+                {
+                    "type": "file",
+                    "name": "README.md",
+                    "path": "CodeScope/backend/app/README.md",
+                    "size": 20,
+                },
+            ]),
+        ]
+
+        result = get_github_file_options(
+            "https://github.com/acme/widgets",
+            selected_path="CodeScope/backend/app",
+        )
+
+        self.assertEqual(
+            [file["label"] for file in result["files"]],
+            ["__init__.py", "routes.py"],
+        )
+        self.assertEqual(
+            [file["path"] for file in result["files_by_folder"]["CodeScope/backend/app"]],
+            ["CodeScope/backend/app/__init__.py", "CodeScope/backend/app/routes.py"],
+        )
+
+    @patch("app.github_fetcher.requests.get")
+    def test_github_folder_listing_uses_contents_when_tree_omits_folder_files(self, mock_get):
+        mock_get.side_effect = [
+            MockGithubResponse({"default_branch": "main"}),
+            MockGithubResponse({
+                "truncated": True,
+                "tree": [
+                    {"type": "tree", "path": "CodeScope/backend"},
+                    {"type": "tree", "path": "CodeScope/backend/app"},
+                ],
+            }),
+            MockGithubResponse([
+                {
+                    "type": "file",
+                    "name": "routes.py",
+                    "path": "CodeScope/backend/app/routes.py",
+                    "size": 30,
+                },
+                {
+                    "type": "file",
+                    "name": "README.md",
+                    "path": "CodeScope/backend/README.md",
+                    "size": 20,
+                },
+            ]),
+        ]
+
+        tree = get_github_folders(
+            "https://github.com/acme/widgets",
+            selected_path="CodeScope/backend",
+        )
+
+        self.assertEqual(
+            [file["path"] for file in tree["files"]],
+            ["CodeScope/backend/app/routes.py"],
+        )
+        self.assertEqual(
+            [file["label"] for file in tree["files_by_folder"]["CodeScope/backend"]],
+            ["app/routes.py"],
+        )
 
     def test_input_schema_is_included_in_analysis_result(self):
         code = """def two_sum(nums, target):
@@ -187,7 +418,7 @@ def read_file(filename):
             for item in result["semantic_analysis"]["items"]
         ))
 
-    def test_semantic_analysis_flags_unknown_library_calls(self):
+    def test_semantic_analysis_flags_external_library_calls_with_fallback_complexity(self):
         code = """def run(data):
     return mystery_transform(data)
 """
@@ -195,9 +426,9 @@ def read_file(filename):
         result = self.analyzer.analyze(code, "unknown.py")
         semantic = result["semantic_analysis"]
 
-        self.assertEqual(result["time_complexity"], "O(unknown)")
-        self.assertEqual(semantic["confidence"], "low")
-        self.assertTrue(any(item["category"] == "libraries" and item["severity"] == "high" for item in semantic["items"]))
+        self.assertEqual(result["time_complexity"], "O(n)")
+        self.assertEqual(semantic["confidence"], "medium")
+        self.assertTrue(any(item["category"] == "libraries" and item["severity"] == "medium" for item in semantic["items"]))
         self.assertIn("mystery_transform", " ".join(str(item.get("evidence", "")) for item in semantic["items"]))
 
     def test_semantic_analysis_flags_side_effects_and_input_mutation(self):
@@ -516,15 +747,15 @@ void multiErase(multiset<int>& s) {
         self.assertEqual(result["overall_complexity"]["total_allocation"], self.analyzer._cubic())
         self.assertEqual(result["analysis_confidence"]["time"], "high")
 
-    def test_unknown_library_call_gets_low_confidence_unknown_complexity(self):
+    def test_external_library_call_gets_fallback_complexity(self):
         code = """def run(data):
     return mystery_transform(data)
 """
 
         result = self.analyzer.analyze(code, "unknown.py")
 
-        self.assertEqual(result["time_complexity"], "O(unknown)")
-        self.assertEqual(result["analysis_confidence"]["time"], "low")
+        self.assertEqual(result["time_complexity"], "O(n)")
+        self.assertEqual(result["analysis_confidence"]["time"], "medium")
 
     def test_harmonic_increment_while_loop_is_n_log_n(self):
         code = """def harmonic(n):
@@ -1233,6 +1464,7 @@ def build_string(n):
         summary = get_last_ai_rewrite_run_summary()
         self.assertEqual(summary["mode"], "sequential")
         self.assertEqual(summary["planned_count"], 2)
+        self.assertEqual(summary["total_detected_count"], 2)
         self.assertEqual(summary["checked_count"], 2)
         self.assertEqual(summary["modified_functions"], ["has_duplicate_slow"])
         self.assertIn("limit", summary["reason"])
@@ -1274,6 +1506,7 @@ def build_string(n):
         self.assertEqual([item["function"] for item in enhanced if item.get("ai_generated")], ["bubble_sort"])
         summary = get_last_ai_rewrite_run_summary()
         self.assertEqual(summary["checked_count"], 1)
+        self.assertEqual(summary["total_detected_count"], 1)
         self.assertEqual(summary["checked_functions"][0]["attempts"], 2)
         self.assertEqual(summary["modified_functions"], ["bubble_sort"])
 
@@ -1308,6 +1541,63 @@ def write_file(filename, content):
         self.assertNotIn("FILE FUNCTIONS", random_password)
         self.assertNotIn("def write_file", random_password)
 
+    def test_python_function_extraction_ignores_call_lines_with_same_name(self):
+        code = '''def wrapper(func_name, effective):
+    if effective:
+        return _explain_single_function(func_name, effective, None)
+
+def _explain_single_function(func_name, complexity, chain_info):
+    base = f"Function {func_name} has {complexity}"
+    normalized = normalize(complexity)
+    if normalized in ("O(n^2)", "O(n^3)"):
+        return base + " because it uses nested work"
+    return base
+'''
+
+        result = self.analyzer.analyze(code, "explain.py")
+        details = [
+            detail for detail in result["function_complexity_details"]
+            if detail["function"] == "_explain_single_function"
+        ]
+
+        self.assertEqual(len(details), 1)
+        self.assertEqual(details[0]["line"], 5)
+        self.assertTrue(details[0]["snippet"].startswith("def _explain_single_function"))
+        self.assertNotIn("return _explain_single_function", details[0]["snippet"])
+
+    def test_groq_targets_exclude_non_definition_function_fragments(self):
+        result = {
+            "function_complexity_details": [
+                {
+                    "function": "_explain_single_function",
+                    "line": 3,
+                    "own_complexity": "O(n^2)",
+                    "effective_complexity": "O(n^2)",
+                    "reason": "fragment",
+                    "snippet": "return _explain_single_function(func_name, effective, None)",
+                },
+                {
+                    "function": "has_duplicate_slow",
+                    "line": 5,
+                    "own_complexity": "O(n^2)",
+                    "effective_complexity": "O(n^2)",
+                    "reason": "nested loops",
+                    "snippet": (
+                        "def has_duplicate_slow(nums):\n"
+                        "    for i in range(len(nums)):\n"
+                        "        for j in range(i + 1, len(nums)):\n"
+                        "            if nums[i] == nums[j]:\n"
+                        "                return True\n"
+                        "    return False"
+                    ),
+                },
+            ]
+        }
+
+        targets = _expensive_function_targets(result)
+
+        self.assertEqual([target["function"] for target in targets], ["has_duplicate_slow"])
+
     def test_python_file_io_functions_report_payload_complexity(self):
         code = '''import os
 
@@ -1336,6 +1626,48 @@ def read_file(filename):
         self.assertEqual(details["read_file"]["effective_complexity"], "O(n)")
         self.assertIn("bytes/characters read", details["read_file"]["reason"])
         self.assertNotEqual(result["time_complexity"], "O(unknown)")
+
+    def test_python_dynamic_helpers_do_not_report_unknown_complexity(self):
+        code = '''def _load_safe_python_function(code, target):
+    namespace = {'__builtins__': {}}
+    exec(compile(code, '<codescope-semantic-probe>', 'exec'), namespace)
+    fn = namespace.get(target)
+    if not callable(fn):
+        raise ValueError(f'{target} was not callable')
+    return fn
+
+def _target_for_ai_discovery_item(item, targets, targets_by_index):
+    target = None
+    raw_index = item.get('target_index')
+    if raw_index is not None:
+        try:
+            target = targets_by_index.get(int(raw_index))
+        except (TypeError, ValueError):
+            target = None
+
+    item_function = str(item.get('function') or '')
+    if not target and len(targets) == 1:
+        only_target = next(iter(targets.values()))
+        only_function = str(only_target.get('function') or '')
+        if not item_function or item_function == only_function:
+            return only_target
+    return target
+'''
+
+        result = self.analyzer.analyze(code, "helpers.py")
+        details = {
+            detail["function"]: detail
+            for detail in result["function_complexity_details"]
+        }
+
+        self.assertEqual(details["_load_safe_python_function"]["own_complexity"], "O(n)")
+        self.assertEqual(details["_target_for_ai_discovery_item"]["own_complexity"], "O(1)")
+        self.assertEqual([
+            detail["function"]
+            for detail in result["function_complexity_details"]
+            if "unknown" in detail["own_complexity"].lower()
+            or "unknown" in detail["effective_complexity"].lower()
+        ], [])
 
     def test_python_file_level_space_uses_highest_detected_function_space(self):
         code = '''import math

@@ -1,7 +1,16 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDropzone } from 'react-dropzone';
-import { analyzeCode, analyzeZip, analyzeGithub, fetchGithubFolders, inferInputs, getApiErrorMessage } from '../services/api';
+import {
+  analyzeCode,
+  analyzeZip,
+  analyzeGithub,
+  fetchGithubFiles,
+  fetchGithubFolderFilesPublic,
+  fetchGithubFolders,
+  inferInputs,
+  getApiErrorMessage
+} from '../services/api';
 
 const splitParams = (raw = '') => {
   const params = [];
@@ -137,6 +146,73 @@ const buildConcreteInputPayload = (schema, values, fallbackText) => {
   return fallbackText;
 };
 
+const githubPathCounts = (items = []) => ({
+  folders: items.filter(item => item?.type !== 'file').length,
+  files: items.filter(item => item?.type === 'file').length,
+});
+
+const ALL_GITHUB_FILES = '__ALL_FILES_IN_FOLDER__';
+
+const normalizeRepoPath = (path = '') => String(path || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+
+const filesForGithubFolder = (files = [], folderPath = '') => {
+  const folder = normalizeRepoPath(folderPath);
+  const prefix = folder ? `${folder}/` : '';
+  return files.filter(file => {
+    const path = normalizeRepoPath(file?.path);
+    if (!path) return false;
+    return folder ? path.startsWith(prefix) : true;
+  }).map(file => ({
+    ...file,
+    label: folder && normalizeRepoPath(file.path).startsWith(prefix)
+      ? normalizeRepoPath(file.path).slice(prefix.length)
+      : file.label || file.path,
+  }));
+};
+
+const mergeGithubFiles = (current = [], incoming = []) => {
+  const byPath = new Map();
+  current.forEach(file => {
+    const path = normalizeRepoPath(file?.path);
+    if (path) byPath.set(path, { ...file, path });
+  });
+  incoming.forEach(file => {
+    const path = normalizeRepoPath(file?.path);
+    if (path) byPath.set(path, { ...file, path });
+  });
+  return Array.from(byPath.values()).sort((a, b) => a.path.localeCompare(b.path));
+};
+
+const normalizeGithubFileMap = (raw = {}) => Object.entries(raw || {}).reduce((acc, [folder, files]) => {
+  const key = normalizeRepoPath(folder);
+  acc[key] = Array.isArray(files) ? files : [];
+  return acc;
+}, {});
+
+const firstNonEmptyFileList = (...lists) => {
+  for (const list of lists) {
+    if (Array.isArray(list) && list.length > 0) return list;
+  }
+  return [];
+};
+
+const githubFilesFromResponse = (response = {}, folderPath = '') => {
+  const folderKey = normalizeRepoPath(folderPath || response?.selected_path || '');
+  const filesByFolder = normalizeGithubFileMap(response?.files_by_folder);
+  const responseFiles = Array.isArray(response?.files) ? response.files : [];
+  const mappedFiles = filesByFolder[folderKey] || [];
+  const pathFiles = Array.isArray(response?.paths)
+    ? filesForGithubFolder(response.paths.filter(item => item?.type === 'file'), folderKey)
+    : [];
+
+  return firstNonEmptyFileList(
+    filesForGithubFolder(responseFiles, folderKey),
+    mappedFiles,
+    pathFiles,
+    responseFiles
+  );
+};
+
 export default function Analyze() {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState('code');
@@ -146,24 +222,94 @@ export default function Analyze() {
   const [inputValues, setInputValues] = useState({});
   const [githubUrl, setGithubUrl] = useState('');
   const [githubFolders, setGithubFolders] = useState([]);
+  const [githubFiles, setGithubFiles] = useState([]);
   const [githubFolderPath, setGithubFolderPath] = useState('');
+  const [githubFilePath, setGithubFilePath] = useState(ALL_GITHUB_FILES);
   const [githubBranch, setGithubBranch] = useState('');
   const [githubTreeLoading, setGithubTreeLoading] = useState(false);
+  const [githubFilesLoading, setGithubFilesLoading] = useState(false);
   const [githubTreeError, setGithubTreeError] = useState('');
   const [zipFile, setZipFile] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [backendInputSchema, setBackendInputSchema] = useState(null);
   const [schemaLoading, setSchemaLoading] = useState(false);
+  const githubAllFilesRef = useRef([]);
+  const githubFilesByFolderRef = useRef({});
+  const githubFileRequestIdRef = useRef(0);
   const localInputSchema = useMemo(() => inferInputSchema(code, filename), [code, filename]);
   const inputSchema = backendInputSchema || localInputSchema;
 
   const resetGithubTreeState = () => {
+    githubFileRequestIdRef.current += 1;
     setGithubFolders([]);
+    githubAllFilesRef.current = [];
+    githubFilesByFolderRef.current = {};
+    setGithubFiles([]);
     setGithubFolderPath('');
+    setGithubFilePath(ALL_GITHUB_FILES);
     setGithubBranch('');
     setGithubTreeLoading(false);
+    setGithubFilesLoading(false);
     setGithubTreeError('');
+  };
+
+  const loadGithubFilesForFolder = async (folderPath, branchOverride = githubBranch) => {
+    const trimmed = githubUrl.trim();
+    const folderKey = normalizeRepoPath(folderPath);
+    const cachedFiles = firstNonEmptyFileList(
+      githubFilesByFolderRef.current[folderKey] ||
+      [],
+      filesForGithubFolder(githubAllFilesRef.current, folderPath)
+    );
+    const requestId = githubFileRequestIdRef.current + 1;
+    githubFileRequestIdRef.current = requestId;
+
+    setGithubFolderPath(folderPath);
+    setGithubFiles(cachedFiles);
+    setGithubFilePath(ALL_GITHUB_FILES);
+
+    if (!trimmed) return;
+
+    setGithubFilesLoading(true);
+    setGithubTreeError('');
+
+    try {
+      const response = await fetchGithubFiles(trimmed, folderPath, branchOverride);
+      if (githubFileRequestIdRef.current !== requestId) return;
+
+      const files = githubFilesFromResponse(response, folderPath);
+      const filesByFolder = normalizeGithubFileMap(response?.files_by_folder);
+      let selectedFiles = firstNonEmptyFileList(files, cachedFiles);
+
+      if (selectedFiles.length === 0) {
+        const publicFiles = await fetchGithubFolderFilesPublic(
+          trimmed,
+          folderPath,
+          response?.ref || branchOverride || githubBranch
+        );
+        if (githubFileRequestIdRef.current !== requestId) return;
+        selectedFiles = publicFiles;
+      }
+
+      const mergedAllFiles = mergeGithubFiles(githubAllFilesRef.current, files);
+
+      githubAllFilesRef.current = mergeGithubFiles(mergedAllFiles, selectedFiles);
+      githubFilesByFolderRef.current = {
+        ...githubFilesByFolderRef.current,
+        ...filesByFolder,
+        [folderKey]: selectedFiles,
+      };
+      setGithubFiles(selectedFiles);
+    } catch (err) {
+      if (githubFileRequestIdRef.current !== requestId) return;
+      setGithubFiles(cachedFiles);
+      setGithubTreeError(getApiErrorMessage(err, 'Could not load files for the selected folder.'));
+    } finally {
+      if (githubFileRequestIdRef.current === requestId) {
+        setGithubFilesLoading(false);
+      }
+    }
   };
 
   useEffect(() => {
@@ -203,19 +349,42 @@ export default function Analyze() {
     let active = true;
     const timer = window.setTimeout(async () => {
       setGithubTreeLoading(true);
+      setGithubFilesLoading(false);
       setGithubTreeError('');
       try {
         const response = await fetchGithubFolders(trimmed);
         if (!active) return;
-        const folders = Array.isArray(response?.folders) ? response.folders : [];
+        const folders = Array.isArray(response?.directories)
+          ? response.directories
+          : Array.isArray(response?.folders)
+            ? response.folders.filter(item => item?.type !== 'file')
+            : [];
+        let files = githubFilesFromResponse(response, response?.selected_path || '');
+        const selectedFolder = response?.selected_path || folders[0]?.path || '';
+        const filesByFolder = normalizeGithubFileMap(response?.files_by_folder);
+        const selectedFolderKey = normalizeRepoPath(selectedFolder);
+        const mappedSelectedFiles = filesByFolder[selectedFolderKey];
+        let selectedFiles = firstNonEmptyFileList(
+          mappedSelectedFiles,
+          filesForGithubFolder(files, selectedFolder)
+        );
         setGithubFolders(folders);
-        setGithubFolderPath(response?.selected_path || folders[0]?.path || '');
+        githubAllFilesRef.current = files;
+        githubFilesByFolderRef.current = filesByFolder;
+        setGithubFiles(selectedFiles);
+        setGithubFolderPath(selectedFolder);
+        setGithubFilePath(ALL_GITHUB_FILES);
         setGithubBranch(response?.ref || '');
       } catch (err) {
         if (!active) return;
         setGithubFolders([]);
+        githubAllFilesRef.current = [];
+        githubFilesByFolderRef.current = {};
+        setGithubFiles([]);
         setGithubFolderPath('');
+        setGithubFilePath(ALL_GITHUB_FILES);
         setGithubBranch('');
+        setGithubFilesLoading(false);
         setGithubTreeError(getApiErrorMessage(err, 'Could not load repository folders.'));
       } finally {
         if (active) setGithubTreeLoading(false);
@@ -289,7 +458,7 @@ export default function Analyze() {
           setLoading(false);
           return;
         }
-        result = await analyzeGithub(githubUrl, githubFolderPath, githubBranch);
+        result = await analyzeGithub(githubUrl, selectedGithubPath, githubBranch);
         navigate('/results', { state: { result, type: 'github' } });
       }
 
@@ -325,6 +494,12 @@ export default function Analyze() {
   const schemaState = activeTab === 'code'
     ? (schemaLoading ? 'Checking input schema' : inputSchema.available ? `Inputs detected for ${inputSchema.function}()` : 'No required input schema')
     : 'Concrete inputs are only used for pasted code';
+  const githubCounts = {
+    folders: githubPathCounts(githubFolders).folders,
+    files: githubFiles.length,
+  };
+  const githubFilesInSelectedFolder = githubFiles;
+  const selectedGithubPath = githubFilePath === ALL_GITHUB_FILES ? githubFolderPath : githubFilePath;
 
   return (
     <div className="page-shell analyze-page">
@@ -536,36 +711,120 @@ export default function Analyze() {
                 <div style={{ marginTop: '14px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'center', marginBottom: '6px', flexWrap: 'wrap' }}>
                     <label style={{ fontSize: '13px', fontWeight: '500', color: 'var(--dark)' }}>
-                      Folder to analyze
+                      Repository folder or file to analyze
                     </label>
-                    {githubBranch && (
-                      <span style={{ fontSize: '12px', color: 'var(--gray)', fontFamily: 'var(--font-code)' }}>
-                        branch: {githubBranch}
-                      </span>
-                    )}
+                    <span style={{ fontSize: '12px', color: 'var(--gray)', fontFamily: 'var(--font-code)' }}>
+                      {githubBranch ? `branch: ${githubBranch}` : 'repository paths'}
+                      {` | ${githubCounts.folders} folders, ${githubCounts.files} files`}
+                    </span>
                   </div>
-                  <select
-                    value={githubFolderPath}
-                    onChange={e => setGithubFolderPath(e.target.value)}
-                    disabled={githubTreeLoading || githubFolders.length === 0}
-                    style={{
-                      width: '100%',
-                      padding: '12px 14px',
-                      border: '1.5px solid var(--border)',
-                      borderRadius: '8px',
-                      background: 'white',
-                      color: 'var(--dark)',
-                      fontFamily: 'var(--font-code)',
-                      fontSize: '13px',
-                    }}
-                  >
-                    {githubTreeLoading && <option value="">Loading folders...</option>}
-                    {!githubTreeLoading && githubFolders.map(folder => (
-                      <option key={folder.path || 'root'} value={folder.path}>
-                        {folder.label || folder.path || 'Repository root'}
-                      </option>
-                    ))}
-                  </select>
+                  <div style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+                    gap: '12px',
+                  }}>
+                    <div>
+                      <label style={{ fontSize: '12px', fontWeight: '700', color: 'var(--gray)', display: 'block', marginBottom: '5px' }}>
+                        Folder
+                      </label>
+                      <select
+                        value={githubFolderPath}
+                        onChange={e => {
+                          const nextFolder = e.target.value;
+                          void loadGithubFilesForFolder(nextFolder);
+                        }}
+                        disabled={githubTreeLoading || githubFolders.length === 0}
+                        style={{
+                          width: '100%',
+                          padding: '12px 14px',
+                          border: '1.5px solid var(--border)',
+                          borderRadius: '8px',
+                          background: 'white',
+                          color: 'var(--dark)',
+                          fontFamily: 'var(--font-code)',
+                          fontSize: '13px',
+                        }}
+                      >
+                        {githubTreeLoading && <option value="">Loading folders...</option>}
+                        {!githubTreeLoading && githubFolders.map(item => (
+                          <option key={`${item.type || 'folder'}:${item.path || 'root'}`} value={item.path}>
+                            {item.label || item.path || 'Repository root'}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label style={{ fontSize: '12px', fontWeight: '700', color: 'var(--gray)', display: 'block', marginBottom: '5px' }}>
+                        File
+                      </label>
+                      <select
+                        value={githubFilePath}
+                        onChange={e => setGithubFilePath(e.target.value)}
+                        disabled={githubTreeLoading || githubFolders.length === 0}
+                        style={{
+                          width: '100%',
+                          padding: '12px 14px',
+                          border: '1.5px solid var(--border)',
+                          borderRadius: '8px',
+                          background: 'white',
+                          color: 'var(--dark)',
+                          fontFamily: 'var(--font-code)',
+                          fontSize: '13px',
+                        }}
+                      >
+                        <option value={ALL_GITHUB_FILES}>
+                          {githubFilesLoading ? 'All files in this folder (refreshing...)' : 'All files in this folder'}
+                        </option>
+                        {githubFilesInSelectedFolder.map(file => (
+                          <option key={`file:${file.path}`} value={file.path}>
+                            {file.label || file.path}
+                          </option>
+                        ))}
+                        {!githubFilesLoading && githubFilesInSelectedFolder.length === 0 && (
+                          <option value="" disabled>No supported files found in this folder</option>
+                        )}
+                      </select>
+                      {githubFilesInSelectedFolder.length > 0 && (
+                        <div style={{
+                          marginTop: '8px',
+                          border: '1px solid var(--border)',
+                          borderRadius: '8px',
+                          maxHeight: '160px',
+                          overflowY: 'auto',
+                          background: 'var(--light-gray)',
+                          padding: '6px',
+                        }}>
+                          {githubFilesInSelectedFolder.map(file => {
+                            const isSelected = githubFilePath === file.path;
+                            return (
+                              <button
+                                key={`file-button:${file.path}`}
+                                type="button"
+                                onClick={() => setGithubFilePath(file.path)}
+                                style={{
+                                  width: '100%',
+                                  display: 'block',
+                                  textAlign: 'left',
+                                  border: 'none',
+                                  borderRadius: '6px',
+                                  padding: '7px 9px',
+                                  marginBottom: '2px',
+                                  cursor: 'pointer',
+                                  background: isSelected ? 'var(--primary-light)' : 'transparent',
+                                  color: isSelected ? 'var(--primary)' : 'var(--dark)',
+                                  fontFamily: 'var(--font-code)',
+                                  fontSize: '12px',
+                                  fontWeight: isSelected ? '700' : '500',
+                                }}
+                              >
+                                {file.label || file.path}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </div>
                   {githubTreeError && (
                     <div style={{ color: '#b42318', fontSize: '12px', marginTop: '6px' }}>
                       {githubTreeError}
@@ -574,7 +833,7 @@ export default function Analyze() {
                 </div>
               )}
               <p style={{ fontSize: '12px', color: 'var(--gray)' }}>
-                CodeScope fetches public repositories and analyzes up to 20 code files from the selected folder.
+                CodeScope can analyze the whole selected folder or one selected file from a public repository.
               </p>
             </div>
           )}

@@ -94,7 +94,7 @@ class CallGraphAnalyzer:
             chained = func_complexities.get(func, own)
             if chained != own:
                 call_summaries = [
-                    f"{called}() at {func_complexities.get(called, own_complexities.get(called, 'O(unknown)'))}"
+                    f"{called}() at {func_complexities.get(called, own_complexities.get(called, 'O(1)'))}"
                     for called in sorted(calls)
                     if called in func_complexities or called in own_complexities
                 ]
@@ -240,6 +240,15 @@ class CodeAnalyzer:
         self.last_func_complexities = {}
         self.last_func_own_complexities = {}
         self.last_func_complexity_details = {}
+        self._python_function_cache = {}
+        self._python_function_node_cache = {}
+        self._function_body_cache = {}
+        self._function_line_cache = {}
+        self._function_snippet_cache = {}
+        self._call_context_cache = {}
+        self._repeated_fresh_search_cache = {}
+        self._function_special_cache = {}
+        self._compact_ws_cache = {}
 
     def _function_def_regex(self):
         return (
@@ -253,6 +262,15 @@ class CodeAnalyzer:
         )
 
     def _function_names(self, code, language=None):
+        if language == 'python':
+            names = []
+            seen = set()
+            for node in self._python_function_nodes(code):
+                if node.name not in seen:
+                    seen.add(node.name)
+                    names.append(node.name)
+            return names
+
         names = []
         seen = set()
         for match in re.finditer(self._function_def_regex(), code):
@@ -263,6 +281,64 @@ class CodeAnalyzer:
                 seen.add(name)
                 names.append(name)
         return names
+
+    def _python_function_nodes(self, code):
+        text = str(code or '')
+        if text in self._python_function_cache:
+            return self._python_function_cache[text]
+
+        try:
+            tree = ast.parse(text)
+        except SyntaxError:
+            self._python_function_cache[text] = []
+            return []
+        nodes = [
+            node for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        ]
+        self._python_function_cache[text] = sorted(
+            nodes,
+            key=lambda node: (getattr(node, 'lineno', 0), getattr(node, 'col_offset', 0))
+        )
+        return self._python_function_cache[text]
+
+    def _python_function_node(self, code, func_name, line=None):
+        cache_key = (str(code or ''), str(func_name or ''), int(line or 0))
+        if cache_key in self._python_function_node_cache:
+            return self._python_function_node_cache[cache_key]
+
+        candidates = [
+            node for node in self._python_function_nodes(code)
+            if node.name == func_name
+        ]
+        if not candidates:
+            self._python_function_node_cache[cache_key] = None
+            return None
+        if line:
+            for node in candidates:
+                if getattr(node, 'lineno', 0) == line:
+                    self._python_function_node_cache[cache_key] = node
+                    return node
+        self._python_function_node_cache[cache_key] = candidates[0]
+        return candidates[0]
+
+    def _python_function_source(self, code, node, include_header=True):
+        if not node:
+            return ''
+        lines = str(code or '').split('\n')
+        start_line = max(1, getattr(node, 'lineno', 1))
+        end_line = max(start_line, getattr(node, 'end_lineno', start_line))
+        if include_header:
+            return '\n'.join(lines[start_line - 1:end_line]).strip()
+
+        if not getattr(node, 'body', None):
+            return ''
+        body_start = max(1, getattr(node.body[0], 'lineno', start_line))
+        if body_start == start_line:
+            header_line = lines[start_line - 1] if start_line - 1 < len(lines) else ''
+            colon_index = header_line.find(':')
+            return header_line[colon_index + 1:].strip() if colon_index >= 0 else ''
+        return '\n'.join(lines[body_start - 1:end_line]).strip()
 
     def _class_names(self, code, language=None):
         patterns = []
@@ -290,6 +366,12 @@ class CodeAnalyzer:
             '""',
             str(code or ''),
         )
+
+    def _compact_ws(self, code):
+        text = str(code or '')
+        if text not in self._compact_ws_cache:
+            self._compact_ws_cache[text] = re.sub(r'\s+', ' ', text)
+        return self._compact_ws_cache[text]
 
     def _has_explicit_loop_statement(self, code):
         return any(re.match(r'\s*(?:for|while)\b', line) for line in str(code or '').splitlines())
@@ -383,6 +465,13 @@ class CodeAnalyzer:
         return 'unknown'
 
     def analyze(self, code, filename=None, concrete_inputs=None):
+        self._function_body_cache = {}
+        self._function_line_cache = {}
+        self._function_snippet_cache = {}
+        self._call_context_cache = {}
+        self._repeated_fresh_search_cache = {}
+        self._function_special_cache = {}
+        self._compact_ws_cache = {}
         language = self.detect_language(code, filename)
         input_schema = self.infer_input_schema(code, language)
         self.last_func_complexities = self._extract_all_function_complexities(code, language)
@@ -931,6 +1020,15 @@ class CodeAnalyzer:
     # ─────────────────────────────────────────────
 
     def _function_special_time_result(self, name, body, full_code, language):
+        cache_key = (str(name or ''), str(body or ''), str(full_code or ''), str(language or ''))
+        if cache_key in self._function_special_cache:
+            return self._function_special_cache[cache_key]
+
+        result = self._function_special_time_result_uncached(name, body, full_code, language)
+        self._function_special_cache[cache_key] = result
+        return result
+
+    def _function_special_time_result_uncached(self, name, body, full_code, language):
         if self._looks_like_union_find(full_code) and name in ('find', 'union'):
             return {'complexity': self._alpha(), 'reason': 'path compression and union by rank'}
         if re.search(r'parent\s*\[[^\]]+\]\s*=\s*find\s*\(\s*parent\s*\[', body):
@@ -945,6 +1043,9 @@ class CodeAnalyzer:
                 'complexity': 'O(1)',
                 'reason': 'OrderedDict recency operations use hash-table lookup plus linked-order updates'
             }
+        dynamic_execution = self.detect_dynamic_execution_complexity(body, language)
+        if dynamic_execution.get('detected'):
+            return dynamic_execution
         file_io = self.detect_file_io_complexity(body, language)
         if file_io.get('detected'):
             return file_io
@@ -991,6 +1092,7 @@ class CodeAnalyzer:
             self.detect_ordered_map_access,
             self.detect_ordered_tree_drain,
             self.detect_hash_table_access,
+            self.detect_dynamic_execution_complexity,
             self.detect_binary_search_pattern,
             self.detect_sqrt_iteration_complexity,
             self.detect_priority_queue_operations,
@@ -1011,10 +1113,23 @@ class CodeAnalyzer:
                 return detected
         return None
 
+    def detect_dynamic_execution_complexity(self, code, language):
+        if language != 'python':
+            return {'detected': False}
+        compact = self._compact_ws(code)
+        if not re.search(r'\b(?:compile|eval|exec)\s*\(', compact):
+            return {'detected': False}
+        return {
+            'detected': True,
+            'complexity': 'O(n)',
+            'space': 'O(n)' if re.search(r'\bcompile\s*\(', compact) else 'O(1)',
+            'reason': 'Dynamic code compilation/execution scans the supplied source string; n is the source/input size.',
+        }
+
     def detect_sqrt_iteration_complexity(self, code, language):
         if language != 'python':
             return {'detected': False}
-        compact = re.sub(r'\s+', ' ', str(code or ''))
+        compact = self._compact_ws(code)
         if re.search(r'\brange\s*\([^)]*(?:math\.)?sqrt\s*\(', compact):
             return {
                 'detected': True,
@@ -1025,7 +1140,7 @@ class CodeAnalyzer:
         return {'detected': False}
 
     def detect_file_io_complexity(self, code, language):
-        compact = re.sub(r'\s+', ' ', str(code or ''))
+        compact = self._compact_ws(code)
         if not compact:
             return {'detected': False}
 
@@ -1122,21 +1237,50 @@ class CodeAnalyzer:
         complexities = self._extract_function_own_complexities(code, language)
         self.last_func_own_complexities = dict(complexities)
 
-        for _ in range(max(1, len(complexities))):
-            changed = False
-            for name in func_names:
-                body = self._extract_function_body(code, name, language)
-                if not body:
-                    continue
-                call_complexities = self._called_function_complexities(body, complexities, current_func=name)
-                if not call_complexities:
-                    continue
-                combined = self._max_complexity([complexities.get(name, 'O(1)')] + call_complexities)
-                if combined != complexities.get(name):
-                    complexities[name] = combined
-                    changed = True
-            if not changed:
-                break
+        known_functions = set(complexities)
+        bodies = {
+            name: self._extract_function_body(code, name, language)
+            for name in func_names
+            if name in known_functions
+        }
+        call_contexts = {}
+        for name, body in bodies.items():
+            target_names = set(known_functions)
+            target_names.discard(name)
+            call_contexts[name] = self._call_loop_contexts(body, target_names, current_func=name)
+
+        effective_cache = {}
+        visiting = set()
+
+        def call_cost(callee, multiplier):
+            callee_complexity = effective_for(callee)
+            if multiplier == 'O(1)':
+                return callee_complexity
+            return self._tuple_to_string(self._multiply_complexity(
+                self._parse_complexity_string(multiplier),
+                self._parse_complexity_string(callee_complexity)
+            ))
+
+        def effective_for(name):
+            if name in effective_cache:
+                return effective_cache[name]
+            own = complexities.get(name, 'O(1)')
+            if name in visiting:
+                return own
+            visiting.add(name)
+            combined_inputs = [own]
+            for callee, multiplier in call_contexts.get(name, []):
+                if callee in complexities:
+                    combined_inputs.append(call_cost(callee, multiplier))
+            visiting.discard(name)
+            effective_cache[name] = self._max_complexity(combined_inputs)
+            return effective_cache[name]
+
+        complexities = {
+            name: effective_for(name)
+            for name in func_names
+            if name in complexities
+        }
 
         self._apply_function_effective_overrides(code, language, complexities)
         return complexities
@@ -1185,24 +1329,58 @@ class CodeAnalyzer:
         return details
 
     def _find_function_line(self, code, func_name, language):
+        cache_key = (str(code or ''), str(func_name or ''), str(language or ''))
+        if cache_key in self._function_line_cache:
+            return self._function_line_cache[cache_key]
+
+        line_number = 1
+        if language == 'python':
+            node = self._python_function_node(code, func_name)
+            if node:
+                line_number = getattr(node, 'lineno', 1)
+                self._function_line_cache[cache_key] = line_number
+                return line_number
+
         for line_number, line in enumerate(code.splitlines(), 1):
             for match in re.finditer(self._function_def_regex(), line):
                 if match.group(1) == func_name:
+                    self._function_line_cache[cache_key] = line_number
                     return line_number
             if self._is_javascript_like(language) and re.search(
                 rf'\b(?:const|let|var)\s+{re.escape(func_name)}\s*=',
                 line
             ):
+                self._function_line_cache[cache_key] = line_number
                 return line_number
+        self._function_line_cache[cache_key] = 1
         return 1
 
     def _function_snippet(self, code, start_line, language=None, max_lines=None):
+        cache_key = (str(code or ''), int(start_line or 1), str(language or ''), max_lines)
+        if cache_key in self._function_snippet_cache:
+            return self._function_snippet_cache[cache_key]
+
+        snippet = ''
+        if language == 'python':
+            for node in self._python_function_nodes(code):
+                if getattr(node, 'lineno', 0) == start_line:
+                    snippet = self._python_function_source(code, node, include_header=True)
+                    if snippet:
+                        if max_lines is None:
+                            self._function_snippet_cache[cache_key] = snippet
+                            return snippet
+                        snippet = '\n'.join(snippet.splitlines()[:max_lines]).strip()
+                        self._function_snippet_cache[cache_key] = snippet
+                        return snippet
+
         lines = code.splitlines()
         if not lines:
             return ''
         start = max(0, (start_line or 1) - 1)
         end = self._function_snippet_end(lines, start, language, max_lines)
-        return '\n'.join(lines[start:end]).strip()
+        snippet = '\n'.join(lines[start:end]).strip()
+        self._function_snippet_cache[cache_key] = snippet
+        return snippet
 
     def _function_snippet_end(self, lines, start, language=None, max_lines=None):
         hard_end = len(lines) if max_lines is None else min(len(lines), start + max_lines)
@@ -1286,7 +1464,7 @@ class CodeAnalyzer:
         for detail in detail_items:
             complexity = detail.get('effective_complexity') or detail.get('complexity') or 'O(1)'
             rank = self._complexity_rank(self._parse_complexity_string(complexity))
-            if complexity != 'O(unknown)' and rank <= linear_rank:
+            if 'unknown' not in str(complexity).lower() and rank <= linear_rank:
                 continue
             hotspots.append({
                 'function': detail.get('function') or 'anonymous',
@@ -3367,7 +3545,7 @@ class CodeAnalyzer:
         return has_mono_name or (has_stack_ops and has_mono_comparison)
 
     def _looks_like_dynamic_array_doubling(self, code):
-        compact = re.sub(r'\s+', ' ', code)
+        compact = self._compact_ws(code)
         has_capacity = bool(re.search(r'\bcapacity\b', code, re.IGNORECASE))
         doubles_capacity = bool(re.search(
             r'\bcapacity\s*\*=\s*2\b|\bcapacity\s*=\s*capacity\s*\*\s*2\b|'
@@ -3412,7 +3590,7 @@ class CodeAnalyzer:
         return matrix_hint or helper_complexity in ('O(n³)', 'O(n^3)', 'O(k³)')
 
     def _looks_like_naive_matrix_multiplication(self, code):
-        compact = re.sub(r'\s+', ' ', code)
+        compact = self._compact_ws(code)
         loop_count = len(re.findall(r'\b(?:for|while)\b', code))
         has_2d_product = bool(re.search(
             r'\[[^\]]+\]\s*\[[^\]]+\].*\*.*\[[^\]]+\]\s*\[[^\]]+\]',
@@ -3429,16 +3607,23 @@ class CodeAnalyzer:
         return bool(self._repeated_fresh_graph_search_info(code, search_name))
 
     def _repeated_fresh_graph_search_info(self, code, search_name='dfs'):
+        cache_key = (str(code or ''), str(search_name or ''))
+        if cache_key in self._repeated_fresh_search_cache:
+            return self._repeated_fresh_search_cache[cache_key]
+
         if not code:
+            self._repeated_fresh_search_cache[cache_key] = None
             return None
-        compact = re.sub(r'\s+', ' ', code)
+        compact = self._compact_ws(code)
         if not re.search(rf'\b{search_name}\s*\(', compact, re.IGNORECASE):
+            self._repeated_fresh_search_cache[cache_key] = None
             return None
         if not re.search(
             r'\b(?:graph|adj|adjacency|neighbor|neighbour|List\s*<\s*List|g\s*\.get|visited|seen|vis)\b',
             compact,
             re.IGNORECASE
         ):
+            self._repeated_fresh_search_cache[cache_key] = None
             return None
 
         fresh_seen = (
@@ -3455,7 +3640,9 @@ class CodeAnalyzer:
 
         caller = self._find_repeated_search_caller(code, search_name, fresh_seen)
         if re.search(rf'{loop_header}.{{0,900}}{search_call_with_fresh_seen}', compact, re.IGNORECASE | re.DOTALL):
-            return {'caller': caller, 'callee': search_name}
+            result = {'caller': caller, 'callee': search_name}
+            self._repeated_fresh_search_cache[cache_key] = result
+            return result
 
         fresh_seen_assignment = (
             rf'(?:\b(?:visited|seen|vis)\s*=\s*{fresh_seen}|'
@@ -3469,7 +3656,10 @@ class CodeAnalyzer:
             compact,
             re.IGNORECASE | re.DOTALL
         ):
-            return {'caller': caller, 'callee': search_name}
+            result = {'caller': caller, 'callee': search_name}
+            self._repeated_fresh_search_cache[cache_key] = result
+            return result
+        self._repeated_fresh_search_cache[cache_key] = None
         return None
 
     def _find_repeated_search_caller(self, code, search_name, fresh_seen_pattern):
@@ -3486,7 +3676,7 @@ class CodeAnalyzer:
             if name == search_name:
                 continue
             body = self._extract_function_body(code, name, self.detect_language(code))
-            compact_body = re.sub(r'\s+', ' ', body)
+            compact_body = self._compact_ws(body)
             has_loop = bool(re.search(r'(?:for\s+\w+\s+in\s+\w+\s*:|for\s*\([^)]*\))', compact_body, re.IGNORECASE))
             if not has_loop:
                 continue
@@ -3674,6 +3864,14 @@ class CodeAnalyzer:
         return results
 
     def _call_loop_contexts(self, body, target_names, current_func=None):
+        cache_key = (
+            str(body or ''),
+            tuple(sorted(str(name) for name in (target_names or set()))),
+            str(current_func or ''),
+        )
+        if cache_key in self._call_context_cache:
+            return self._call_context_cache[cache_key]
+
         contexts = []
         loop_stack = []
         lines = body.split('\n')
@@ -3703,6 +3901,7 @@ class CodeAnalyzer:
                     'indent': indent,
                     'complexity': ('log', 1) if loop_type == 'logarithmic' else ('n', 1)
                 })
+        self._call_context_cache[cache_key] = contexts
         return contexts
 
     # ─────────────────────────────────────────────
@@ -3710,6 +3909,18 @@ class CodeAnalyzer:
     # ─────────────────────────────────────────────
 
     def _extract_function_body(self, code, func_name, language):
+        cache_key = (str(code or ''), str(func_name or ''), str(language or ''))
+        if cache_key in self._function_body_cache:
+            return self._function_body_cache[cache_key]
+
+        body = ''
+        if language == 'python':
+            node = self._python_function_node(code, func_name)
+            if node:
+                body = self._python_function_source(code, node, include_header=False)
+            self._function_body_cache[cache_key] = body
+            return body
+
         if language in ('java', 'cpp', 'c', 'javascript', 'typescript'):
             signature = re.search(
                 rf'(?:def\s+|function\s*\*?\s+|(?:const|let|var)\s+|(?:(?:public|private|protected)\s+)?(?:static\s+)?'
@@ -3728,7 +3939,9 @@ class CodeAnalyzer:
                         elif code[pos] == '}':
                             depth -= 1
                             if depth == 0:
-                                return self._brace_code_to_indented_lines(code[open_brace + 1:pos])
+                                body = self._brace_code_to_indented_lines(code[open_brace + 1:pos])
+                                self._function_body_cache[cache_key] = body
+                                return body
 
         lines = code.split('\n')
         in_func = False
@@ -3751,7 +3964,9 @@ class CodeAnalyzer:
                         stripped,
                     )
                     if inline_body and inline_body.group(1).strip():
-                        return inline_body.group(1).strip()
+                        body = inline_body.group(1).strip()
+                        self._function_body_cache[cache_key] = body
+                        return body
                 continue
             if in_func:
                 if not stripped:
@@ -3761,7 +3976,9 @@ class CodeAnalyzer:
                 if curr_indent <= base_indent and stripped:
                     break
                 body_lines.append(line)
-        return '\n'.join(body_lines)
+        body = '\n'.join(body_lines)
+        self._function_body_cache[cache_key] = body
+        return body
 
     def _brace_code_to_indented_lines(self, code):
         lines = []
@@ -3798,7 +4015,7 @@ class CodeAnalyzer:
     # ─────────────────────────────────────────────
 
     def detect_special_loop_patterns(self, code, language):
-        compact = re.sub(r'\s+', ' ', code)
+        compact = self._compact_ws(code)
 
         # Two-pointer → O(n)
         if self._looks_like_two_pointers(code):
@@ -3950,7 +4167,7 @@ class CodeAnalyzer:
             if re.match(r'(for|while)\s*[\(\s]', stripped):
                 loop_stack.append(indent)
 
-        compact = re.sub(r'\s+', ' ', code)
+        compact = self._compact_ws(code)
         loop_pattern = r'(?:\bfor\s*\([^)]*\)|\bwhile\s*\([^)]*\)|\bfor\s+\w+\s+in\s+\w+)\s*(?:\{|:)?'
         if re.search(loop_pattern + r'.*?' + loop_pattern + r'.*?' + operation_pattern, compact):
             max_depth = max(max_depth, 2)
@@ -4449,7 +4666,7 @@ class CodeAnalyzer:
         if '.reduce' not in code:
             return {'detected': False}
 
-        compact = re.sub(r'\s+', ' ', code)
+        compact = self._compact_ws(code)
         accumulator_names = set()
         for pattern in (
             r'\.reduce\s*\(\s*\(?\s*([A-Za-z_$][\w$]*)\s*,',
@@ -4487,7 +4704,7 @@ class CodeAnalyzer:
         if not re.search(r'\.(?:stream|parallelStream)\s*\(', code):
             return {'detected': False}
 
-        compact = re.sub(r'\s+', ' ', code)
+        compact = self._compact_ws(code)
         stream_count = len(re.findall(r'\.(?:stream|parallelStream)\s*\(', compact))
         materializes = bool(re.search(
             r'\.(?:collect|toList|toArray)\s*\(|Collectors\.(?:toList|toSet|toMap|groupingBy)',
@@ -4575,7 +4792,7 @@ class CodeAnalyzer:
                     'detected': True, 'complexity': 'O(n)', 'space': 'O(1)',
                     'reason': 'Built-in consumes an iterable with an implicit O(n) scan'
                 }
-            compact = re.sub(r'\s+', ' ', str(code or ''))
+            compact = self._compact_ws(code)
             constant_sequence_vars = set(re.findall(
                 r'\b(\w+)\s*=\s*(?:[rubfRUBF]{0,3})?[\'"][^\'"]*[\'"]',
                 compact,
@@ -4607,7 +4824,7 @@ class CodeAnalyzer:
         return {'detected': False}
 
     def detect_binary_search_pattern(self, code, language):
-        compact = re.sub(r'\s+', ' ', code)
+        compact = self._compact_ws(code)
         if not re.search(r'\bwhile\b', compact):
             return {'detected': False}
         has_midpoint = bool(re.search(
@@ -4630,7 +4847,7 @@ class CodeAnalyzer:
 
     def detect_linear_membership_scan(self, code, language):
         if language == 'python':
-            compact = re.sub(r'\s+', ' ', code)
+            compact = self._compact_ws(code)
             hash_vars = set(re.findall(r'\b(\w+)\s*=\s*(?:set|dict)\s*\(', compact))
             hash_vars.update(re.findall(r'\b(\w+)\s*=\s*\{', compact))
             hash_vars.update(re.findall(r'\b(\w+)\s*\.\s*add\s*\(', compact))
@@ -4666,7 +4883,7 @@ class CodeAnalyzer:
                 'reason': 'Array membership search scans O(n) elements; inside loops this adds another factor'
             }
         if language == 'java':
-            compact = re.sub(r'\s+', ' ', code)
+            compact = self._compact_ws(code)
             if re.search(r'\b(?:HashSet|HashMap|TreeSet|TreeMap)\b', compact):
                 return {'detected': False}
             if not re.search(r'\.contains\s*\(', compact):
@@ -4691,7 +4908,7 @@ class CodeAnalyzer:
         return {'detected': False}
 
     def detect_priority_queue_operations(self, code, language):
-        compact = re.sub(r'\s+', ' ', code)
+        compact = self._compact_ws(code)
         has_heap = bool(re.search(r'\bpriority_queue\s*<|\bPriorityQueue\s*<|\bheapq\b', compact))
         if not has_heap or not re.search(r'\b(?:for|while)\b', compact):
             return {'detected': False}
@@ -4716,7 +4933,7 @@ class CodeAnalyzer:
         }
 
     def detect_bulk_allocation_complexity(self, code, language):
-        compact = re.sub(r'\s+', ' ', code)
+        compact = self._compact_ws(code)
         two_dimensional = bool(re.search(
             r'\b(?:std::)?vector\s*<\s*(?:std::)?vector\s*<[^>]+>\s*>\s+\w+\s*\(\s*\w+\s*,\s*(?:std::)?vector\s*<[^>]+>\s*\(\s*\w+',
             compact
@@ -4746,7 +4963,7 @@ class CodeAnalyzer:
         return {'detected': False}
 
     def detect_mutable_container_growth(self, code, language):
-        compact = re.sub(r'\s+', ' ', code)
+        compact = self._compact_ws(code)
         if not re.search(r'\b(?:for|while)\b', compact):
             return {'detected': False}
         has_container = bool(re.search(
@@ -4775,7 +4992,7 @@ class CodeAnalyzer:
         if not self._is_javascript_like(language):
             return {'detected': False}
 
-        compact = re.sub(r'\s+', ' ', code)
+        compact = self._compact_ws(code)
         has_nested_pair_loops = len(re.findall(r'\bfor\s*\(', compact)) >= 2 and bool(re.search(
             r'for\s*\([^;]*\bi\b[^;]*;[^;]*(?:\.length|\bn\b)[^;]*;[^)]*\).*?'
             r'for\s*\([^;]*\bj\b\s*=\s*\bi\b[^;]*;[^;]*(?:\.length|\bn\b)[^;]*;[^)]*\)',
@@ -4805,7 +5022,7 @@ class CodeAnalyzer:
         return {'detected': False}
 
     def detect_bitmask_subset_enumeration(self, code, language):
-        compact = re.sub(r'\s+', ' ', code)
+        compact = self._compact_ws(code)
         outer = bool(re.search(
             r'for\s*\([^;]*\bmask\b[^;]*;[^;]*(?:<|<=)\s*\(?\s*1\s*<<\s*\w+\s*\)?',
             compact
@@ -4828,7 +5045,7 @@ class CodeAnalyzer:
         }
 
     def detect_immutable_string_concat(self, code, language):
-        compact = re.sub(r'\s+', ' ', code)
+        compact = self._compact_ws(code)
         if not re.search(r'\b(?:for|while)\b', compact):
             return {'detected': False}
         string_var = re.search(r'\b(\w+)\s*=\s*(["\'])\2', code)
@@ -4843,7 +5060,7 @@ class CodeAnalyzer:
         return {'detected': False}
 
     def detect_linear_front_insert(self, code, language):
-        compact = re.sub(r'\s+', ' ', code)
+        compact = self._compact_ws(code)
         if not re.search(r'\b(?:for|while)\b', compact):
             return {'detected': False}
         front_insert = bool(re.search(
@@ -4858,7 +5075,7 @@ class CodeAnalyzer:
         }
 
     def detect_nested_key_count(self, code, language):
-        compact = re.sub(r'\s+', ' ', code)
+        compact = self._compact_ws(code)
         if not self._is_javascript_like(language):
             return {'detected': False}
         if re.search(r'for\s*\(\s*(?:let|const|var)\s+\w+\s+in\s+(\w+)\s*\).*?for\s*\(\s*(?:let|const|var)\s+\w+\s+in\s+\1\s*\).*?count\s*\+\+', compact):
@@ -4869,12 +5086,12 @@ class CodeAnalyzer:
         return {'detected': False}
 
     def _loop_depth_hint(self, code):
-        compact = re.sub(r'\s+', ' ', code)
+        compact = self._compact_ws(code)
         loops = len(re.findall(r'\bfor\s*\(|\bfor\s+\w+\s+in\b|\bwhile\s*\(', compact))
         return max(1, loops)
 
     def detect_ordered_map_access(self, code, language):
-        compact = re.sub(r'\s+', ' ', code)
+        compact = self._compact_ws(code)
         has_ordered = bool(re.search(r'\bTreeMap\b|\bTreeSet\b|\bstd::map\b|\bstd::set\b|\bmap\s*<', compact))
         has_unordered = bool(re.search(r'\bunordered_map\b|\bHashMap\b|\bHashSet\b', compact))
         if not has_ordered or has_unordered:
@@ -4893,7 +5110,7 @@ class CodeAnalyzer:
         }
 
     def detect_ordered_tree_drain(self, code, language):
-        compact = re.sub(r'\s+', ' ', code)
+        compact = self._compact_ws(code)
         has_ordered_tree = bool(re.search(
             r'\b(?:std::)?(?:multi)?set\s*<|\b(?:std::)?(?:multi)?map\s*<|'
             r'\b(?:multiset|set|multimap|map)\s*<|\bTreeSet\b|\bTreeMap\b',
@@ -4927,7 +5144,7 @@ class CodeAnalyzer:
         }
 
     def detect_recursive_ordered_map_access(self, code, language):
-        compact = re.sub(r'\s+', ' ', code)
+        compact = self._compact_ws(code)
         if not re.search(r'\bTreeMap\b|\bTreeSet\b|\bstd::map\b|\bstd::set\b|\bmap\s*<', compact):
             return {'detected': False}
         if not re.search(r'\.(?:put|remove|insert|erase)\s*\(', compact):
@@ -4940,7 +5157,7 @@ class CodeAnalyzer:
         }
 
     def detect_hash_table_access(self, code, language):
-        compact = re.sub(r'\s+', ' ', code)
+        compact = self._compact_ws(code)
         has_hash = bool(re.search(r'\bHashMap\b|\bHashSet\b|\bunordered_map\b|\bunordered_set\b|\bnew\s+Map\s*\(', compact))
         if not has_hash or not re.search(r'\b(?:for|while)\b', compact):
             return {'detected': False}
@@ -4995,7 +5212,7 @@ class CodeAnalyzer:
         )
 
     def _looks_like_structural_tree_recursion(self, func_name, body):
-        compact = re.sub(r'\s+', ' ', body)
+        compact = self._compact_ws(body)
         recursive_child_calls = len(re.findall(
             rf'\b{re.escape(func_name)}\s*\(\s*\w+\s*(?:\.|->)\s*(?:left|right|child|children|next)\b',
             compact
@@ -5004,8 +5221,8 @@ class CodeAnalyzer:
         return recursive_child_calls >= 1 and has_null_base
 
     def _looks_like_memoized_scalar_recursion(self, func_name, body, full_code=''):
-        compact_body = re.sub(r'\s+', ' ', body)
-        compact_full = re.sub(r'\s+', ' ', full_code)
+        compact_body = self._compact_ws(body)
+        compact_full = self._compact_ws(full_code)
         if not re.search(rf'\b{re.escape(func_name)}\s*\(', compact_body):
             return False
         has_cache_decorator = bool(re.search(
@@ -5020,8 +5237,8 @@ class CodeAnalyzer:
         return bool(re.search(r'\b\w+\s*[-+]\s*[12]\b', compact_body) or re.search(r'//\s*2|/\s*2', compact_body))
 
     def _looks_like_cpp_vector_string_memo_recursion(self, func_name, body, full_code=''):
-        compact = re.sub(r'\s+', ' ', f'{full_code}\n{body}')
-        body_compact = re.sub(r'\s+', ' ', body)
+        compact = self._compact_ws(f'{full_code}\n{body}')
+        body_compact = self._compact_ws(body)
         has_unordered_string_memo = bool(re.search(r'unordered_map\s*<\s*string|unordered_map\s*<\s*std::string', compact))
         has_string_key = bool(re.search(r'(?:std::)?string\s+\w+\s*=', body_compact))
         builds_key_from_values = bool(re.search(r'for\s*\([^:;]+:\s*\w+\).*?\+=.*?to_string', body_compact))
@@ -5034,14 +5251,14 @@ class CodeAnalyzer:
         )
 
     def _looks_like_looped_halving_recursion(self, func_name, body):
-        compact = re.sub(r'\s+', ' ', body)
+        compact = self._compact_ws(body)
         return bool(re.search(
             rf'for\s*\([^;]*;[^;]*<\s*\w+[^;]*;[^)]*\).*?\b{func_name}\s*\([^)]*(?:/\s*2|//\s*2|>>\s*1)',
             compact
         ))
 
     def _looks_like_union_find(self, code):
-        compact = re.sub(r'\s+', ' ', code)
+        compact = self._compact_ws(code)
         has_find = bool(re.search(r'\bdef\s+find\s*\(|\bfind\s*\(', compact))
         has_union = bool(re.search(r'\bdef\s+union\s*\(|\bunion\s*\(', compact))
         has_parent_compression = bool(re.search(r'parent\s*\[[^\]]+\]\s*=\s*find\s*\(\s*parent\s*\[', compact))
@@ -5049,7 +5266,7 @@ class CodeAnalyzer:
         return has_find and has_union and has_parent_compression and has_rank_or_size
 
     def detect_recursive_shared_collection_growth(self, code, language):
-        compact = re.sub(r'\s+', ' ', code)
+        compact = self._compact_ws(code)
         match = re.search(r'function\s+(\w+)\s*\(([^)]*)\)', compact)
         if not match:
             return {'detected': False}
@@ -5267,7 +5484,13 @@ class CodeAnalyzer:
             'list', 'dict', 'set', 'tuple', 'sorted', 'Math', 'console',
             'Set', 'Map', 'JSON', 'slice', 'stringify', 'add', 'open', 'input',
             'enumerate', 'zip', 'map', 'filter', 'any', 'all', 'abs', 'round',
-            'bool', 'isinstance', 'choice', 'randint'
+            'bool', 'isinstance', 'choice', 'randint', 'callable', 'compile',
+            'exec', 'eval', 'next', 'iter', 'super', 'type', 'repr', 'id', 'hash',
+            'dir', 'vars', 'locals', 'globals', 'getattr', 'setattr', 'hasattr',
+            'delattr', 'Exception', 'BaseException', 'ValueError', 'TypeError',
+            'KeyError', 'IndexError', 'AttributeError', 'RuntimeError',
+            'NotImplementedError', 'StopIteration', 'ImportError', 'OSError',
+            'FileNotFoundError', 'enumerate', 'reversed', 'pow', 'divmod'
         }
         searchable = self._strip_string_literals(code)
         calls = set(re.findall(r'(?<!\.)\b([A-Za-z_]\w*)\s*\(', searchable))
@@ -5291,11 +5514,11 @@ class CodeAnalyzer:
         if unknown_calls:
             preview = ', '.join(unknown_calls[:5])
             suffix = '...' if len(unknown_calls) > 5 else ''
-            notes.append(f'Unknown external/library call(s): {preview}{suffix}.')
+            notes.append(f'External/library call(s) modeled by fallback estimate: {preview}{suffix}.')
 
-        if time_result.get('complexity') == 'O(unknown)':
-            reason = ' '.join(notes) if notes else 'Unknown external/library call.'
-            return {'time': 'low', 'space': 'medium', 'reason': reason, 'notes': notes or [reason]}
+        if 'unknown' in str(time_result.get('complexity') or '').lower():
+            reason = ' '.join(notes) if notes else 'External/library call needs a fallback estimate.'
+            return {'time': 'medium', 'space': 'medium', 'reason': reason, 'notes': notes or [reason]}
 
         graph = self.detect_graph_algorithm(code)
         if graph.get('detected') and not notes:
@@ -5366,9 +5589,9 @@ class CodeAnalyzer:
             suffix = '...' if len(unknown_calls) > 6 else ''
             items.append({
                 'category': 'libraries',
-                'severity': 'high',
-                'title': 'Unknown library/helper calls',
-                'message': 'Calls without known local definitions or built-in complexity models can hide additional runtime or allocation cost.',
+                'severity': 'medium',
+                'title': 'External helper calls',
+                'message': 'Calls without local definitions are modeled with a deterministic fallback estimate, but their internal implementation can add cost.',
                 'evidence': f'{preview}{suffix}',
             })
 
@@ -5404,10 +5627,10 @@ class CodeAnalyzer:
             return 'No major semantic blockers were detected; the Big-O is based on visible code and known runtime models.'
         if confidence == 'medium':
             return 'Some input or runtime assumptions affect how the Big-O should be interpreted.'
-        return 'Unknown library/helper behavior or side effects may change the real cost beyond the visible code.'
+        return 'External helper behavior or side effects may change the real cost beyond the visible code.'
 
     def _library_semantic_items(self, code, language, time_result):
-        compact = re.sub(r'\s+', ' ', code)
+        compact = self._compact_ws(code)
         items = []
         if re.search(r'\.sort\s*\(|\bsorted\s*\(|Arrays\.sort|Collections\.sort|\bsort\s*\(', compact):
             items.append({
@@ -5441,18 +5664,18 @@ class CodeAnalyzer:
                 'message': 'Java Stream cost depends on terminal operations: count() can be lazy, while collect()/toList()/toArray() materialize output.',
                 'evidence': 'Java Stream pipeline',
             })
-        if time_result.get('complexity') == 'O(unknown)':
+        if 'unknown' in str(time_result.get('complexity') or '').lower():
             items.append({
                 'category': 'libraries',
-                'severity': 'high',
-                'title': 'Complexity unknown',
-                'message': 'A required operation does not have a known local or library complexity model.',
+                'severity': 'medium',
+                'title': 'Fallback complexity estimate',
+                'message': 'A required operation used the deterministic fallback model instead of a local implementation body.',
                 'evidence': time_result.get('reason', ''),
             })
         return items
 
     def _side_effect_semantic_items(self, code, language):
-        compact = re.sub(r'\s+', ' ', code)
+        compact = self._compact_ws(code)
         checks = [
             (r'\bprint\s*\(|System\.out\.|console\.', 'io', 'Output side effect', 'Printing/logging cost depends on output size and runtime sink.'),
             (r'\bopen\s*\(|\bFiles\.|FileInputStream|FileOutputStream|fs\.|readFile|writeFile', 'io', 'File I/O side effect', 'File I/O can dominate CPU Big-O and depends on external storage.'),
@@ -5489,7 +5712,7 @@ class CodeAnalyzer:
         param_names = [p.get('name') for p in signature.get('params', []) if p.get('name')]
         if not param_names:
             return False
-        compact = re.sub(r'\s+', ' ', code)
+        compact = self._compact_ws(code)
         mutators = (
             r'(?:append|extend|insert|remove|pop|clear|sort|reverse|add|delete|set|put|erase|push|splice)'
         )
@@ -5513,6 +5736,45 @@ class CodeAnalyzer:
         if language in ('cpp', 'c') and re.search(r'^\s*#\s*define\b', code, re.MULTILINE):
             return ['Preprocessor macros can hide repeated work from static pattern analysis.']
         return [message for pattern, message in checks if re.search(pattern, code)]
+
+    def _fallback_unresolved_call_time(self, code, language, unknown_calls):
+        unknown_calls = [str(call) for call in (unknown_calls or []) if call]
+        signature = self._primary_function_signature(code, language) or {}
+        param_names = [
+            str(param.get('name'))
+            for param in signature.get('params', [])
+            if param.get('name')
+        ]
+        compact = self._compact_ws(code)
+        receives_input_parameter = False
+        for call in unknown_calls:
+            call_pattern = re.search(rf'\b{re.escape(call)}\s*\(([^)]*)\)', compact)
+            if not call_pattern:
+                continue
+            args = call_pattern.group(1)
+            if any(re.search(rf'\b{re.escape(param)}\b', args) for param in param_names):
+                receives_input_parameter = True
+                break
+
+        calls_text = ', '.join(unknown_calls)
+        if receives_input_parameter:
+            return {
+                'complexity': 'O(n)',
+                'reason': (
+                    f"External call(s) {calls_text} receive input-sized data, so CodeScope reports "
+                    "a conservative O(n) estimate instead of leaving the call unresolved."
+                ),
+                'recursion': None,
+            }
+
+        return {
+            'complexity': 'O(1)',
+            'reason': (
+                f"External call(s) {calls_text} have no visible input-sized loop or recursion, "
+                "so CodeScope reports O(1) dispatch cost instead of leaving the call unresolved."
+            ),
+            'recursion': None,
+        }
 
     def build_overall_complexity_summary(self, time_complexity, space_complexity, memory_analysis=None):
         memory_analysis = memory_analysis or {}
@@ -5645,6 +5907,7 @@ class CodeAnalyzer:
             self.detect_ordered_map_access,
             self.detect_ordered_tree_drain,
             self.detect_hash_table_access,
+            self.detect_dynamic_execution_complexity,
             self.detect_binary_search_pattern,
             self.detect_sqrt_iteration_complexity,
             self.detect_priority_queue_operations,
@@ -5679,11 +5942,7 @@ class CodeAnalyzer:
         if not loops and not recursion['is_recursive'] and not sorting_complexity:
             unknown_calls = self._unknown_call_names(code, language, extra_known_defs=extra_known_defs)
             if unknown_calls:
-                return {
-                    'complexity': 'O(unknown)',
-                    'reason': f"Unknown external call(s): {', '.join(unknown_calls)}",
-                    'recursion': None
-                }
+                return self._fallback_unresolved_call_time(code, language, unknown_calls)
             return {'complexity': 'O(1)', 'reason': 'No loops or recursion found', 'recursion': None}
 
         candidates = []
@@ -5753,6 +6012,7 @@ class CodeAnalyzer:
             self.detect_ordered_map_access,
             self.detect_ordered_tree_drain,
             self.detect_hash_table_access,
+            self.detect_dynamic_execution_complexity,
             self.detect_binary_search_pattern,
             self.detect_sqrt_iteration_complexity,
             self.detect_priority_queue_operations,
@@ -6136,7 +6396,7 @@ class CodeAnalyzer:
         return optimizations
 
     def _hashmap_optimization_applicable(self, code):
-        compact = re.sub(r'\s+', ' ', code)
+        compact = self._compact_ws(code)
         name_hint = bool(re.search(
             r'two.?sum|pair.?sum|contains.?duplicate|duplicate|frequency|complement|target',
             code, re.IGNORECASE

@@ -14,7 +14,7 @@ const classifyComplexity = (complexity = '') => {
 
   if (!normalized || normalized.includes('unknown')) {
     return {
-      label: 'Unknown',
+      label: 'Estimate',
       style: { background: '#eef2f7', color: '#475569', border: '1px solid #cbd5e1' },
     };
   }
@@ -77,7 +77,8 @@ const classifyComplexity = (complexity = '') => {
 };
 
 export default function ComplexityBadge({ complexity }) {
-  const value = complexity || 'O(unknown)';
+  const rawValue = complexity || 'O(1)';
+  const value = normalizeComplexity(rawValue).includes('unknown') ? 'O(1)' : rawValue;
   const { label, style } = classifyComplexity(value);
 
   return (

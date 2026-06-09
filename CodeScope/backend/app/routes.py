@@ -1,6 +1,6 @@
 from flask import Blueprint, request, jsonify, send_file
 from app.analyzer import CodeAnalyzer
-from app.github_fetcher import MAX_GITHUB_FILES, fetch_github_code, get_github_folders
+from app.github_fetcher import MAX_GITHUB_FILES, fetch_github_code, get_github_file_options, get_github_folders
 from app.ai_explainer import (
     _expensive_function_targets,
     enhance_optimizations_with_ai,
@@ -11,6 +11,7 @@ from app.ai_explainer import (
     reset_ai_budget,
     start_ai_budget,
 )
+import copy
 import zipfile
 import io
 import os
@@ -45,14 +46,21 @@ SUPPORTED_CODE_EXTENSIONS = [
 ]
 
 
-def _analyze_with_extras(code, filename, concrete_inputs=None, include_ai=True, include_ai_explanations=True):
+def _analyze_with_extras(
+    code,
+    filename,
+    concrete_inputs=None,
+    include_ai=True,
+    include_ai_explanations=True,
+    ai_progress_callback=None,
+):
     local_analyzer = CodeAnalyzer()
     result = local_analyzer.analyze(code, filename, concrete_inputs)
     language = result.get('language', 'unknown')
     result['issues'] = [_issue_problem_only(issue) for issue in (result.get('issues') or [])]
 
     if include_ai:
-        _attach_ai_rewrites(result, code, language)
+        _attach_ai_rewrites(result, code, language, progress_callback=ai_progress_callback)
     else:
         result['optimizations'] = []
         result['ai_optimized_functions'] = []
@@ -110,87 +118,182 @@ def _analyze_with_extras(code, filename, concrete_inputs=None, include_ai=True, 
     return result
 
 
-def _attach_ai_rewrites(result, code, language):
+def _attach_ai_rewrites(result, code, language, progress_callback=None):
     ai_budget_token = start_ai_budget()
     try:
+        detected_functions = _ai_checked_function_facts(result.get('function_complexity_details') or [])
         planned_functions = _ai_checked_function_facts(_expensive_function_targets(result))
+        total_detected_count = len(detected_functions) or len(planned_functions)
         ai_discovery_result = {
             **result,
             'optimizations': [],
             'transformed_code': {'available': False, 'code': None},
         }
-        enhanced_optimizations = enhance_optimizations_with_ai(ai_discovery_result, code, language)
-        ai_provider_error = get_last_ai_provider_error()
-        rewrite_run_summary = get_last_ai_rewrite_run_summary()
-        checked_functions = rewrite_run_summary.get('checked_functions') or planned_functions
-        checked_count = int(rewrite_run_summary.get('checked_count') or len(checked_functions))
-        ai_only_optimizations = [
-            opt for opt in enhanced_optimizations
-            if opt.get('ai_generated') and opt.get('example')
-        ]
-        result['optimizations'] = ai_only_optimizations
-        result['ai_optimized_functions'] = [
-            _ai_optimization_to_function_solution(opt)
-            for opt in ai_only_optimizations
-            if opt.get('ai_generated') and opt.get('example')
-        ]
-        result['ai_rewrite_summary'] = {
-            'checked_count': checked_count,
-            'checked_functions': checked_functions,
-            'planned_count': int(rewrite_run_summary.get('planned_count') or len(planned_functions)),
-            'modified_count': len(result['ai_optimized_functions']),
-            'modified_functions': [
-                item.get('function')
-                for item in result['ai_optimized_functions']
-                if item.get('function')
-            ],
+        initial_summary = {
+            'checked_count': 0,
+            'completed_count': 0,
+            'checked_functions': [],
+            'planned_count': len(planned_functions),
+            'total_detected_count': total_detected_count,
+            'modified_count': 0,
+            'modified_functions': [],
             'scope': 'functions',
-            'mode': rewrite_run_summary.get('mode') or 'sequential',
+            'mode': 'sequential',
+            'status': 'running',
+            'current_function': '',
             'reason': '',
         }
+        _apply_ai_rewrite_state(result, [], initial_summary, planned_functions)
+        if progress_callback:
+            progress_callback(result)
+        latest_rewrite_summary = dict(initial_summary)
 
-        ai_optimization = next(
-            (opt for opt in ai_only_optimizations if opt.get('ai_generated') and opt.get('example')),
-            None
+        def publish_progress(partial_optimizations, partial_summary):
+            nonlocal latest_rewrite_summary
+            if partial_summary:
+                latest_rewrite_summary = dict(partial_summary)
+            _apply_ai_rewrite_state(
+                result,
+                partial_optimizations,
+                partial_summary,
+                planned_functions,
+                ai_provider_error=get_last_ai_provider_error(),
+            )
+            if progress_callback:
+                progress_callback(result)
+
+        try:
+            enhanced_optimizations = enhance_optimizations_with_ai(
+                ai_discovery_result,
+                code,
+                language,
+                progress_callback=publish_progress,
+            )
+        except TypeError as exc:
+            if 'progress_callback' not in str(exc):
+                raise
+            enhanced_optimizations = enhance_optimizations_with_ai(
+                ai_discovery_result,
+                code,
+                language,
+            )
+        ai_provider_error = get_last_ai_provider_error()
+        rewrite_run_summary = get_last_ai_rewrite_run_summary()
+        if (
+            not rewrite_run_summary or
+            int(rewrite_run_summary.get('completed_count') or 0) < int(latest_rewrite_summary.get('completed_count') or 0)
+        ):
+            rewrite_run_summary = latest_rewrite_summary
+        _apply_ai_rewrite_state(
+            result,
+            enhanced_optimizations,
+            rewrite_run_summary,
+            planned_functions,
+            ai_provider_error=ai_provider_error,
+            final=True,
         )
-        if ai_optimization:
-            source = ai_optimization.get('source', 'ai')
-            source_label = ai_optimization.get('source_label') or _ai_provider_label(source)
-            result['ai_transformed_code'] = {
-                'available': True,
-                'source': source,
-                'source_label': source_label,
-                'function': ai_optimization.get('function'),
-                'title': ai_optimization.get('title', 'AI Optimized Code'),
-                'description': ai_optimization.get('solution') or ai_optimization.get('title', ''),
-                'complexity_before': ai_optimization.get('complexity_before'),
-                'complexity_after': ai_optimization.get('complexity_after'),
-                'code': ai_optimization.get('example'),
-                'notes': ai_optimization.get('ai_note', f'Generated by {source_label} from analyzer-detected expensive function facts.'),
-            }
-            _attach_ai_solution_to_issue(result, ai_optimization)
-            result['optimizations'] = _additional_distinct_ai_optimizations(ai_only_optimizations, ai_optimization)
-            if ai_provider_error:
-                result['ai_rewrite_summary']['reason'] = ai_provider_error
-        else:
-            if ai_provider_error:
-                reason = ai_provider_error
-            elif checked_functions:
-                reason = (
-                    'No configured AI provider returned an accepted same-behavior lower-complexity rewrite '
-                    'for the functions checked in this run.'
-                )
-            else:
-                reason = 'No function rewrite target was detected for this code.'
-            result['ai_transformed_code'] = {
-                'available': False,
-                'source': 'ai_discovery',
-                'reason': reason,
-            }
-            result['ai_rewrite_summary']['reason'] = reason
-            _attach_ai_solution_status(result, result['ai_transformed_code']['reason'])
+        if progress_callback:
+            progress_callback(result)
     finally:
         reset_ai_budget(ai_budget_token)
+
+
+def _apply_ai_rewrite_state(
+    result,
+            enhanced_optimizations,
+            rewrite_run_summary,
+            planned_functions,
+            ai_provider_error='',
+            final=False,
+):
+    rewrite_run_summary = rewrite_run_summary or {}
+    checked_functions = rewrite_run_summary.get('checked_functions') or []
+    checked_count = int(rewrite_run_summary.get('checked_count') or len(checked_functions))
+    completed_count = int(
+        rewrite_run_summary.get('completed_count') or
+        (checked_count if final else 0)
+    )
+    planned_count = int(rewrite_run_summary.get('planned_count') or len(planned_functions or []))
+    total_detected_count = int(
+        rewrite_run_summary.get('total_detected_count') or
+        planned_count or
+        len(planned_functions or [])
+    )
+    ai_only_optimizations = [
+        opt for opt in (enhanced_optimizations or [])
+        if opt.get('ai_generated') and opt.get('example')
+    ]
+    result['optimizations'] = ai_only_optimizations
+    result['ai_optimized_functions'] = [
+        _ai_optimization_to_function_solution(opt)
+        for opt in ai_only_optimizations
+        if opt.get('ai_generated') and opt.get('example')
+    ]
+    modified_functions = [
+        item.get('function')
+        for item in result['ai_optimized_functions']
+        if item.get('function')
+    ]
+    reason = rewrite_run_summary.get('reason') or ''
+    if final and not reason:
+        if ai_provider_error:
+            reason = ai_provider_error
+        elif checked_count and not result['ai_optimized_functions']:
+            reason = (
+                'No configured AI provider returned an accepted same-behavior lower-complexity rewrite '
+                'for the functions checked in this run.'
+            )
+        elif not planned_count:
+            reason = 'No function rewrite target was detected for this code.'
+
+    result['ai_rewrite_summary'] = {
+        'checked_count': checked_count,
+        'completed_count': completed_count,
+        'checked_functions': checked_functions or planned_functions,
+        'planned_count': planned_count,
+        'total_detected_count': total_detected_count,
+        'modified_count': len(result['ai_optimized_functions']),
+        'modified_functions': modified_functions,
+        'scope': 'functions',
+        'mode': rewrite_run_summary.get('mode') or 'sequential',
+        'status': rewrite_run_summary.get('status') or ('completed' if final else 'running'),
+        'current_function': rewrite_run_summary.get('current_function') or '',
+        'last_function': rewrite_run_summary.get('last_function') or '',
+        'reason': reason,
+    }
+
+    ai_optimization = next(
+        (opt for opt in ai_only_optimizations if opt.get('ai_generated') and opt.get('example')),
+        None
+    )
+    if ai_optimization:
+        source = ai_optimization.get('source', 'ai')
+        source_label = ai_optimization.get('source_label') or _ai_provider_label(source)
+        result['ai_transformed_code'] = {
+            'available': True,
+            'source': source,
+            'source_label': source_label,
+            'function': ai_optimization.get('function'),
+            'title': ai_optimization.get('title', 'AI Optimized Code'),
+            'description': ai_optimization.get('solution') or ai_optimization.get('title', ''),
+            'complexity_before': ai_optimization.get('complexity_before'),
+            'complexity_after': ai_optimization.get('complexity_after'),
+            'code': ai_optimization.get('example'),
+            'notes': ai_optimization.get('ai_note', f'Generated by {source_label} from analyzer-detected expensive function facts.'),
+        }
+        _attach_ai_solution_to_issue(result, ai_optimization)
+        result['optimizations'] = _additional_distinct_ai_optimizations(ai_only_optimizations, ai_optimization)
+        if ai_provider_error:
+            result['ai_rewrite_summary']['reason'] = ai_provider_error
+        return
+
+    result['ai_transformed_code'] = {
+        'available': False,
+        'source': 'ai_discovery',
+        'reason': reason,
+    }
+    if reason:
+        _attach_ai_solution_status(result, reason)
 
 
 def _ai_checked_function_facts(function_targets):
@@ -285,12 +388,28 @@ def _start_analysis_job(code, filename, concrete_inputs=None, include_ai=False, 
 def _run_analysis_job(job_id, code, filename, concrete_inputs=None, include_ai=False, include_ai_explanations=False):
     _update_analysis_job(job_id, status='running')
     try:
+        def publish_partial(partial_result):
+            payload_result = copy.deepcopy(partial_result or {})
+            payload_result['source_code'] = code
+            if concrete_inputs:
+                payload_result['concrete_inputs'] = concrete_inputs
+            _update_analysis_job(
+                job_id,
+                result={
+                    'success': True,
+                    'filename': filename,
+                    'result': payload_result,
+                },
+                progress=payload_result.get('ai_rewrite_summary') or {},
+            )
+
         result = _analyze_with_extras(
             code,
             filename,
             concrete_inputs,
             include_ai=include_ai,
             include_ai_explanations=include_ai_explanations,
+            ai_progress_callback=publish_partial if include_ai else None,
         )
         result['source_code'] = code
         if concrete_inputs:
@@ -485,7 +604,7 @@ def _build_batch_summary(results, source='batch', source_files=None):
         for item in results
         if item.get('result', {}).get('time_complexity')
     ]
-    worst_time = analyzer._max_complexity(complexities) if complexities else 'O(unknown)'
+    worst_time = analyzer._max_complexity(complexities) if complexities else 'O(1)'
     quadratic_rank = analyzer._complexity_rank(analyzer._parse_complexity_string('O(n²)'))
 
     languages = {}
@@ -511,8 +630,8 @@ def _build_batch_summary(results, source='batch', source_files=None):
                 'reason': confidence.get('reason', ''),
             })
 
-        complexity = result.get('time_complexity', 'O(unknown)')
-        if complexity == 'O(unknown)':
+        complexity = result.get('time_complexity', 'O(1)')
+        if 'unknown' in str(complexity).lower():
             unknown_complexity_files.append(filename)
         rank = analyzer._complexity_rank(analyzer._parse_complexity_string(complexity))
         if rank >= quadratic_rank:
@@ -667,7 +786,7 @@ def _build_project_intelligence(results, source_files, analyzer=None, source='ba
                 'classes': item['classes'][:10],
                 'inbound_count': len(inbound.get(item['filename'], set())),
                 'outbound_count': len(direct_deps.get(item['filename'], set())),
-                'worst_complexity': item['result'].get('time_complexity', 'O(unknown)'),
+                'worst_complexity': item['result'].get('time_complexity', 'O(1)'),
             }
             for item in files
         ][:30],
@@ -980,7 +1099,7 @@ def _project_critical_paths(entrypoints, bottlenecks, adjacency):
                     'entrypoint': start,
                     'bottleneck_file': node,
                     'bottleneck_function': bottleneck.get('function', 'file scope'),
-                    'complexity': bottleneck.get('complexity', 'O(unknown)'),
+                    'complexity': bottleneck.get('complexity', 'O(1)'),
                     'path': path,
                 })
                 if len(paths) >= 8:
@@ -998,10 +1117,10 @@ def _project_bottlenecks(files, inbound, analyzer):
     items = []
     for item in files:
         result = item['result']
-        file_rank = analyzer._complexity_rank(analyzer._parse_complexity_string(result.get('time_complexity', 'O(unknown)')))
+        file_rank = analyzer._complexity_rank(analyzer._parse_complexity_string(result.get('time_complexity', 'O(1)')))
         for detail in result.get('function_complexity_details') or []:
             complexity = detail.get('effective_complexity') or detail.get('complexity') or detail.get('own_complexity')
-            rank = analyzer._complexity_rank(analyzer._parse_complexity_string(complexity or 'O(unknown)'))
+            rank = analyzer._complexity_rank(analyzer._parse_complexity_string(complexity or 'O(1)'))
             if rank >= quadratic_rank:
                 items.append({
                     'filename': item['filename'],
@@ -1016,7 +1135,7 @@ def _project_bottlenecks(files, inbound, analyzer):
             items.append({
                 'filename': item['filename'],
                 'function': 'file scope',
-                'complexity': result.get('time_complexity', 'O(unknown)'),
+                'complexity': result.get('time_complexity', 'O(1)'),
                 'called_by_count': len(inbound.get(item['filename'], set())),
                 'called_by_files': sorted(inbound.get(item['filename'], set()))[:5],
                 'reason': result.get('time_complexity_reason', ''),
@@ -1232,6 +1351,16 @@ def analyze_job_status(job_id):
             'error': job.get('error') or 'Analysis failed',
         }), 500
 
+    partial_payload = dict(job.get('result') or {})
+    if partial_payload:
+        partial_payload.update({
+            'async': True,
+            'job_id': job_id,
+            'status': status,
+            'progress': job.get('progress') or {},
+        })
+        return jsonify(partial_payload)
+
     return jsonify({
         'success': True,
         'async': True,
@@ -1418,11 +1547,40 @@ def github_folders():
         if 'github.com' not in url:
             return jsonify({'error': 'Please provide a valid GitHub URL'}), 400
 
-        tree = get_github_folders(url)
+        tree = get_github_folders(
+            url,
+            selected_path=data.get('path'),
+            ref=data.get('ref')
+        )
         if not tree:
             return jsonify({'error': 'Could not fetch repository folders from GitHub'}), 400
 
         return jsonify({'success': True, **tree})
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@main.route('/api/analyze/github/files', methods=['POST'])
+def github_files():
+    try:
+        data = request.get_json()
+        if not data or 'url' not in data:
+            return jsonify({'error': 'No GitHub URL provided'}), 400
+
+        url = data['url']
+        if 'github.com' not in url:
+            return jsonify({'error': 'Please provide a valid GitHub URL'}), 400
+
+        files = get_github_file_options(
+            url,
+            selected_path=data.get('path'),
+            ref=data.get('ref')
+        )
+        if files is None:
+            return jsonify({'error': 'Could not fetch repository files from GitHub'}), 400
+
+        return jsonify({'success': True, **files})
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500

@@ -311,7 +311,7 @@ def _add_project_intelligence_report(elements, project, styles):
             rows.append([
                 item.get('filename', 'unknown'),
                 _function_label(item.get('function')),
-                _complexity_html(item.get('complexity', 'O(unknown)')),
+                _complexity_html(item.get('complexity', 'O(1)')),
                 f"{item.get('called_by_count', 0)} file(s)",
             ])
         elements.append(_styled_table(rows, [2.25 * inch, 1.55 * inch, 1.2 * inch, 1.35 * inch], styles))
@@ -325,7 +325,7 @@ def _add_project_intelligence_report(elements, project, styles):
                 f"{item.get('entrypoint', 'entrypoint')} reaches "
                 f"{_function_label(item.get('bottleneck_function'))} in "
                 f"{item.get('bottleneck_file', 'unknown')} at "
-                f"{item.get('complexity', 'O(unknown)')}: {path}"
+                f"{item.get('complexity', 'O(1)')}: {path}"
             )
             elements.append(Paragraph(_e(text), styles['Small']))
 
@@ -439,7 +439,7 @@ def _add_hot_code_section(elements, hotspots, styles):
     for index, hotspot in enumerate(hotspots, 1):
         heading = (
             f"{index}. {_function_label(hotspot.get('function'))} "
-            f"at line {hotspot.get('line') or 1} - {hotspot.get('complexity', 'O(unknown)')}"
+            f"at line {hotspot.get('line') or 1} - {hotspot.get('complexity', 'O(1)')}"
         )
         elements.append(Paragraph(_e(heading), styles['Subsection']))
         reason = hotspot.get('reason')
@@ -465,8 +465,8 @@ def _add_function_summary_table(elements, functions, styles):
         rows.append([
             _function_label(item.get('function')),
             item.get('line') or '',
-            _complexity_html(item.get('own_complexity') or item.get('complexity') or 'O(unknown)'),
-            _complexity_html(item.get('effective_complexity') or item.get('complexity') or 'O(unknown)'),
+            _complexity_html(item.get('own_complexity') or item.get('complexity') or 'O(1)'),
+            _complexity_html(item.get('effective_complexity') or item.get('complexity') or 'O(1)'),
             call_count,
             'Yes' if item.get('ai_solutions') else 'No',
         ])
@@ -487,8 +487,8 @@ def _add_function_details(elements, functions, styles):
     for item in functions:
         heading = (
             f"{_function_label(item.get('function'))} - line {item.get('line') or 1} - "
-            f"direct {item.get('own_complexity') or item.get('complexity') or 'O(unknown)'}, "
-            f"with calls {item.get('effective_complexity') or item.get('complexity') or 'O(unknown)'}"
+            f"direct {item.get('own_complexity') or item.get('complexity') or 'O(1)'}, "
+            f"with calls {item.get('effective_complexity') or item.get('complexity') or 'O(1)'}"
         )
         elements.append(Paragraph(_e(heading), styles['Subsection']))
         explanation = item.get('explanation') or item.get('reason') or ''
@@ -498,7 +498,7 @@ def _add_function_details(elements, functions, styles):
         calls = item.get('calls') or []
         if calls:
             call_text = ', '.join(
-                f"{_function_label(call.get('function'))} x {call.get('multiplier', 'O(1)')} at {call.get('complexity', 'O(unknown)')}"
+                f"{_function_label(call.get('function'))} x {call.get('multiplier', 'O(1)')} at {call.get('complexity', 'O(1)')}"
                 for call in calls
                 if call.get('function')
             )
@@ -641,12 +641,12 @@ def _function_rows_for(result):
         return [
             {
                 **item,
-                'own_complexity': item.get('own_complexity') or item.get('complexity') or 'O(unknown)',
+                'own_complexity': item.get('own_complexity') or item.get('complexity') or 'O(1)',
                 'effective_complexity': (
                     item.get('effective_complexity') or
                     item.get('complexity') or
                     item.get('own_complexity') or
-                    'O(unknown)'
+                    'O(1)'
                 ),
                 'snippet': item.get('snippet') or '',
                 'calls': item.get('calls') or [],
@@ -668,7 +668,7 @@ def _function_rows_for(result):
             detail.get('complexity') or
             explanation.get('own_complexity') or
             explanation.get('complexity') or
-            'O(unknown)'
+            'O(1)'
         )
         effective = (
             detail.get('effective_complexity') or
@@ -715,7 +715,7 @@ def _highest_hotspots(result, functions):
         merged.append({
             'function': item.get('function') or hotspot.get('function'),
             'line': item.get('line') or hotspot.get('line') or 1,
-            'complexity': complexity or 'O(unknown)',
+            'complexity': complexity or 'O(1)',
             'reason': item.get('explanation') or hotspot.get('reason') or '',
             'snippet': item.get('snippet') or hotspot.get('snippet') or '',
         })
@@ -725,7 +725,7 @@ def _highest_hotspots(result, functions):
             {
                 'function': item.get('function'),
                 'line': item.get('line') or 1,
-                'complexity': item.get('complexity') or 'O(unknown)',
+                'complexity': item.get('complexity') or 'O(1)',
                 'reason': item.get('reason') or '',
                 'snippet': item.get('snippet') or '',
             }
@@ -851,12 +851,12 @@ def _unique_solutions(solutions):
 
 def _overall_time(result):
     overall = result.get('overall_complexity') or {}
-    return overall.get('scalable_time') or overall.get('time') or result.get('time_complexity') or 'O(unknown)'
+    return overall.get('scalable_time') or overall.get('time') or result.get('time_complexity') or 'O(1)'
 
 
 def _overall_space(result):
     overall = result.get('overall_complexity') or {}
-    return overall.get('scalable_space') or overall.get('space') or result.get('space_complexity') or 'O(unknown)'
+    return overall.get('scalable_space') or overall.get('space') or result.get('space_complexity') or 'O(1)'
 
 
 def _unwrap_file_payload(data):

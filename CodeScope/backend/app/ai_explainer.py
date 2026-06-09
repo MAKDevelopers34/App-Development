@@ -23,20 +23,21 @@ try:
 except ValueError:
     AI_REQUEST_TIMEOUT_SECONDS = 25.0
 try:
-    AI_TOTAL_TIMEOUT_SECONDS = max(5.0, min(90.0, float(os.getenv('AI_TOTAL_TIMEOUT_SECONDS', '80'))))
+    AI_TOTAL_TIMEOUT_SECONDS = max(5.0, min(900.0, float(os.getenv('AI_TOTAL_TIMEOUT_SECONDS', '600'))))
 except ValueError:
-    AI_TOTAL_TIMEOUT_SECONDS = 80.0
+    AI_TOTAL_TIMEOUT_SECONDS = 600.0
 try:
-    AI_REWRITE_TARGET_LIMIT = max(1, min(60, int(
-        os.getenv('AI_REWRITE_TARGET_LIMIT') or os.getenv('AI_HOT_REWRITE_TARGET_LIMIT', '30')
+    AI_REWRITE_TARGET_LIMIT = max(1, min(500, int(
+        os.getenv('AI_REWRITE_TARGET_LIMIT') or os.getenv('AI_HOT_REWRITE_TARGET_LIMIT', '500')
     )))
 except ValueError:
-    AI_REWRITE_TARGET_LIMIT = 30
+    AI_REWRITE_TARGET_LIMIT = 500
 AI_HOT_REWRITE_TARGET_LIMIT = AI_REWRITE_TARGET_LIMIT
 try:
     AI_HOT_REWRITE_ATTEMPTS = max(1, min(3, int(os.getenv('AI_HOT_REWRITE_ATTEMPTS', '2'))))
 except ValueError:
     AI_HOT_REWRITE_ATTEMPTS = 2
+AI_REWRITE_SNIPPET_LIMIT = 6000
 
 _AI_DEADLINE = ContextVar('AI_DEADLINE', default=None)
 _LAST_AI_PROVIDER_ERROR = ''
@@ -162,7 +163,7 @@ def get_ai_optimized_code(analysis_result, code, language):
     }
 
 
-def enhance_optimizations_with_ai(analysis_result, code, language):
+def enhance_optimizations_with_ai(analysis_result, code, language, progress_callback=None):
     """
     Ask AI to improve analyzer suggestions and independently inspect expensive
     functions for same-behavior lower-complexity rewrites.
@@ -179,7 +180,7 @@ def enhance_optimizations_with_ai(analysis_result, code, language):
     try:
         if discovery_targets:
             return _enhance_hot_rewrite_targets_sequentially(
-                analysis_result, code, language, optimizations, discovery_targets
+                analysis_result, code, language, optimizations, discovery_targets, progress_callback=progress_callback
             )
 
         prompt = _build_ai_optimization_prompt(
@@ -207,39 +208,63 @@ def enhance_optimizations_with_ai(analysis_result, code, language):
     return optimizations
 
 
-def _enhance_hot_rewrite_targets_sequentially(analysis_result, code, language, optimizations, discovery_targets):
+def _enhance_hot_rewrite_targets_sequentially(
+    analysis_result,
+    code,
+    language,
+    optimizations,
+    discovery_targets,
+    progress_callback=None,
+):
     """
     Ask Groq/Grok for one function at a time, highest complexity first. This keeps each request small
     and preserves earlier modified functions if a later request hits a limit.
     """
+    function_details = analysis_result.get('function_complexity_details') or []
+    total_detected_count = len(function_details) if isinstance(function_details, list) else len(discovery_targets)
     merged_results = list(optimizations)
     seen = {_optimization_identity(item) for item in merged_results}
     summary = {
         'scope': 'functions',
         'mode': 'sequential',
         'planned_count': len(discovery_targets),
+        'total_detected_count': total_detected_count or len(discovery_targets),
         'checked_count': 0,
+        'completed_count': 0,
         'attempt_limit': AI_HOT_REWRITE_ATTEMPTS,
         'checked_functions': [],
         'modified_count': 0,
         'modified_functions': [],
+        'current_function': '',
+        'last_function': '',
+        'status': 'running',
         'reason': '',
     }
-    _set_last_ai_rewrite_run_summary(summary)
+
+    def publish():
+        _set_last_ai_rewrite_run_summary(summary)
+        if progress_callback:
+            progress_callback(copy.deepcopy(merged_results), copy.deepcopy(summary))
+
+    publish()
 
     for index, target in enumerate(discovery_targets):
         if _remaining_ai_timeout() <= 0:
-            reason = 'Groq API limit reached: AI rewrite time budget expired before all hot functions were checked.'
+            reason = 'Groq API limit reached: AI rewrite time budget expired before all functions were checked.'
             _set_last_ai_provider_error(reason)
             summary['reason'] = reason
-            _set_last_ai_rewrite_run_summary(summary)
+            summary['status'] = 'stopped'
+            publish()
             break
 
         target_fact = _rewrite_target_fact(target)
         target_fact['attempts'] = 0
+        target_fact['status'] = 'running'
+        target_fact['accepted'] = False
+        summary['current_function'] = target.get('function') or ''
         summary['checked_count'] += 1
         summary['checked_functions'].append(target_fact)
-        _set_last_ai_rewrite_run_summary(summary)
+        publish()
 
         candidate_batch = optimizations if index == 0 else []
         target_modified = False
@@ -247,13 +272,15 @@ def _enhance_hot_rewrite_targets_sequentially(analysis_result, code, language, o
 
         for attempt in range(AI_HOT_REWRITE_ATTEMPTS):
             if _remaining_ai_timeout() <= 0:
-                reason = 'Groq API limit reached: AI rewrite time budget expired before all hot functions were checked.'
+                reason = 'Groq API limit reached: AI rewrite time budget expired before all functions were checked.'
                 _set_last_ai_provider_error(reason)
                 summary['reason'] = reason
+                summary['status'] = 'stopped'
                 stop_all = True
                 break
 
             target_fact['attempts'] = attempt + 1
+            publish()
             prompt = _build_ai_optimization_prompt(
                 analysis_result,
                 code,
@@ -270,6 +297,7 @@ def _enhance_hot_rewrite_targets_sequentially(analysis_result, code, language, o
 
             if provider not in ('grok', 'groq') or not content:
                 summary['reason'] = get_last_ai_provider_error()
+                summary['status'] = 'stopped'
                 stop_all = True
                 break
 
@@ -295,15 +323,26 @@ def _enhance_hot_rewrite_targets_sequentially(analysis_result, code, language, o
                     summary['modified_count'] = len(summary['modified_functions'])
                     if function_name == target.get('function'):
                         target_modified = True
+                        target_fact['accepted'] = True
 
-            _set_last_ai_rewrite_run_summary(summary)
+            publish()
             if target_modified:
                 break
 
-        _set_last_ai_rewrite_run_summary(summary)
+        target_fact['status'] = 'done'
+        summary['completed_count'] += 1
+        summary['last_function'] = target.get('function') or ''
+        summary['current_function'] = ''
+        publish()
         if stop_all:
             break
 
+    if not summary.get('reason'):
+        summary['status'] = 'completed'
+    elif summary.get('status') != 'stopped':
+        summary['status'] = 'completed'
+    summary['current_function'] = ''
+    publish()
     return merged_results
 
 
@@ -594,18 +633,44 @@ def _expensive_function_targets(analysis_result):
             'effective_complexity': complexity,
             'reason': _compact_text(detail.get('reason', ''), 180),
             'calls': _compact_calls(detail.get('calls') or []),
-            'snippet': _compact_code_snippet(snippet, 900),
+            'snippet': _compact_code_snippet(snippet, AI_REWRITE_SNIPPET_LIMIT),
         }
         if rewrite_hint:
             target['rewrite_hint'] = rewrite_hint
         targets.append(target)
 
-    targets = [target for target in targets if _should_send_function_to_ai(target)]
+    targets = [
+        target for target in targets
+        if _should_send_function_to_ai(target) and _snippet_starts_with_function_header(
+            target.get('snippet'),
+            target.get('function'),
+        )
+    ]
     targets.sort(key=_rewrite_target_sort_key)
     targets = targets[:AI_REWRITE_TARGET_LIMIT]
     for index, target in enumerate(targets):
         target['target_index'] = index
     return targets
+
+
+def _snippet_starts_with_function_header(snippet, function_name):
+    text = str(snippet or '').strip()
+    if not text:
+        return False
+    first_line = next((line.strip() for line in text.splitlines() if line.strip()), '')
+    if not first_line:
+        return False
+    if re.match(r'(?:return|if|elif|else|for|while|switch|case|catch|with|try|except|finally)\b', first_line):
+        return False
+    if not function_name:
+        return bool(re.match(r'(?:async\s+def|def|function\s+\*?\s+|(?:const|let|var)\s+|[\w:<>,\[\] ?&*]+\s+\w+\s*\()', first_line))
+    name = re.escape(str(function_name))
+    return any(re.match(pattern, first_line) for pattern in (
+        rf'(?:async\s+def|def)\s+{name}\s*\(',
+        rf'function\s+\*?\s+{name}\s*\(',
+        rf'(?:const|let|var)\s+{name}\s*=',
+        rf'(?:(?:public|private|protected)\s+)?(?:static\s+)?[\w:<>,\[\] ?&*]+\s+{name}\s*\(',
+    ))
 
 
 def _rewrite_target_sort_key(target):
@@ -675,7 +740,7 @@ def _compact_rewrite_target(target):
         'effective_complexity': target.get('effective_complexity'),
         'reason': _compact_text(target.get('reason', ''), 120),
         'calls': _compact_calls(target.get('calls') or []),
-        'snippet': _compact_code_snippet(target.get('snippet', ''), 700),
+        'snippet': _compact_code_snippet(target.get('snippet', ''), AI_REWRITE_SNIPPET_LIMIT),
     }
     if target.get('rewrite_hint'):
         compact['rewrite_hint'] = target.get('rewrite_hint')
@@ -703,9 +768,6 @@ def _compact_function_fact(target):
 
 def _should_send_function_to_ai(target):
     if not isinstance(target, dict):
-        return False
-    function = str(target.get('function') or '')
-    if function == 'main' or function.startswith(('demo_', 'test_')):
         return False
     if not str(target.get('snippet') or '').strip():
         return False
@@ -977,7 +1039,7 @@ def _merge_ai_optimization_suggestions(
 
         code = _ai_rewrite_code(ai_item)
         if _ai_available(ai_item, code) and code:
-            before = str(opt.get('complexity_before') or ai_item.get('complexity_before') or '')
+            before = str(opt.get('complexity_before') or _ai_complexity_before(ai_item) or '')
             validation = _validate_ai_rewrite_complexity(
                 code,
                 language,
@@ -1005,7 +1067,7 @@ def _merge_ai_optimization_suggestions(
             updated['solution'] = str(ai_item.get('solution') or opt.get('solution') or '')
             updated['complexity_before'] = before
             updated['complexity_after'] = validation.get('complexity') or str(
-                ai_item.get('complexity_after') or opt.get('complexity_after') or ''
+                _ai_complexity_after(ai_item) or opt.get('complexity_after') or ''
             )
             updated['ai_note'] = str(
                 ai_item.get('notes') or
@@ -1079,7 +1141,7 @@ def _merge_ai_optimization_suggestions(
             before = str(
                 target.get('effective_complexity') or
                 target.get('own_complexity') or
-                item.get('complexity_before') or ''
+                _ai_complexity_before(item) or ''
             )
             validation = _validate_ai_rewrite_complexity(
                 code,
@@ -1107,7 +1169,7 @@ def _merge_ai_optimization_suggestions(
                 'problem': str(item.get('problem') or ''),
                 'solution': str(item.get('solution') or ''),
                 'complexity_before': before,
-                'complexity_after': accepted_validation.get('complexity') or str(item.get('complexity_after') or ''),
+                'complexity_after': accepted_validation.get('complexity') or str(_ai_complexity_after(item) or ''),
                 'example': code,
                 'ai_generated': True,
                 'ai_discovered': True,
@@ -1183,6 +1245,40 @@ def _ai_rewrite_code(item):
     return ''
 
 
+def _ai_complexity_value(item, keys):
+    if not isinstance(item, dict):
+        return ''
+    for key in keys:
+        value = item.get(key)
+        if value:
+            return str(value).strip()
+    return ''
+
+
+def _ai_complexity_before(item):
+    return _ai_complexity_value(item, (
+        'complexity_before',
+        'before_complexity',
+        'original_complexity',
+        'current_complexity',
+        'time_complexity_before',
+        'before',
+    ))
+
+
+def _ai_complexity_after(item):
+    return _ai_complexity_value(item, (
+        'complexity_after',
+        'after_complexity',
+        'optimized_complexity',
+        'new_complexity',
+        'improved_complexity',
+        'replacement_complexity',
+        'time_complexity_after',
+        'after',
+    ))
+
+
 def _accept_ai_claimed_lower_complexity_rewrite(
     code,
     language,
@@ -1194,7 +1290,7 @@ def _accept_ai_claimed_lower_complexity_rewrite(
     required_function=None,
     provider_label='AI',
 ):
-    claimed_after = str((ai_item or {}).get('complexity_after') or '').strip()
+    claimed_after = _ai_complexity_after(ai_item)
     if not claimed_after or claimed_after == 'O(unknown)':
         return None
 
