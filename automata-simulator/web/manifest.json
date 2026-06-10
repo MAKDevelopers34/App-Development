@@ -1,0 +1,12 @@
+{
+  "name": "Automata Simulator",
+  "short_name": "Automata",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#f8fafc",
+  "theme_color": "#0f766e",
+  "description": "A Flutter-based simulator for DFA, NFA, TG, Moore, Mealy, PDA, CFG, and Turing machines.",
+  "orientation": "any",
+  "prefer_related_applications": false,
+  "icons": []
+}
