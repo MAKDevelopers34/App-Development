@@ -52,10 +52,13 @@ export default function Footer() {
         </div>
 
         <div className="footer-bottom">
-          <div style={{ fontSize: '12px' }}>
-            Copyright 2026 CodeScope.
+          <div className="footer-legal">
+            <span>Copyright 2026 CodeScope.</span>
+            <span className="footer-made-by">
+              Built by <strong>MAKDEVELOPERS</strong>
+            </span>
           </div>
-          <div style={{ fontSize: '12px' }}>
+          <div className="footer-tagline">
             Time and space complexity reports
           </div>
         </div>

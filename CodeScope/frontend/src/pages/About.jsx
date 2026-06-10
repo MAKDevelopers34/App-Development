@@ -1,16 +1,15 @@
 export default function About() {
   const pipeline = [
-    ['Parse', 'Detect language from filename and inspect functions, classes, loops, recursion, calls, and allocation patterns.'],
-    ['Classify', 'Estimate Big-O time and space using analyzer rules, known algorithm patterns, and call-chain effects.'],
-    ['Prioritize', 'Promote only the highest-complexity functions into hot code while keeping all functions in the full table.'],
-    ['Verify', 'When requested, accept AI rewrites only when they target the same function and improve analyzer complexity.'],
+    ['01', 'Parse source', 'Language, functions, classes, callbacks, loops, recursion, calls, and allocation signals are separated before scoring.'],
+    ['02', 'Build cost model', 'Direct function cost, cost with calls, space growth, and file-level behavior are compared with the same Big-O scale.'],
+    ['03', 'Promote hotspots', 'Only the highest-cost functions move into Hot Code, while the full function table keeps the complete context.'],
+    ['04', 'Verify rewrites', 'AI rewrites are accepted only when they target the same function and improve the analyzer complexity.'],
   ];
 
-  const scope = [
-    ['Inputs', 'Pasted source, ZIP projects, and public GitHub repositories with selectable folders.'],
-    ['Languages', 'Python, JavaScript, TypeScript, Java, C, and C++ source files.'],
-    ['Limits', 'Repository analysis limits files and source size so the backend remains responsive.'],
-    ['Reports', 'Overall complexity, function complexity, hot code, modified functions, and PDF export.'],
+  const principles = [
+    ['Function first', 'Every detected function keeps its own row, exact code snippet, direct time, time with calls, and space result.'],
+    ['Project aware', 'ZIP and GitHub reports compare files without mixing time and space, then surface the worst project cost.'],
+    ['No hidden rewrite block', 'Modified functions are attached below the matching original function, including hot-code functions.'],
   ];
 
   const reference = [
@@ -22,37 +21,63 @@ export default function About() {
     ['O(2^n)', 'Exponential', 'Branching recursion without enough pruning or memoization', 'Critical'],
   ];
 
+  const reportCards = [
+    ['Overall', 'Big-O time, Big-O space, rating, files, lines, and project-wide worst cases.'],
+    ['Functions', 'Direct complexity, effective complexity, space, explanation, calls, and exact function code.'],
+    ['Hot Code', 'Only the maximum-complexity function group, so the expensive code is easy to inspect.'],
+    ['Modified', 'Lower-complexity alternatives requested from Groq and placed below their source function.'],
+  ];
+
   return (
-    <div className="page-shell">
+    <div className="page-shell about-page">
       <div className="container">
-        <header className="about-hero">
-          <div>
-            <div className="eyebrow">How CodeScope works</div>
-            <h1>Complexity analysis built around functions, hotspots, and verified rewrites.</h1>
+        <header className="about-premium-hero">
+          <div className="about-hero-copy">
+            <div className="eyebrow">CodeScope method</div>
+            <h1>Complexity reporting built for serious code review.</h1>
             <p>
-              CodeScope is designed for practical code review. It explains how a file scales, which functions create the most cost, and whether a lower-complexity alternative is available for the same function.
+              CodeScope turns pasted code, ZIP projects, and GitHub folders into a structured complexity report with file summaries, function-level Big-O, hot code, and verified lower-complexity rewrites.
             </p>
           </div>
-          <div className="about-summary">
-            {scope.map(([label, value]) => (
-              <div key={label}>
-                <span>{label}</span>
-                <strong>{value}</strong>
-              </div>
-            ))}
+          <div className="about-command-panel" aria-label="CodeScope report model">
+            <div className="command-topbar">
+              <span />
+              <span />
+              <span />
+            </div>
+            <div className="command-line">
+              <span>codescope</span> analyze --scope functions --report pdf
+            </div>
+            <div className="command-grid">
+              {[
+                ['Time', 'O(n log n)'],
+                ['Space', 'O(n)'],
+                ['Hotspots', '3'],
+                ['Rewrites', 'On request'],
+              ].map(([label, value]) => (
+                <div key={label}>
+                  <span>{label}</span>
+                  <strong>{value}</strong>
+                </div>
+              ))}
+            </div>
           </div>
         </header>
 
-        <section className="section-stack">
-          <div className="section-heading align-left">
-            <div className="eyebrow">Pipeline</div>
-            <h2>From source code to a focused report.</h2>
-            <p>Each result section maps to one job: summarize, locate cost, explain functions, then show verified modified functions when they exist.</p>
+        <section className="about-method-section">
+          <div className="method-heading">
+            <div>
+              <div className="eyebrow">Pipeline</div>
+              <h2>From source to final report.</h2>
+            </div>
+            <p>
+              The analyzer keeps each layer separate so project summaries, file cards, hot code, function rows, and AI rewrites do not conflict.
+            </p>
           </div>
-          <div className="timeline-grid">
-            {pipeline.map(([title, description], index) => (
-              <div key={title} className="premium-card timeline-card">
-                <div className="step-number">{String(index + 1).padStart(2, '0')}</div>
+          <div className="method-board">
+            {pipeline.map(([step, title, description]) => (
+              <div key={step} className="method-card">
+                <span>{step}</span>
                 <h3>{title}</h3>
                 <p>{description}</p>
               </div>
@@ -60,19 +85,17 @@ export default function About() {
           </div>
         </section>
 
-        <section className="section-stack">
-          <div className="section-heading align-left">
+        <section className="about-proof-grid">
+          <div className="proof-panel dark-proof">
             <div className="eyebrow">Report contract</div>
-            <h2>What the interface promises to show.</h2>
+            <h2>Every section has one job.</h2>
+            <p>
+              The interface avoids generic result noise. It focuses on the core CodeScope promise: complexity by file, complexity by function, the hottest code, and modified functions when a lower-complexity rewrite is accepted.
+            </p>
           </div>
-          <div className="scope-grid">
-            {[
-              ['Overall Big-O', 'File-level scalable time and scalable space are shown first, with total allocation only when it adds useful information.'],
-              ['Function table', 'Every detected function keeps its own row with code, direct time, time with calls, and explanation.'],
-              ['Hot code', 'Only the highest-complexity functions are promoted, so lower-cost functions do not crowd the hotspot area.'],
-              ['Modified functions', 'Groq-generated alternatives are loaded on request and displayed below the matching function, not as a separate unrelated block.'],
-            ].map(([title, text]) => (
-              <div key={title} className="scope-card">
+          <div className="proof-list">
+            {principles.map(([title, text]) => (
+              <div key={title} className="proof-item">
                 <h3>{title}</h3>
                 <p>{text}</p>
               </div>
@@ -80,13 +103,31 @@ export default function About() {
           </div>
         </section>
 
-        <section className="reference-panel">
+        <section className="report-contract-panel">
+          <div className="reference-header compact-reference-header">
+            <div>
+              <div className="eyebrow">Result structure</div>
+              <h2>What a CodeScope report contains.</h2>
+            </div>
+            <p>The same structure is used for pasted code, ZIP uploads, and selected GitHub folders.</p>
+          </div>
+          <div className="report-card-grid">
+            {reportCards.map(([title, text]) => (
+              <div key={title} className="report-contract-card">
+                <span>{title}</span>
+                <p>{text}</p>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="reference-panel premium-reference">
           <div className="reference-header">
             <div>
               <div className="eyebrow">Big-O reference</div>
-              <h2>How complexity labels are presented.</h2>
+              <h2>Complexity labels used in reports.</h2>
             </div>
-            <p>Labels are comparison aids for the report; the Big-O notation remains the source of truth.</p>
+            <p>Labels help scanning, but the Big-O notation remains the source of truth.</p>
           </div>
           <div className="table-wrap">
             <table className="reference-table">

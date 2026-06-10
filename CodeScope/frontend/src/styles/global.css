@@ -1646,3 +1646,366 @@ textarea {
 .footer-bottom {
   border-color: rgba(148, 163, 184, 0.22);
 }
+
+.about-page {
+  padding-top: 44px;
+}
+
+.about-premium-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(360px, 0.72fr);
+  gap: 28px;
+  align-items: stretch;
+  margin-bottom: 34px;
+  padding: 34px;
+  border: 1px solid rgba(207, 228, 255, 0.95);
+  border-radius: 8px;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(237, 245, 255, 0.92)),
+    radial-gradient(circle at 92% 12%, rgba(31, 111, 235, 0.15), transparent 18rem);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  position: relative;
+}
+
+.about-premium-hero::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 4px;
+  background: linear-gradient(90deg, var(--primary), #38bdf8, var(--success));
+}
+
+.about-hero-copy {
+  max-width: 760px;
+  align-self: center;
+}
+
+.about-hero-copy h1,
+.method-heading h2,
+.proof-panel h2,
+.report-contract-panel h2 {
+  color: var(--dark);
+  font-size: 36px;
+  line-height: 1.12;
+  font-weight: 900;
+  letter-spacing: 0;
+  margin: 0 0 12px;
+}
+
+.about-hero-copy p,
+.method-heading p,
+.proof-panel p,
+.proof-item p,
+.report-contract-card p {
+  color: var(--gray);
+  font-size: 14px;
+  line-height: 1.75;
+}
+
+.about-command-panel {
+  background:
+    linear-gradient(180deg, #0b1220, #111827);
+  border: 1px solid #22314a;
+  border-radius: 8px;
+  padding: 18px;
+  box-shadow: 0 24px 54px rgba(15, 23, 42, 0.2);
+  color: white;
+}
+
+.command-topbar {
+  display: flex;
+  gap: 7px;
+  margin-bottom: 18px;
+}
+
+.command-topbar span {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: #38bdf8;
+}
+
+.command-topbar span:nth-child(2) {
+  background: #fbbf24;
+}
+
+.command-topbar span:nth-child(3) {
+  background: #34d399;
+}
+
+.command-line {
+  font-family: var(--font-code);
+  color: #dbeafe;
+  font-size: 13px;
+  line-height: 1.65;
+  padding: 13px;
+  border: 1px solid #22314a;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.command-line span {
+  color: #7dd3fc;
+}
+
+.command-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.command-grid div {
+  border: 1px solid #22314a;
+  border-radius: 8px;
+  padding: 13px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.command-grid span,
+.footer-maker-card span,
+.report-contract-card span {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  text-transform: uppercase;
+  margin-bottom: 5px;
+}
+
+.command-grid strong {
+  display: block;
+  font-family: var(--font-code);
+  font-size: 15px;
+  color: white;
+}
+
+.about-method-section,
+.about-proof-grid,
+.report-contract-panel,
+.premium-reference {
+  margin-bottom: 28px;
+}
+
+.method-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: end;
+  gap: 24px;
+  margin-bottom: 16px;
+}
+
+.method-heading p {
+  max-width: 430px;
+  margin: 0;
+}
+
+.method-board {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.method-card {
+  position: relative;
+  min-height: 210px;
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: linear-gradient(180deg, #ffffff, #f8fbff);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.method-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 4px;
+  background: linear-gradient(180deg, var(--primary), #38bdf8);
+}
+
+.method-card span {
+  display: inline-flex;
+  font-family: var(--font-code);
+  font-size: 12px;
+  color: var(--primary);
+  font-weight: 850;
+  margin-bottom: 36px;
+}
+
+.method-card h3,
+.proof-item h3 {
+  font-size: 17px;
+  font-weight: 900;
+  margin-bottom: 8px;
+}
+
+.method-card p {
+  color: var(--gray);
+  font-size: 13px;
+  line-height: 1.68;
+}
+
+.about-proof-grid {
+  display: grid;
+  grid-template-columns: minmax(300px, 0.78fr) minmax(0, 1fr);
+  gap: 18px;
+}
+
+.proof-panel {
+  border-radius: 8px;
+  padding: 26px;
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-lg);
+}
+
+.dark-proof {
+  color: white;
+  background:
+    linear-gradient(135deg, #0b1220, #12243f 64%, #12352f);
+}
+
+.dark-proof h2,
+.dark-proof p {
+  color: white;
+}
+
+.dark-proof p {
+  color: #d7e4f5;
+}
+
+.proof-list {
+  display: grid;
+  gap: 12px;
+}
+
+.proof-item {
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: white;
+  box-shadow: var(--shadow);
+}
+
+.report-contract-panel {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: white;
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+
+.compact-reference-header {
+  border-bottom: 1px solid var(--border);
+}
+
+.report-card-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0;
+}
+
+.report-contract-card {
+  padding: 20px;
+  border-right: 1px solid var(--border);
+  background: linear-gradient(180deg, #ffffff, #fbfdff);
+}
+
+.report-contract-card:last-child {
+  border-right: none;
+}
+
+.report-contract-card span {
+  color: var(--primary);
+}
+
+.premium-reference {
+  box-shadow: var(--shadow-lg);
+}
+
+.footer-grid {
+  grid-template-columns: minmax(280px, 1.45fr) minmax(150px, 0.62fr) minmax(220px, 0.8fr);
+  align-items: start;
+}
+
+.footer-legal {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 12px;
+}
+
+.footer-made-by {
+  color: #d7e4f5;
+}
+
+.footer-made-by strong {
+  color: #ffffff;
+  font-weight: 900;
+  letter-spacing: 0.03em;
+}
+
+.footer-tagline {
+  color: #aab6c7;
+  font-size: 12px;
+}
+
+@media (max-width: 720px) {
+  .about-premium-hero,
+  .about-proof-grid,
+  .method-heading {
+    grid-template-columns: 1fr;
+    display: grid;
+  }
+
+  .about-premium-hero {
+    padding: 22px;
+  }
+
+  .about-hero-copy h1,
+  .method-heading h2,
+  .proof-panel h2,
+  .report-contract-panel h2 {
+    font-size: 30px;
+  }
+
+  .command-grid,
+  .method-board,
+  .report-card-grid,
+  .footer-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .method-card {
+    min-height: auto;
+  }
+
+  .method-card span {
+    margin-bottom: 18px;
+  }
+
+  .report-contract-card {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .report-contract-card:last-child {
+    border-bottom: none;
+  }
+}
+
+@media (min-width: 721px) and (max-width: 1080px) {
+  .about-premium-hero,
+  .about-proof-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .method-board,
+  .report-card-grid,
+  .footer-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
