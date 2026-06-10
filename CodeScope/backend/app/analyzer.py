@@ -280,7 +280,102 @@ class CodeAnalyzer:
             if name not in seen:
                 seen.add(name)
                 names.append(name)
+        for item in self._javascript_synthetic_functions(code, language):
+            name = item.get('name')
+            if name and name not in seen:
+                seen.add(name)
+                names.append(name)
         return names
+
+    def _javascript_synthetic_functions(self, code, language=None):
+        if not self._is_javascript_like(language):
+            return []
+
+        text = str(code or '')
+        if not text:
+            return []
+
+        patterns = [
+            re.compile(
+                r'\.addEventListener\s*\(\s*([\'"])(?P<event>[^\'"]+)\1\s*,\s*'
+                r'(?P<prefix>function\s*(?:[A-Za-z_$][\w$]*)?\s*\([^)]*\)\s*\{)',
+                re.MULTILINE,
+            ),
+            re.compile(
+                r'\.addEventListener\s*\(\s*([\'"])(?P<event>[^\'"]+)\1\s*,\s*'
+                r'(?P<prefix>(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>\s*\{)',
+                re.MULTILINE,
+            ),
+        ]
+
+        items = []
+        used = set()
+        for pattern in patterns:
+            for match in pattern.finditer(text):
+                open_brace = text.find('{', match.start('prefix'), match.end('prefix'))
+                if open_brace < 0:
+                    continue
+                close_brace = self._matching_brace_index(text, open_brace)
+                if close_brace < 0:
+                    continue
+
+                start = text.rfind('\n', 0, match.start()) + 1
+                end = close_brace + 1
+                while end < len(text) and text[end].isspace():
+                    end += 1
+                while end < len(text) and text[end] in ');':
+                    end += 1
+
+                event = re.sub(r'\W+', '_', match.group('event').strip().lower()).strip('_') or 'event'
+                base_name = f'{event}_handler'
+                name = base_name
+                suffix = 2
+                while name in used:
+                    name = f'{base_name}_{suffix}'
+                    suffix += 1
+                used.add(name)
+
+                items.append({
+                    'name': name,
+                    'line': text.count('\n', 0, start) + 1,
+                    'snippet': text[start:end].strip(),
+                    'body': self._brace_code_to_indented_lines(text[open_brace + 1:close_brace]),
+                })
+
+        return items
+
+    def _javascript_synthetic_function(self, code, func_name, language=None):
+        for item in self._javascript_synthetic_functions(code, language):
+            if item.get('name') == func_name:
+                return item
+        return None
+
+    def _matching_brace_index(self, code, open_brace):
+        if open_brace < 0 or open_brace >= len(code) or code[open_brace] != '{':
+            return -1
+        depth = 0
+        quote = None
+        escape = False
+        for index in range(open_brace, len(code)):
+            char = code[index]
+            if quote:
+                if escape:
+                    escape = False
+                elif char == '\\':
+                    escape = True
+                elif char == quote:
+                    quote = None
+                continue
+            if char in ('"', "'", '`'):
+                quote = char
+                continue
+            if char == '{':
+                depth += 1
+            elif char == '}':
+                depth -= 1
+                if depth == 0:
+                    return index
+        return -1
 
     def _python_function_nodes(self, code):
         text = str(code or '')
@@ -1442,6 +1537,12 @@ class CodeAnalyzer:
                 self._function_line_cache[cache_key] = line_number
                 return line_number
 
+        synthetic = self._javascript_synthetic_function(code, func_name, language)
+        if synthetic:
+            line_number = synthetic.get('line') or 1
+            self._function_line_cache[cache_key] = line_number
+            return line_number
+
         for line_number, line in enumerate(code.splitlines(), 1):
             for match in re.finditer(self._function_def_regex(), line):
                 if match.group(1) == func_name:
@@ -1473,6 +1574,15 @@ class CodeAnalyzer:
                         snippet = '\n'.join(snippet.splitlines()[:max_lines]).strip()
                         self._function_snippet_cache[cache_key] = snippet
                         return snippet
+
+        if self._is_javascript_like(language):
+            for item in self._javascript_synthetic_functions(code, language):
+                if item.get('line') == start_line and item.get('snippet'):
+                    snippet = item['snippet']
+                    if max_lines is not None:
+                        snippet = '\n'.join(snippet.splitlines()[:max_lines]).strip()
+                    self._function_snippet_cache[cache_key] = snippet
+                    return snippet
 
         lines = code.splitlines()
         if not lines:
@@ -4059,6 +4169,11 @@ class CodeAnalyzer:
             return body
 
         if language in ('java', 'cpp', 'c', 'javascript', 'typescript'):
+            synthetic = self._javascript_synthetic_function(code, func_name, language)
+            if synthetic:
+                body = synthetic.get('body') or ''
+                self._function_body_cache[cache_key] = body
+                return body
             signature = re.search(
                 rf'(?:def\s+|function\s*\*?\s+|(?:const|let|var)\s+|(?:(?:public|private|protected)\s+)?(?:static\s+)?'
                 rf'(?:void|int|long|double|float|boolean|bool|char|String|List[\w<>\[\], ?]*|'
@@ -4423,6 +4538,8 @@ class CodeAnalyzer:
             bound = args[0] if len(args) == 1 else args[1] if len(args) >= 2 else ''
             power = self._polynomial_bound_power(bound)
             if power is not None:
+                if power <= 0:
+                    return ('const', 0)
                 return ('n', power)
         js_match = re.search(r'for\s*\([^;]*;([^;]*);[^)]*\)', header)
         if js_match:
@@ -4432,6 +4549,8 @@ class CodeAnalyzer:
                 bound = self._condition_bound_expression(condition, control)
                 power = self._polynomial_bound_power(bound)
                 if power is not None:
+                    if power <= 0:
+                        return ('const', 0)
                     return ('n', power)
         return ('n', 1)
 
@@ -4749,7 +4868,8 @@ class CodeAnalyzer:
         }
         fractional = re.fullmatch(r'O\(n\^([0-9]+(?:\.[0-9]+)?)\)', s)
         if fractional:
-            return ('n', float(fractional.group(1)))
+            exponent = float(fractional.group(1))
+            return ('const', 0) if exponent <= 0 else ('n', exponent)
         return mapping.get(s, ('n', 1))
 
     def _tuple_to_string(self, c):
@@ -4778,6 +4898,7 @@ class CodeAnalyzer:
         if type_c == 'n':
             if isinstance(pow_c, float) and pow_c.is_integer():
                 pow_c = int(pow_c)
+            if pow_c <= 0: return 'O(1)'
             if pow_c == 1: return 'O(n)'
             if pow_c == 2: return 'O(n²)'
             if pow_c == 3: return 'O(n³)'

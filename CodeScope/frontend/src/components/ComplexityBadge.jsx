@@ -80,9 +80,16 @@ const classifyComplexity = (complexity = '') => {
   };
 };
 
-export default function ComplexityBadge({ complexity }) {
+const displayComplexity = (complexity = '') => {
   const rawValue = complexity || 'O(1)';
-  const value = normalizeComplexity(rawValue).includes('unknown') ? 'O(1)' : rawValue;
+  const normalized = normalizeComplexity(rawValue);
+  if (!normalized || normalized.includes('unknown')) return 'O(1)';
+  if (/^o\([nv]\^0(?:\.0+)?\)$/.test(normalized)) return 'O(1)';
+  return rawValue;
+};
+
+export default function ComplexityBadge({ complexity }) {
+  const value = displayComplexity(complexity);
   const { label, style } = classifyComplexity(value);
 
   return (

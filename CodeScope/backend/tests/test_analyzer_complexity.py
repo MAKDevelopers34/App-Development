@@ -3298,6 +3298,37 @@ class Front {
                 self.assertIn("count", details)
                 self.assertEqual(details["count"]["own_complexity"], "O(n)")
 
+    def test_javascript_event_callback_is_reported_as_function_row(self):
+        code = """const hex = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, "A", "B", "C", "D", "E", "F"];
+const btn = document.getElementById("btn");
+const color = document.querySelector(".color");
+
+btn.addEventListener("click", function () {
+  let hexColor = "#";
+  for (let i = 0; i < 6; i++) {
+    hexColor += hex[getRandomNumber()];
+  }
+  color.textContent = hexColor;
+  document.body.style.backgroundColor = hexColor;
+});
+
+function getRandomNumber() {
+  return Math.floor(Math.random() * hex.length);
+}
+"""
+
+        result = self.analyzer.analyze(code, "hex.js")
+        details = {item["function"]: item for item in result["function_complexity_details"]}
+
+        self.assertEqual(result["time_complexity"], "O(1)")
+        self.assertEqual(result["space_complexity"], "O(1)")
+        self.assertEqual(result["overall_complexity"]["time"], "O(1)")
+        self.assertIn("click_handler", details)
+        self.assertIn("getRandomNumber", details)
+        self.assertEqual(details["click_handler"]["own_complexity"], "O(1)")
+        self.assertIn("addEventListener", details["click_handler"]["snippet"])
+        self.assertNotEqual(details["click_handler"]["own_complexity"], "O(n^0)")
+
     def test_typescript_recursive_half_slice_counts_copy_work(self):
         code = """function recursiveSlice(arr: number[]): number {
     if (arr.length <= 1) return 0;

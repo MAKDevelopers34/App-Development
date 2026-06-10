@@ -232,6 +232,14 @@ const normalizeComplexity = (value = '') => String(value)
   .replace(/\u00c3\u2014/g, '*')
   .replace(/\u00c2/g, '');
 
+const displayComplexityValue = (value = '') => {
+  const rawValue = value || 'O(1)';
+  const label = normalizeComplexity(rawValue);
+  if (!label || label.includes('unknown')) return 'O(1)';
+  if (/^o\([nv]\^0(?:\.0+)?\)$/.test(label)) return 'O(1)';
+  return rawValue;
+};
+
 const complexityRank = (value = '') => {
   const label = normalizeComplexity(value);
   if (!label || label.includes('unknown')) return 0;
@@ -251,6 +259,18 @@ const complexityRank = (value = '') => {
   if (label.includes('sqrt')) return 6;
   if (label.includes('log')) return 3;
   return label.includes('n') ? 10 : 0;
+};
+
+const highestComplexityValue = (values = [], fallback = 'O(1)') => {
+  const cleaned = values
+    .map(value => displayComplexityValue(value))
+    .filter(value => value && !normalizeComplexity(value).includes('unknown'));
+
+  if (cleaned.length === 0) return fallback;
+
+  return cleaned.reduce((best, value) => (
+    complexityRank(value) > complexityRank(best) ? value : best
+  ), cleaned[0]);
 };
 
 const aliasesFor = (name = '') => {
@@ -435,6 +455,48 @@ const functionRowsFor = (result) => {
       calls: detail.calls || explanation.calls || [],
     });
   });
+};
+
+const functionSummaryComplexity = (functions = []) => {
+  if (!Array.isArray(functions) || functions.length === 0) {
+    return { time: null, space: null };
+  }
+
+  const timeValues = [];
+  const spaceValues = [];
+  functions.forEach(fn => {
+    timeValues.push(fn.effective_complexity, fn.own_complexity, fn.complexity);
+    spaceValues.push(fn.effective_space_complexity, fn.space_complexity, fn.own_space_complexity);
+  });
+
+  return {
+    time: highestComplexityValue(timeValues),
+    space: highestComplexityValue(spaceValues),
+  };
+};
+
+const fileDisplayComplexity = (result) => {
+  const fromFunctions = functionSummaryComplexity(functionRowsFor(result));
+  const overall = result?.overall_complexity || {};
+  return {
+    time: fromFunctions.time || displayComplexityValue(overall.scalable_time || overall.time || result?.time_complexity || 'O(1)'),
+    space: fromFunctions.space || displayComplexityValue(overall.scalable_space || overall.space || result?.space_complexity || 'O(1)'),
+  };
+};
+
+const projectDisplayComplexity = (files = [], projectSummary = {}) => {
+  const fileTimes = [];
+  const fileSpaces = [];
+  files.forEach(file => {
+    const complexity = fileDisplayComplexity(file?.result || {});
+    fileTimes.push(complexity.time);
+    fileSpaces.push(complexity.space);
+  });
+
+  return {
+    time: highestComplexityValue(fileTimes, displayComplexityValue(projectSummary.worst_time_complexity || 'O(1)')),
+    space: highestComplexityValue(fileSpaces, displayComplexityValue(projectSummary.worst_space_complexity || 'O(1)')),
+  };
 };
 
 const hotspotsFor = (result, functionRows) => {
@@ -666,12 +728,14 @@ function ResultOverview({ functions, hotspots, hasAiSolutions, modifiedChecked, 
   );
 }
 
-function ComplexitySummary({ result, filename }) {
+function ComplexitySummary({ result, filename, functions = [] }) {
   const overall = result?.overall_complexity || {};
   const allocation = result?.memory_allocation_analysis || {};
-  const time = overall.scalable_time || overall.time || result?.time_complexity || 'O(1)';
-  const space = overall.scalable_space || overall.space || result?.space_complexity || 'O(1)';
-  const totalAllocatedSpace = overall.total_allocation || allocation.total_allocated_space;
+  const fromFunctions = functionSummaryComplexity(functions);
+  const time = fromFunctions.time || displayComplexityValue(overall.scalable_time || overall.time || result?.time_complexity || 'O(1)');
+  const space = fromFunctions.space || displayComplexityValue(overall.scalable_space || overall.space || result?.space_complexity || 'O(1)');
+  const rawTotalAllocatedSpace = overall.total_allocation || allocation.total_allocated_space;
+  const totalAllocatedSpace = rawTotalAllocatedSpace ? displayComplexityValue(rawTotalAllocatedSpace) : '';
   const showTotalAllocated = totalAllocatedSpace && totalAllocatedSpace !== space;
 
   return (
@@ -1232,6 +1296,7 @@ export default function Results() {
         <ComplexitySummary
           result={fileResult}
           filename={safeFilename}
+          functions={functionsWithAiSolutions}
         />
         <HotCodeSection
           hotspots={hotspots}
@@ -1266,6 +1331,7 @@ export default function Results() {
   const renderMultiResult = () => {
     const files = Array.isArray(result?.files) ? result.files : [];
     const projectSummary = result?.project_summary || {};
+    const projectComplexity = projectDisplayComplexity(files, projectSummary);
     const selected = files[selectedFile] || files[0];
     const selectedFilename = selected?.filename || `File ${selectedFile + 1}`;
     const selectedStateKey = fileStateKey(selectedFilename, selectedFile);
@@ -1289,8 +1355,8 @@ export default function Results() {
             {[
               ['Files', result?.total_files || files.length || 0],
               ['Lines', result?.total_lines || 0],
-              ['Worst Time', projectSummary.worst_time_complexity || 'O(1)'],
-              ['Worst Space', projectSummary.worst_space_complexity || 'O(1)'],
+              ['Worst Time', projectComplexity.time],
+              ['Worst Space', projectComplexity.space],
               ['Average Rating', `${result?.average_rating || 0}/10`],
             ].map(([label, value]) => (
               <div key={label} className="project-stat">
