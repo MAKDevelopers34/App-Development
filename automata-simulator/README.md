@@ -36,10 +36,21 @@ flutter build web --release --base-href /automata-simulator/
 
 ## Deploy
 
-The GitHub Actions workflow in `.github/workflows/deploy.yml` builds Flutter Web with:
+This project is deployed from the existing parent repository `App-Development`.
+The active GitHub Actions workflow should live at:
 
 ```powershell
-flutter build web --release --base-href /automata-simulator/
+D:\App-Development\.github\workflows\automata-simulator.yml
 ```
 
-It then deploys the result to GitHub Pages and uploads an Android APK artifact from the same source tree.
+It builds Flutter Web with:
+
+```powershell
+flutter build web --release --base-href /App-Development/automata-simulator/
+```
+
+The deployed URL is:
+
+```text
+https://MAKDevelopers34.github.io/App-Development/automata-simulator/
+```
