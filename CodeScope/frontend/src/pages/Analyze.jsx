@@ -471,16 +471,18 @@ export default function Analyze() {
 
   const tabStyle = (tab) => ({
     flex: 1,
-    padding: '10px 12px',
+    padding: '12px 14px',
     border: 'none',
     borderRadius: '8px',
     cursor: 'pointer',
     fontSize: '14px',
-    fontWeight: '500',
+    fontWeight: '800',
     fontFamily: 'var(--font)',
-    transition: 'all 0.2s',
-    background: activeTab === tab ? 'var(--primary)' : 'transparent',
+    transition: 'transform 0.18s ease, box-shadow 0.18s ease, background 0.18s ease, color 0.18s ease',
+    background: activeTab === tab ? 'linear-gradient(135deg, var(--primary), #2f80ff)' : 'transparent',
     color: activeTab === tab ? 'white' : 'var(--gray)',
+    boxShadow: activeTab === tab ? '0 14px 30px rgba(31, 111, 235, 0.22)' : 'none',
+    transform: activeTab === tab ? 'translateY(-1px)' : 'translateY(0)',
   });
 
   const codeLines = code.trim() ? code.replace(/\r\n/g, '\n').split('\n').length : 0;

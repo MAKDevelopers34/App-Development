@@ -20,24 +20,25 @@ from reportlab.platypus import (
 )
 
 
-PRIMARY = HexColor('#2563eb')
-PRIMARY_DARK = HexColor('#1d4ed8')
-SUCCESS = HexColor('#16a34a')
-WARNING = HexColor('#d97706')
-DANGER = HexColor('#dc2626')
-DARK = HexColor('#111827')
-GRAY = HexColor('#5f6675')
-MUTED = HexColor('#94a3b8')
-LIGHT_GRAY = HexColor('#f8fafc')
-PRIMARY_LIGHT = HexColor('#eff6ff')
-SUCCESS_LIGHT = HexColor('#f0fdf4')
-WARNING_LIGHT = HexColor('#fffbeb')
-DANGER_LIGHT = HexColor('#fef2f2')
-BORDER = HexColor('#d9e0ea')
-CODE_BG = HexColor('#111827')
-CODE_SUCCESS_BG = HexColor('#102016')
+PRIMARY = HexColor('#1f6feb')
+PRIMARY_DARK = HexColor('#174ea6')
+SUCCESS = HexColor('#0f9f6e')
+WARNING = HexColor('#c87900')
+DANGER = HexColor('#c92a2a')
+DARK = HexColor('#0b1220')
+INK = HexColor('#172033')
+GRAY = HexColor('#526174')
+MUTED = HexColor('#8fa0b8')
+LIGHT_GRAY = HexColor('#f3f6fb')
+PRIMARY_LIGHT = HexColor('#edf5ff')
+SUCCESS_LIGHT = HexColor('#ecfdf5')
+WARNING_LIGHT = HexColor('#fff7e6')
+DANGER_LIGHT = HexColor('#fff1f1')
+BORDER = HexColor('#d8e1ee')
+CODE_BG = HexColor('#0b1220')
+CODE_SUCCESS_BG = HexColor('#0b2016')
 WHITE = HexColor('#ffffff')
-CODE_BORDER = HexColor('#1f2937')
+CODE_BORDER = HexColor('#22314a')
 CODE_SUCCESS_BORDER = HexColor('#14532d')
 CODE_CHUNK_LINES = 36
 
@@ -128,6 +129,53 @@ def _build_styles():
             fontName='Helvetica-Bold',
             spaceAfter=5,
         ),
+        'ReportTitle': ParagraphStyle(
+            'CodeScopeReportTitle',
+            parent=base['Title'],
+            fontSize=24,
+            leading=28,
+            textColor=WHITE,
+            alignment=TA_LEFT,
+            fontName='Helvetica-Bold',
+            spaceAfter=4,
+        ),
+        'ReportKicker': ParagraphStyle(
+            'CodeScopeReportKicker',
+            parent=base['Normal'],
+            fontSize=7.8,
+            leading=10,
+            textColor=HexColor('#bfdbfe'),
+            fontName='Helvetica-Bold',
+            alignment=TA_LEFT,
+            spaceAfter=3,
+        ),
+        'ReportMeta': ParagraphStyle(
+            'CodeScopeReportMeta',
+            parent=base['Normal'],
+            fontSize=8,
+            leading=11,
+            textColor=HexColor('#d7e4f5'),
+            alignment=TA_LEFT,
+            spaceAfter=0,
+        ),
+        'MetricLabel': ParagraphStyle(
+            'CodeScopeMetricLabel',
+            parent=base['Normal'],
+            fontSize=6.8,
+            leading=8.5,
+            textColor=GRAY,
+            fontName='Helvetica-Bold',
+            alignment=TA_LEFT,
+        ),
+        'MetricValue': ParagraphStyle(
+            'CodeScopeMetricValue',
+            parent=base['Normal'],
+            fontSize=13.5,
+            leading=16,
+            textColor=INK,
+            fontName='Helvetica-Bold',
+            alignment=TA_LEFT,
+        ),
         'Subtitle': ParagraphStyle(
             'CodeScopeSubtitle',
             parent=base['Normal'],
@@ -140,11 +188,11 @@ def _build_styles():
         'Section': ParagraphStyle(
             'CodeScopeSection',
             parent=base['Heading2'],
-            fontSize=13.5,
-            leading=17,
-            textColor=DARK,
+            fontSize=14,
+            leading=17.5,
+            textColor=INK,
             fontName='Helvetica-Bold',
-            spaceBefore=13,
+            spaceBefore=14,
             spaceAfter=7,
         ),
         'Subsection': ParagraphStyle(
@@ -152,7 +200,7 @@ def _build_styles():
             parent=base['Heading3'],
             fontSize=10.5,
             leading=14,
-            textColor=DARK,
+            textColor=INK,
             fontName='Helvetica-Bold',
             spaceBefore=9,
             spaceAfter=5,
@@ -162,7 +210,7 @@ def _build_styles():
             parent=base['Normal'],
             fontSize=8.7,
             leading=12.4,
-            textColor=DARK,
+            textColor=INK,
             spaceAfter=5,
         ),
         'Small': ParagraphStyle(
@@ -178,7 +226,7 @@ def _build_styles():
             parent=base['Normal'],
             fontSize=7.5,
             leading=9.6,
-            textColor=DARK,
+            textColor=INK,
             alignment=TA_LEFT,
         ),
         'TableHead': ParagraphStyle(
@@ -223,12 +271,17 @@ def _build_styles():
 def _draw_footer(canvas, doc):
     canvas.saveState()
     y = 0.38 * inch
-    canvas.setStrokeColor(BORDER)
-    canvas.setLineWidth(0.4)
-    canvas.line(doc.leftMargin, y + 10, A4[0] - doc.rightMargin, y + 10)
+    canvas.setStrokeColor(HexColor('#cfe4ff'))
+    canvas.setLineWidth(0.6)
+    canvas.line(doc.leftMargin, y + 12, A4[0] - doc.rightMargin, y + 12)
+    canvas.setStrokeColor(SUCCESS)
+    canvas.setLineWidth(1.2)
+    canvas.line(doc.leftMargin, y + 12, doc.leftMargin + 1.05 * inch, y + 12)
     canvas.setFillColor(GRAY)
     canvas.setFont('Helvetica', 7.5)
     canvas.drawString(doc.leftMargin, y, 'CodeScope Complexity Report')
+    canvas.setFillColor(PRIMARY)
+    canvas.setFont('Helvetica-Bold', 7.5)
     canvas.drawRightString(A4[0] - doc.rightMargin, y, f'Page {doc.page}')
     canvas.restoreState()
 
@@ -240,8 +293,6 @@ def _add_report_header(elements, report_type, analysis_data, styles):
         'github': 'GitHub project complexity report',
     }.get(report_type, 'Complexity report')
 
-    elements.append(Paragraph('CodeScope', styles['Title']))
-    elements.append(Paragraph(_e(label), styles['Subtitle']))
     generated = datetime.datetime.now().strftime('%B %d, %Y at %I:%M %p')
 
     context = []
@@ -253,14 +304,34 @@ def _add_report_header(elements, report_type, analysis_data, styles):
         context.append(f"Branch: {_pdf_text(analysis_data.get('branch'))}")
     context.append(f'Generated on {generated}')
 
-    elements.append(Paragraph(_e(' | '.join(context)), styles['Subtitle']))
-    elements.append(Spacer(1, 0.1 * inch))
+    header = Table(
+        [[
+            [
+                Paragraph('CODESCOPE ANALYSIS REPORT', styles['ReportKicker']),
+                Paragraph('CodeScope', styles['ReportTitle']),
+                Paragraph(_e(label), styles['ReportMeta']),
+            ],
+            Paragraph(_e(' | '.join(context)), styles['ReportMeta']),
+        ]],
+        colWidths=[3.25 * inch, 3.3 * inch],
+        hAlign='LEFT',
+    )
+    header.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, -1), DARK),
+        ('BOX', (0, 0), (-1, -1), 0.8, HexColor('#22314a')),
+        ('LEFTPADDING', (0, 0), (-1, -1), 18),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 18),
+        ('TOPPADDING', (0, 0), (-1, -1), 16),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 16),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+    ]))
+    elements.append(header)
+    elements.append(Spacer(1, 0.18 * inch))
 
 
 def _add_project_overview(elements, analysis_data, report_type, styles):
     project_summary = analysis_data.get('project_summary') or {}
-    rows = [
-        ['Metric', 'Value'],
+    metrics = [
         ['Source', 'GitHub URL' if report_type == 'github' else 'ZIP archive'],
         ['Files analyzed', analysis_data.get('total_files', len(analysis_data.get('files') or []))],
         ['Lines analyzed', analysis_data.get('total_lines', 0)],
@@ -268,17 +339,18 @@ def _add_project_overview(elements, analysis_data, report_type, styles):
         ['Average rating', f"{analysis_data.get('average_rating', 0)}/10"],
     ]
     if project_summary.get('worst_time_complexity'):
-        rows.append(['Worst Big O time', project_summary.get('worst_time_complexity')])
+        metrics.append(['Worst Big O time', _complexity_html(project_summary.get('worst_time_complexity'))])
     if project_summary.get('worst_space_complexity'):
-        rows.append(['Worst Big O space', project_summary.get('worst_space_complexity')])
+        metrics.append(['Worst Big O space', _complexity_html(project_summary.get('worst_space_complexity'))])
     if project_summary.get('hotspot_count') is not None:
-        rows.append(['Hot code sections', project_summary.get('hotspot_count')])
+        metrics.append(['Hot code sections', project_summary.get('hotspot_count')])
 
     elements.append(Paragraph('Project Overview', styles['Section']))
-    elements.append(_simple_table(rows, [2.2 * inch, 4.35 * inch], styles))
+    elements.append(_metric_cards(metrics, styles, columns=4))
 
     summary_text = project_summary.get('summary')
     if summary_text:
+        elements.append(Spacer(1, 0.09 * inch))
         elements.append(Paragraph(_e(summary_text), styles['Body']))
     elements.append(Spacer(1, 0.08 * inch))
 
@@ -404,17 +476,16 @@ def _file_metrics_table(result, styles):
     total_allocation = overall.get('total_allocation') or allocation.get('total_allocated_space') or reported_space
     rating = result.get('rating', 0)
 
-    rows = [
-        ['Metric', 'Value'],
+    metrics = [
         ['Language', str(result.get('language', 'unknown')).upper()],
         ['Lines of code', result.get('lines_of_code', 0)],
         ['Big O time', _complexity_html(_overall_time(result))],
         ['Big O space', _complexity_html(reported_space)],
-        ['Peak live auxiliary memory', peak_space],
-        ['Total allocated/copied memory', total_allocation],
+        ['Peak memory', peak_space],
+        ['Total allocated', total_allocation],
         ['Performance rating', f'{rating}/10'],
     ]
-    return _simple_table(rows, [2.25 * inch, 4.3 * inch], styles)
+    return _metric_cards(metrics, styles, columns=4)
 
 
 def _add_explanation_summary(elements, result, styles):
@@ -591,6 +662,40 @@ def _simple_table(rows, col_widths, styles, header_color=PRIMARY):
     return _styled_table(rows, col_widths, styles, header_color=header_color)
 
 
+def _metric_cards(metrics, styles, columns=3):
+    metrics = list(metrics or [])
+    if not metrics:
+        return Spacer(1, 0)
+
+    columns = max(1, min(columns, len(metrics)))
+    col_width = 6.55 * inch / columns
+    rows = []
+    for index in range(0, len(metrics), columns):
+        row = []
+        for label, value in metrics[index:index + columns]:
+            row.append([
+                Paragraph(_e(label).upper(), styles['MetricLabel']),
+                Paragraph(_cell_html(value), styles['MetricValue']),
+            ])
+        while len(row) < columns:
+            row.append('')
+        rows.append(row)
+
+    table = Table(rows, colWidths=[col_width] * columns, hAlign='LEFT')
+    table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, -1), WHITE),
+        ('BOX', (0, 0), (-1, -1), 0.45, BORDER),
+        ('INNERGRID', (0, 0), (-1, -1), 0.35, BORDER),
+        ('LEFTPADDING', (0, 0), (-1, -1), 10),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 10),
+        ('TOPPADDING', (0, 0), (-1, -1), 9),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 9),
+        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+        ('ROWBACKGROUNDS', (0, 0), (-1, -1), [WHITE, HexColor('#fbfdff')]),
+    ]))
+    return table
+
+
 def _styled_table(rows, col_widths, styles, header_color=PRIMARY, font_size=7.6):
     converted = []
     for row_index, row in enumerate(rows):
@@ -607,12 +712,14 @@ def _styled_table(rows, col_widths, styles, header_color=PRIMARY, font_size=7.6)
         ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
         ('FONTSIZE', (0, 0), (-1, -1), font_size),
         ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [WHITE, LIGHT_GRAY]),
-        ('GRID', (0, 0), (-1, -1), 0.35, BORDER),
-        ('LEFTPADDING', (0, 0), (-1, -1), 6),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 6),
-        ('TOPPADDING', (0, 0), (-1, -1), 5),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [WHITE, HexColor('#fbfdff')]),
+        ('LINEBELOW', (0, 0), (-1, 0), 0.7, PRIMARY_DARK),
+        ('INNERGRID', (0, 1), (-1, -1), 0.25, BORDER),
+        ('BOX', (0, 0), (-1, -1), 0.45, BORDER),
+        ('LEFTPADDING', (0, 0), (-1, -1), 7),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 7),
+        ('TOPPADDING', (0, 0), (-1, -1), 6),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
     ]))
     return table
 
