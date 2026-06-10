@@ -1,0 +1,56 @@
+name: Deploy Automata Simulator
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "automata-simulator/**"
+      - ".github/workflows/automata-simulator.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: automata-simulator
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - run: flutter pub get
+
+      - run: flutter build web --release --base-href /App-Development/automata-simulator/
+
+      - name: Put app in subfolder
+        run: |
+          mkdir -p ../pages/automata-simulator
+          cp -r build/web/* ../pages/automata-simulator/
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: pages
+
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}automata-simulator/
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
