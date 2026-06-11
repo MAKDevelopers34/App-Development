@@ -8,6 +8,7 @@ on:
       - electric-bus-tracker/backend/**
       - electric-bus-tracker/dbDDL.sql
       - electric-bus-tracker/dbDML.sql
+      - electric-bus-tracker/aws/github-deploy-policy.json
       - .github/workflows/electric-bus-tracker-backend.yml
   workflow_dispatch:
 

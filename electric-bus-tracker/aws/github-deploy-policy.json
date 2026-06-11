@@ -18,12 +18,32 @@
       "Action": [
         "s3:PutObject",
         "s3:GetObject",
-        "s3:ListBucket"
+        "s3:ListBucket",
+        "s3:GetBucketLocation"
       ],
       "Resource": [
         "arn:aws:s3:::electric-bus-tracker-eb-644019536118-ap-south-1",
         "arn:aws:s3:::electric-bus-tracker-eb-644019536118-ap-south-1/*"
       ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "s3:CreateBucket",
+        "s3:ListBucket",
+        "s3:GetBucketLocation"
+      ],
+      "Resource": "arn:aws:s3:::elasticbeanstalk-ap-south-1-644019536118"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:GetObject",
+        "s3:PutObjectAcl",
+        "s3:GetObjectAcl"
+      ],
+      "Resource": "arn:aws:s3:::elasticbeanstalk-ap-south-1-644019536118/*"
     }
   ]
 }
