@@ -1,179 +1,131 @@
-const BusLocation = require('../models/BusLocation');
-const { publishLocation } = require('../config/ably');
+const {
+  callProcedure,
+  firstResultSet
+} = require('../config/database');
+const { formatLocation } = require('../utils/formatters');
 
 const updateLocation = async (req, res) => {
   try {
-    const { busId, routeId, latitude, longitude, speed } = req.body;
-    const driverId = req.user._id;
+    const {
+      busId,
+      routeId,
+      dutyId,
+      latitude,
+      longitude,
+      speed
+    } = req.body;
 
-    if (!busId || !routeId || !latitude || !longitude) {
-      return res.status(400).json({ 
-        message: 'busId, routeId, latitude and longitude are required' 
+    if (!busId || !routeId || latitude == null || longitude == null) {
+      return res.status(400).json({
+        message: 'busId, routeId, latitude and longitude are required'
       });
     }
 
-    const locationData = {
-      busId,
-      driverId,
-      routeId,
-      location: { latitude, longitude },
-      speed: speed || 0,
-      timestamp: new Date()
-    };
+    const result = await callProcedure('sp_update_bus_location', [
+      req.user.userId,
+      Number(busId),
+      Number(routeId),
+      dutyId ? Number(dutyId) : null,
+      Number(latitude),
+      Number(longitude),
+      Number(speed || 0)
+    ]);
+    const created = firstResultSet(result)[0];
 
-    await BusLocation.findOneAndUpdate(
-      { busId },
-      locationData,
-      { upsert: true, new: true }
-    );
-
-    await publishLocation(routeId, {
-      busId,
-      driverId: driverId.toString(),
-      routeId,
-      latitude,
-      longitude,
-      speed: speed || 0,
-      timestamp: new Date()
-    });
-
-    res.json({
+    return res.json({
       success: true,
-      message: 'Location updated and published',
-      data: locationData
+      message: 'Location updated',
+      locationId: created?.location_id
     });
-
   } catch (error) {
-    res.status(500).json({ 
-      message: 'Server error', 
-      error: error.message 
+    return res.status(500).json({
+      message: 'Server error',
+      error: error.message
     });
   }
 };
 
 const getActiveBuses = async (req, res) => {
   try {
-    const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+    const result = await callProcedure('sp_get_active_buses');
+    const buses = firstResultSet(result).map(formatLocation);
 
-    const activeBuses = await BusLocation.find({
-      isActive: true,
-      timestamp: { $gte: fiveMinutesAgo }
-    }).populate('driverId', 'username profileInfo');
-
-    res.json({
+    return res.json({
       success: true,
-      count: activeBuses.length,
-      buses: activeBuses
+      count: buses.length,
+      buses
     });
-
   } catch (error) {
-    res.status(500).json({ message: 'Server error' });
+    return res.status(500).json({
+      message: 'Server error',
+      error: error.message
+    });
   }
 };
 
 const getBusesByRoute = async (req, res) => {
   try {
-    const { routeId } = req.params;
-    const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+    const routeId = Number(req.params.routeId);
+    const result = await callProcedure('sp_get_buses_by_route', [routeId]);
+    const buses = firstResultSet(result).map(formatLocation);
 
-    const buses = await BusLocation.find({
-      routeId,
-      isActive: true,
-      timestamp: { $gte: fiveMinutesAgo }
-    });
-
-    res.json({
+    return res.json({
       success: true,
       count: buses.length,
       buses
     });
-
   } catch (error) {
-    res.status(500).json({ message: 'Server error' });
+    return res.status(500).json({
+      message: 'Server error',
+      error: error.message
+    });
   }
 };
 
 const startDuty = async (req, res) => {
   try {
-    const { busId, routeId } = req.body;
-    const driverId = req.user._id;
+    const { dutyId } = req.body;
+    const result = await callProcedure('sp_start_duty', [
+      req.user.userId,
+      Number(dutyId)
+    ]);
+    const affected = firstResultSet(result)[0]?.affected_rows || 0;
 
-    await BusLocation.findOneAndUpdate(
-      { busId },
-      {
-        busId,
-        driverId,
-        routeId,
-        isActive: true,
-        location: { latitude: 0, longitude: 0 },
-        timestamp: new Date()
-      },
-      { upsert: true, new: true }
-    );
-
-    await publishLocation(routeId, {
-      busId,
-      driverId: driverId.toString(),
-      routeId,
-      status: 'duty-started',
-      timestamp: new Date()
+    return res.json({
+      success: affected > 0,
+      message: affected > 0
+        ? 'Duty started successfully'
+        : 'Duty could not be started'
     });
-
-    res.json({
-      success: true,
-      message: 'Duty started successfully'
-    });
-
   } catch (error) {
-    res.status(500).json({ message: 'Server error' });
+    return res.status(500).json({
+      message: 'Server error',
+      error: error.message
+    });
   }
 };
 
 const endDuty = async (req, res) => {
   try {
-    const { busId, routeId } = req.body;
+    const { dutyId } = req.body;
+    const result = await callProcedure('sp_complete_duty', [
+      req.user.userId,
+      Number(dutyId),
+      'Completed from GPS endpoint'
+    ]);
+    const affected = firstResultSet(result)[0]?.affected_rows || 0;
 
-    await BusLocation.findOneAndUpdate(
-      { busId },
-      { isActive: false, timestamp: new Date() }
-    );
-
-    await publishLocation(routeId, {
-      busId,
-      status: 'duty-ended',
-      timestamp: new Date()
+    return res.json({
+      success: affected > 0,
+      message: affected > 0
+        ? 'Duty ended successfully'
+        : 'Duty could not be ended'
     });
-
-    res.json({
-      success: true,
-      message: 'Duty ended successfully'
-    });
-
   } catch (error) {
-    res.status(500).json({ message: 'Server error' });
-  }
-};
-
-const getAblyToken = async (req, res) => {
-  try {
-    const Ably = require('ably');
-    const client = new Ably.Rest(process.env.ABLY_API_KEY);
-
-    const tokenParams = {
-      clientId: req.user._id.toString()
-    };
-
-    client.auth.createTokenRequest(tokenParams, (err, tokenRequest) => {
-      if (err) {
-        return res.status(500).json({ 
-          message: 'Error creating Ably token' 
-        });
-      }
-      res.json({ success: true, tokenRequest });
+    return res.status(500).json({
+      message: 'Server error',
+      error: error.message
     });
-
-  } catch (error) {
-    res.status(500).json({ message: 'Server error' });
   }
 };
 
@@ -182,6 +134,5 @@ module.exports = {
   getActiveBuses,
   getBusesByRoute,
   startDuty,
-  endDuty,
-  getAblyToken
+  endDuty
 };

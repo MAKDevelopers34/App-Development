@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import '../../../core/theme/app_theme.dart';
@@ -16,6 +17,7 @@ class _TodayDutyScreenState extends State<TodayDutyScreen> {
   bool _isLoading = true;
   bool _isStarting = false;
   bool _isEnding = false;
+  StreamSubscription<Position>? _locationSubscription;
 
   @override
   void initState() {
@@ -23,17 +25,92 @@ class _TodayDutyScreenState extends State<TodayDutyScreen> {
     _loadDuty();
   }
 
+  @override
+  void dispose() {
+    _locationSubscription?.cancel();
+    super.dispose();
+  }
+
   Future<void> _loadDuty() async {
     try {
       final todayRes = await ApiService.get('/duty/today');
       final upcomingRes = await ApiService.get('/duty/upcoming');
+      final duty = todayRes['duty'];
       setState(() {
-        _duty = todayRes['duty'];
+        _duty = duty;
         _upcomingDuty = upcomingRes['duty'];
         _isLoading = false;
       });
+
+      if (duty != null && duty['status'] == 'started') {
+        await _startLocationSharing(duty);
+      }
     } catch (e) {
       setState(() => _isLoading = false);
+    }
+  }
+
+  Future<bool> _ensureLocationPermission() async {
+    var permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+    }
+
+    return permission == LocationPermission.always ||
+        permission == LocationPermission.whileInUse;
+  }
+
+  Future<void> _startLocationSharing(Map<String, dynamic> duty) async {
+    if (_locationSubscription != null) return;
+
+    final allowed = await _ensureLocationPermission();
+    if (!allowed) return;
+
+    try {
+      final current = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+      );
+      await _publishPosition(current, duty);
+    } catch (e) {
+      debugPrint('Current location error: $e');
+    }
+
+    const settings = LocationSettings(
+      accuracy: LocationAccuracy.high,
+      distanceFilter: 25,
+    );
+
+    _locationSubscription = Geolocator.getPositionStream(
+      locationSettings: settings,
+    ).listen((position) => _publishPosition(position, duty));
+  }
+
+  Future<void> _stopLocationSharing() async {
+    await _locationSubscription?.cancel();
+    _locationSubscription = null;
+  }
+
+  Future<void> _publishPosition(
+    Position position,
+    Map<String, dynamic> duty,
+  ) async {
+    final bus = duty['bus'] ?? {};
+    final busId = bus['busId'] ?? bus['_id'];
+    final routeId = duty['routeId'];
+
+    if (busId == null || routeId == null) return;
+
+    try {
+      await ApiService.post('/gps/update-location', {
+        'busId': busId,
+        'routeId': routeId,
+        'dutyId': duty['dutyId'],
+        'latitude': position.latitude,
+        'longitude': position.longitude,
+        'speed': position.speed.isFinite ? position.speed * 3.6 : 0,
+      });
+    } catch (e) {
+      debugPrint('Location publish error: $e');
     }
   }
 
@@ -42,10 +119,8 @@ class _TodayDutyScreenState extends State<TodayDutyScreen> {
     setState(() => _isStarting = true);
 
     try {
-      // Request location permission
-      LocationPermission permission = await Geolocator.requestPermission();
-
-      if (permission == LocationPermission.denied) {
+      final allowed = await _ensureLocationPermission();
+      if (!allowed) {
         setState(() => _isStarting = false);
         return;
       }
@@ -55,6 +130,7 @@ class _TodayDutyScreenState extends State<TodayDutyScreen> {
       });
 
       if (response['success'] == true) {
+        await _startLocationSharing(_duty!);
         _loadDuty();
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -79,6 +155,7 @@ class _TodayDutyScreenState extends State<TodayDutyScreen> {
       });
 
       if (response['success'] == true) {
+        await _stopLocationSharing();
         _loadDuty();
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -218,7 +295,7 @@ class _TodayDutyScreenState extends State<TodayDutyScreen> {
     final bus = _duty!['bus'];
     final status = _duty!['status'];
     final isStarted = status == 'started';
-    final isAssigned = status == 'assigned';
+    final isAssigned = status == 'assigned' || status == 'scheduled';
 
     return Container(
       decoration: BoxDecoration(
@@ -289,7 +366,7 @@ class _TodayDutyScreenState extends State<TodayDutyScreen> {
                 _detailRow(
                   Icons.confirmation_number_outlined,
                   'Bus ID',
-                  bus?['busId'] ?? 'N/A',
+                  bus?['busId']?.toString() ?? 'N/A',
                 ),
                 const SizedBox(height: 12),
                 _detailRow(

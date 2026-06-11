@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/services/api_service.dart';
 import '../../tracking/screens/bus_eat_screen.dart';
@@ -14,6 +15,7 @@ class _RouteSearchScreenState extends State<RouteSearchScreen> {
   final TextEditingController _searchController = TextEditingController();
   List<dynamic> _routes = [];
   List<dynamic> _searchResults = [];
+  Set<String> _favoriteRouteIds = {};
   bool _isLoading = true;
   bool _isSearching = false;
 
@@ -25,10 +27,13 @@ class _RouteSearchScreenState extends State<RouteSearchScreen> {
 
   Future<void> _loadAllRoutes() async {
     try {
+      final prefs = await SharedPreferences.getInstance();
       final response = await ApiService.get('/routes');
       setState(() {
         _routes = response['routes'] ?? [];
         _searchResults = _routes;
+        _favoriteRouteIds =
+            (prefs.getStringList('favoriteRouteIds') ?? []).toSet();
         _isLoading = false;
       });
     } catch (e) {
@@ -43,7 +48,8 @@ class _RouteSearchScreenState extends State<RouteSearchScreen> {
     }
     setState(() => _isSearching = true);
     try {
-      final response = await ApiService.get('/routes/search?query=$query');
+      final encoded = Uri.encodeComponent(query);
+      final response = await ApiService.get('/routes/search?query=$encoded');
       setState(() {
         _searchResults = response['routes'] ?? [];
         _isSearching = false;
@@ -53,11 +59,23 @@ class _RouteSearchScreenState extends State<RouteSearchScreen> {
     }
   }
 
-  Future<void> _addToFavourites(String routeId) async {
-    await ApiService.post('/routes/favorites', {'routeId': routeId});
+  Future<void> _toggleFavourite(String routeId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final next = Set<String>.from(_favoriteRouteIds);
+    final added = next.add(routeId);
+
+    if (!added) {
+      next.remove(routeId);
+    }
+
+    await prefs.setStringList('favoriteRouteIds', next.toList());
+    setState(() => _favoriteRouteIds = next);
+
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Added to favourites'),
+      SnackBar(
+        content: Text(
+          added ? 'Added to favourites' : 'Removed from favourites',
+        ),
         backgroundColor: AppTheme.primaryGreen,
       ),
     );
@@ -137,6 +155,8 @@ class _RouteSearchScreenState extends State<RouteSearchScreen> {
 
   Widget _buildRouteCard(Map<String, dynamic> route) {
     final stops = route['stops'] as List? ?? [];
+    final routeId = route['routeId']?.toString() ?? '';
+    final isFavourite = _favoriteRouteIds.contains(routeId);
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -158,7 +178,7 @@ class _RouteSearchScreenState extends State<RouteSearchScreen> {
             onTap: () => Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (_) => BusEatScreen(routeId: route['routeId']),
+                builder: (_) => BusEatScreen(routeId: routeId),
               ),
             ),
             child: Container(
@@ -196,12 +216,14 @@ class _RouteSearchScreenState extends State<RouteSearchScreen> {
                     ),
                   ),
                   IconButton(
-                    icon: const Icon(
-                      Icons.star_border,
+                    icon: Icon(
+                      isFavourite ? Icons.star : Icons.star_border,
                       color: AppTheme.white,
                       size: 20,
                     ),
-                    onPressed: () => _addToFavourites(route['routeId']),
+                    onPressed: routeId.isEmpty
+                        ? null
+                        : () => _toggleFavourite(routeId),
                     padding: EdgeInsets.zero,
                     constraints: const BoxConstraints(),
                   ),

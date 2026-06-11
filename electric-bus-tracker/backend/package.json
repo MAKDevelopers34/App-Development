@@ -4,17 +4,17 @@
   "description": "",
   "main": "index.js",
   "scripts": {
+    "prestart": "node scripts/importDatabase.js",
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
-    "seed": "node src/utils/seedData.js"
-},
+    "db:import": "node scripts/importDatabase.js"
+  },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
     "@sendgrid/mail": "^8.1.6",
-    "ably": "^2.21.0",
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.6",
     "dotenv": "^17.4.1",
@@ -22,10 +22,9 @@
     "express-validator": "^7.3.2",
     "helmet": "^8.1.0",
     "jsonwebtoken": "^9.0.3",
-    "mongoose": "^9.4.1",
     "morgan": "^1.10.1",
+    "mysql2": "^3.22.5",
     "node-cron": "^4.2.1",
-    "nodemailer": "^8.0.6",
     "pdfkit": "^0.18.0"
   },
   "devDependencies": {

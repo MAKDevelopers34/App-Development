@@ -1,0 +1,39 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Local secrets and environment files
+.env
+.env.*
+**/.env
+**/.env.*
+!.env.example
+!**/.env.example
+
+# Logs and temporary deployment bundles
+*.log
+*.zip
+.deploy/
+backend-deploy*.zip
+
+# Flutter/Dart generated files
+mobile/.dart_tool/
+mobile/build/
+mobile/.flutter-plugins
+mobile/.flutter-plugins-dependencies
+mobile/**/ephemeral/
+
+# Local IDE and machine-specific files
+.idea/
+*.iml
+mobile/android/local.properties
+mobile/android/.gradle/
+mobile/android/.kotlin/
+mobile/ios/Flutter/Generated.xcconfig
+mobile/ios/Flutter/flutter_export_environment.sh
+
+# Private keys/certificates
+*.pem
+*.key
+*.p12
+*.pfx

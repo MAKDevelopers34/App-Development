@@ -1,10 +1,11 @@
-import 'package:flutter/material.dart';
-import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'dart:async';
+import 'package:flutter/material.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/services/api_service.dart';
 import '../../../core/widgets/bottom_nav.dart';
+import '../../../core/widgets/schematic_bus_map.dart';
 import '../../routes/screens/favourite_stops_screen.dart';
+import '../../routes/screens/route_search_screen.dart';
 import 'bus_eat_screen.dart';
 
 class PassengerMapScreen extends StatefulWidget {
@@ -15,23 +16,17 @@ class PassengerMapScreen extends StatefulWidget {
 }
 
 class _PassengerMapScreenState extends State<PassengerMapScreen> {
-  final Completer<GoogleMapController> _mapController = Completer();
   final TextEditingController _searchController = TextEditingController();
 
-  Set<Marker> _markers = {};
   List<dynamic> _activeBuses = [];
   bool _isLoading = true;
   int _currentNavIndex = 0;
   Timer? _refreshTimer;
 
-  // Mianwali center coordinates
-  static const LatLng _mianwaliCenter = LatLng(32.5838, 71.5436);
-
   @override
   void initState() {
     super.initState();
     _loadActiveBuses();
-    // Refresh every 5 seconds for live tracking
     _refreshTimer = Timer.periodic(
       const Duration(seconds: 5),
       (_) => _loadActiveBuses(),
@@ -45,37 +40,34 @@ class _PassengerMapScreenState extends State<PassengerMapScreen> {
     super.dispose();
   }
 
+  List<dynamic> get _filteredBuses {
+    final query = _searchController.text.trim().toLowerCase();
+    if (query.isEmpty) return _activeBuses;
+
+    return _activeBuses.where((bus) {
+      final busNumber = bus['busNumber']?.toString().toLowerCase() ?? '';
+      final routeName = bus['routeName']?.toString().toLowerCase() ?? '';
+      final driverName = bus['driverName']?.toString().toLowerCase() ?? '';
+      return busNumber.contains(query) ||
+          routeName.contains(query) ||
+          driverName.contains(query);
+    }).toList();
+  }
+
   Future<void> _loadActiveBuses() async {
     try {
       final response = await ApiService.get('/gps/active-buses');
       if (response['success'] == true) {
-        final buses = response['buses'] as List? ?? [];
         setState(() {
-          _activeBuses = buses;
-          _markers = _buildMarkers(buses);
+          _activeBuses = response['buses'] as List? ?? [];
           _isLoading = false;
         });
+      } else {
+        setState(() => _isLoading = false);
       }
     } catch (e) {
       setState(() => _isLoading = false);
     }
-  }
-
-  Set<Marker> _buildMarkers(List<dynamic> buses) {
-    return buses.map((bus) {
-      final lat = bus['location']['latitude'];
-      final lng = bus['location']['longitude'];
-      return Marker(
-        markerId: MarkerId(bus['busId']),
-        position: LatLng(lat, lng),
-        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
-        infoWindow: InfoWindow(
-          title: bus['busId'],
-          snippet: 'Speed: ${bus['speed']} km/h',
-          onTap: () => _showBusEAT(bus['routeId']),
-        ),
-      );
-    }).toSet();
   }
 
   void _showBusEAT(String routeId) {
@@ -85,34 +77,30 @@ class _PassengerMapScreenState extends State<PassengerMapScreen> {
     );
   }
 
+  void _openRouteSearch() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const RouteSearchScreen()),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final visibleBuses = _filteredBuses;
+
     return Scaffold(
       backgroundColor: AppTheme.white,
       body: SafeArea(
         child: Stack(
           children: [
-            // Google Map
-            GoogleMap(
-              initialCameraPosition: const CameraPosition(
-                target: _mianwaliCenter,
-                zoom: 12,
-              ),
-              onMapCreated: (controller) => _mapController.complete(controller),
-              markers: _markers,
-              myLocationEnabled: true,
-              myLocationButtonEnabled: false,
-              zoomControlsEnabled: false,
-              mapToolbarEnabled: false,
-            ),
-
-            // Top search bar — matching your design
+            SchematicBusMap(buses: visibleBuses),
             Positioned(top: 12, left: 12, right: 12, child: _buildSearchBar()),
-
-            // Legend — Active/Inactive — matching your design
-            Positioned(bottom: 90, left: 12, child: _buildLegend()),
-
-            // Loading indicator
+            Positioned(
+              bottom: 90,
+              left: 12,
+              right: 12,
+              child: _buildLiveBusPanel(visibleBuses),
+            ),
             if (_isLoading)
               const Center(
                 child: CircularProgressIndicator(color: AppTheme.primaryGreen),
@@ -150,7 +138,6 @@ class _PassengerMapScreenState extends State<PassengerMapScreen> {
       ),
       child: Column(
         children: [
-          // Title row
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
             child: Row(
@@ -172,10 +159,21 @@ class _PassengerMapScreenState extends State<PassengerMapScreen> {
                     color: AppTheme.primaryGreen,
                   ),
                 ),
+                const Spacer(),
+                IconButton(
+                  icon: const Icon(
+                    Icons.route_outlined,
+                    color: AppTheme.primaryGreen,
+                    size: 20,
+                  ),
+                  onPressed: _openRouteSearch,
+                  tooltip: 'Routes',
+                  constraints: const BoxConstraints(),
+                  padding: EdgeInsets.zero,
+                ),
               ],
             ),
           ),
-          // Search row
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
             child: Row(
@@ -189,35 +187,10 @@ class _PassengerMapScreenState extends State<PassengerMapScreen> {
                     ),
                     child: TextField(
                       controller: _searchController,
+                      onChanged: (_) => setState(() {}),
                       style: const TextStyle(fontSize: 13),
                       decoration: const InputDecoration(
-                        hintText: 'Enter stop',
-                        hintStyle: TextStyle(
-                          color: AppTheme.textGrey,
-                          fontSize: 13,
-                        ),
-                        border: InputBorder.none,
-                        contentPadding: EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 10,
-                        ),
-                        isDense: true,
-                      ),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Container(
-                    height: 38,
-                    decoration: BoxDecoration(
-                      color: AppTheme.bgGrey,
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: const TextField(
-                      style: TextStyle(fontSize: 13),
-                      decoration: InputDecoration(
-                        hintText: 'Select stop',
+                        hintText: 'Search bus, route, driver',
                         hintStyle: TextStyle(
                           color: AppTheme.textGrey,
                           fontSize: 13,
@@ -241,7 +214,7 @@ class _PassengerMapScreenState extends State<PassengerMapScreen> {
                       padding: const EdgeInsets.symmetric(horizontal: 14),
                       minimumSize: Size.zero,
                     ),
-                    child: const Text('Search', style: TextStyle(fontSize: 13)),
+                    child: const Icon(Icons.refresh, size: 18),
                   ),
                 ),
               ],
@@ -252,31 +225,125 @@ class _PassengerMapScreenState extends State<PassengerMapScreen> {
     );
   }
 
-  Widget _buildLegend() {
+  Widget _buildLiveBusPanel(List<dynamic> buses) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: AppTheme.white,
-        borderRadius: BorderRadius.circular(10),
-        boxShadow: [BoxShadow(color: AppTheme.cardShadow, blurRadius: 6)],
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: [BoxShadow(color: AppTheme.cardShadow, blurRadius: 8)],
       ),
       child: Column(
+        mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            'Live Buses: ${_activeBuses.length}',
-            style: const TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
-              color: AppTheme.primaryGreen,
-            ),
+          Row(
+            children: [
+              Text(
+                'Live Buses: ${buses.length}',
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: AppTheme.primaryGreen,
+                ),
+              ),
+              const Spacer(),
+              _legendItem(AppTheme.primaryGreen, 'Active'),
+            ],
           ),
-          _legendItem(AppTheme.primaryGreen, 'Active Bus'),
-          const SizedBox(height: 4),
-          _legendItem(AppTheme.redStatus, 'Inactive Bus'),
-          const SizedBox(height: 4),
-          _legendItem(AppTheme.orangeStatus, 'Your Location'),
+          const SizedBox(height: 10),
+          SizedBox(
+            height: 78,
+            child: buses.isEmpty
+                ? const Center(
+                    child: Text(
+                      'No matching live buses',
+                      style: TextStyle(color: AppTheme.textGrey, fontSize: 12),
+                    ),
+                  )
+                : ListView.separated(
+                    scrollDirection: Axis.horizontal,
+                    itemCount: buses.length,
+                    separatorBuilder: (_, __) => const SizedBox(width: 10),
+                    itemBuilder: (context, index) => _buildBusCard(buses[index]),
+                  ),
+          ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildBusCard(Map<String, dynamic> bus) {
+    final routeId = bus['routeId']?.toString() ?? '';
+    final title = bus['busNumber']?.toString() ??
+        bus['busId']?.toString() ??
+        'BUS';
+    final routeName = bus['routeName']?.toString() ?? 'Route N/A';
+    final speed = bus['speed']?.toString() ?? '0';
+
+    return GestureDetector(
+      onTap: routeId.isEmpty ? null : () => _showBusEAT(routeId),
+      child: Container(
+        width: 210,
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: AppTheme.lightGreen,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 42,
+              height: 42,
+              decoration: const BoxDecoration(
+                color: AppTheme.primaryGreen,
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.directions_bus,
+                color: AppTheme.white,
+                size: 22,
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(
+                    title,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: AppTheme.textDark,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    routeName,
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: AppTheme.textGrey,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    '$speed km/h',
+                    style: const TextStyle(
+                      fontSize: 10,
+                      color: AppTheme.primaryGreen,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

@@ -1,9 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'dart:async';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/services/api_service.dart';
+import '../../../core/widgets/schematic_bus_map.dart';
 import 'driver_profile_screen.dart';
 import 'today_duty_screen.dart';
 import 'monthly_schedule_screen.dart';
@@ -17,13 +16,10 @@ class DriverDashboardScreen extends StatefulWidget {
 }
 
 class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
-  final Completer<GoogleMapController> _mapController = Completer();
   int _currentNavIndex = 0;
   Map<String, dynamic>? _todayDuty;
+  List<dynamic> _activeBuses = [];
   String _username = '';
-  Set<Marker> _markers = {};
-
-  static const LatLng _mianwali = LatLng(32.5838, 71.5436);
 
   @override
   void initState() {
@@ -39,21 +35,9 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
       final dutyRes = await ApiService.get('/duty/today');
       final busRes = await ApiService.get('/gps/active-buses');
 
-      final buses = busRes['buses'] as List? ?? [];
       setState(() {
         _todayDuty = dutyRes['duty'];
-        _markers = buses.map((bus) {
-          final lat = bus['location']['latitude'];
-          final lng = bus['location']['longitude'];
-          return Marker(
-            markerId: MarkerId(bus['busId']),
-            position: LatLng(lat, lng),
-            icon: BitmapDescriptor.defaultMarkerWithHue(
-              BitmapDescriptor.hueGreen,
-            ),
-            infoWindow: InfoWindow(title: bus['busId']),
-          );
-        }).toSet();
+        _activeBuses = busRes['buses'] as List? ?? [];
       });
     } catch (e) {
       debugPrint('Load error: $e');
@@ -78,23 +62,14 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
       body: SafeArea(
         child: Stack(
           children: [
-            // Map background
-            GoogleMap(
-              initialCameraPosition: const CameraPosition(
-                target: _mianwali,
-                zoom: 12,
-              ),
-              onMapCreated: (c) => _mapController.complete(c),
-              markers: _markers,
-              myLocationEnabled: true,
-              myLocationButtonEnabled: false,
-              zoomControlsEnabled: false,
-            ),
-
-            // Top bar
+            SchematicBusMap(buses: _activeBuses),
             Positioned(top: 0, left: 0, right: 0, child: _buildTopBar()),
-
-            // Bottom duty card
+            Positioned(
+              top: 86,
+              left: 12,
+              right: 12,
+              child: _buildLiveSummary(),
+            ),
             if (_todayDuty != null)
               Positioned(
                 bottom: 80,
@@ -141,6 +116,53 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
           Text(
             'Hi, $_username',
             style: const TextStyle(fontSize: 12, color: AppTheme.textGrey),
+          ),
+          const SizedBox(width: 8),
+          GestureDetector(
+            onTap: _logout,
+            child: const Icon(
+              Icons.logout,
+              color: AppTheme.textGrey,
+              size: 18,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLiveSummary() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: AppTheme.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [BoxShadow(color: AppTheme.cardShadow, blurRadius: 6)],
+      ),
+      child: Row(
+        children: [
+          const Icon(
+            Icons.sensors,
+            color: AppTheme.primaryGreen,
+            size: 18,
+          ),
+          const SizedBox(width: 8),
+          Text(
+            '${_activeBuses.length} live buses',
+            style: const TextStyle(
+              color: AppTheme.textDark,
+              fontWeight: FontWeight.w600,
+              fontSize: 13,
+            ),
+          ),
+          const Spacer(),
+          GestureDetector(
+            onTap: _loadData,
+            child: const Icon(
+              Icons.refresh,
+              color: AppTheme.primaryGreen,
+              size: 18,
+            ),
           ),
         ],
       ),
@@ -245,7 +267,7 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
                 onTap: () => Navigator.push(
                   context,
                   MaterialPageRoute(builder: (_) => const TodayDutyScreen()),
-                ),
+                ).then((_) => _loadData()),
                 child: const Text(
                   'Show Duty',
                   style: TextStyle(
@@ -282,7 +304,7 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
             Navigator.push(
               context,
               MaterialPageRoute(builder: (_) => const TodayDutyScreen()),
-            );
+            ).then((_) => _loadData());
           } else if (index == 2) {
             Navigator.push(
               context,

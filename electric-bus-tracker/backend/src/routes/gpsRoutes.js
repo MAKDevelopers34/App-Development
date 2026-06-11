@@ -5,16 +5,14 @@ const {
   getActiveBuses,
   getBusesByRoute,
   startDuty,
-  endDuty,
-  getAblyToken
+  endDuty
 } = require('../controllers/gpsController');
 const { protect, driverOnly } = require('../middleware/auth');
 
+router.get('/active-buses', getActiveBuses);
+router.get('/route/:routeId', getBusesByRoute);
 router.post('/update-location', protect, driverOnly, updateLocation);
-router.get('/active-buses', protect, getActiveBuses);
-router.get('/route/:routeId', protect, getBusesByRoute);
 router.post('/start-duty', protect, driverOnly, startDuty);
 router.post('/end-duty', protect, driverOnly, endDuty);
-router.get('/ably-token', protect, getAblyToken);
 
 module.exports = router;

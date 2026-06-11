@@ -1,15 +1,15 @@
 import 'package:flutter/material.dart';
 
 class AppTheme {
-  static const Color primaryGreen = Color(0xFF2ECC71);
-  static const Color darkGreen = Color(0xFF27AE60);
+  static const Color primaryGreen = Color(0xFF00A63E);
+  static const Color darkGreen = Color(0xFF008236);
   static const Color lightGreen = Color(0xFFE8F8F0);
   static const Color white = Color(0xFFFFFFFF);
   static const Color bgGrey = Color(0xFFF5F5F5);
   static const Color textDark = Color(0xFF1A1A1A);
   static const Color textGrey = Color(0xFF8A8A8A);
-  static const Color redStatus = Color(0xFFE74C3C);
-  static const Color orangeStatus = Color(0xFFF39C12);
+  static const Color redStatus = Color(0xFFE7000B);
+  static const Color orangeStatus = Color(0xFFF0B100);
   static const Color cardShadow = Color(0x1A000000);
 
   static ThemeData get lightTheme => ThemeData(

@@ -8,11 +8,15 @@ const sendResetCode = async (email, code, fullName) => {
   console.log('EMAIL_FROM:', fromEmail);
   console.log('Sending to:', email);
 
-  if (!apiKey) {
-    throw new Error('SENDGRID_API_KEY missing from environment');
-  }
-  if (!fromEmail) {
-    throw new Error('EMAIL_FROM missing from environment');
+  if (!apiKey || !fromEmail) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('SendGrid configuration missing from environment');
+    }
+
+    console.log(
+      `Password reset code for ${fullName} <${email}>: ${code}`
+    );
+    return true;
   }
 
   sgMail.setApiKey(apiKey);

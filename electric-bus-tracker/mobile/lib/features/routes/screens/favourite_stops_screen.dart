@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/services/api_service.dart';
 import '../../../core/widgets/bottom_nav.dart';
+import '../../tracking/screens/bus_eat_screen.dart';
 
 class FavouriteStopsScreen extends StatefulWidget {
   const FavouriteStopsScreen({super.key});
@@ -22,9 +24,25 @@ class _FavouriteStopsScreenState extends State<FavouriteStopsScreen> {
 
   Future<void> _loadFavourites() async {
     try {
-      final response = await ApiService.get('/routes/favorites');
+      final prefs = await SharedPreferences.getInstance();
+      final favoriteIds = prefs.getStringList('favoriteRouteIds') ?? [];
+
+      if (favoriteIds.isEmpty) {
+        setState(() {
+          _favouriteRoutes = [];
+          _isLoading = false;
+        });
+        return;
+      }
+
+      final response = await ApiService.get('/routes');
+      final routes = response['routes'] as List? ?? [];
+      final favoriteSet = favoriteIds.toSet();
+
       setState(() {
-        _favouriteRoutes = response['routes'] ?? [];
+        _favouriteRoutes = routes.where((route) {
+          return favoriteSet.contains(route['routeId']?.toString());
+        }).toList();
         _isLoading = false;
       });
     } catch (e) {
@@ -33,7 +51,10 @@ class _FavouriteStopsScreenState extends State<FavouriteStopsScreen> {
   }
 
   Future<void> _removeFavourite(String routeId) async {
-    await ApiService.delete('/routes/favorites/$routeId');
+    final prefs = await SharedPreferences.getInstance();
+    final ids = prefs.getStringList('favoriteRouteIds') ?? [];
+    ids.removeWhere((id) => id == routeId);
+    await prefs.setStringList('favoriteRouteIds', ids);
     _loadFavourites();
   }
 
@@ -78,8 +99,18 @@ class _FavouriteStopsScreenState extends State<FavouriteStopsScreen> {
   Widget _buildRouteCard(Map<String, dynamic> route) {
     final stops = route['stops'] as List? ?? [];
     final stopCount = stops.length;
+    final routeId = route['routeId']?.toString() ?? '';
 
-    return Container(
+    return GestureDetector(
+      onTap: routeId.isEmpty
+          ? null
+          : () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => BusEatScreen(routeId: routeId),
+                ),
+              ),
+      child: Container(
       margin: const EdgeInsets.only(bottom: 16),
       decoration: BoxDecoration(
         color: AppTheme.white,
@@ -129,7 +160,7 @@ class _FavouriteStopsScreenState extends State<FavouriteStopsScreen> {
                 ),
                 const SizedBox(width: 8),
                 GestureDetector(
-                  onTap: () => _removeFavourite(route['routeId']),
+                  onTap: () => _removeFavourite(routeId),
                   child: const Icon(Icons.star, color: Colors.amber, size: 20),
                 ),
               ],
@@ -148,6 +179,7 @@ class _FavouriteStopsScreenState extends State<FavouriteStopsScreen> {
               ),
             ),
         ],
+      ),
       ),
     );
   }

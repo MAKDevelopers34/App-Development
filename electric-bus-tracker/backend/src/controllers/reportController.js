@@ -1,13 +1,16 @@
-const path = require('path');
 const fs = require('fs');
-const Report = require('../models/Report');
+const {
+  callProcedure,
+  firstResultSet,
+  query
+} = require('../config/database');
+const { formatReport } = require('../utils/formatters');
 const { generateReport } = require('../utils/reportGenerator');
 
 const getReports = async (req, res) => {
   try {
-    const reports = await Report.find()
-      .sort({ generatedAt: -1 })
-      .limit(30);
+    const result = await callProcedure('sp_get_reports');
+    const reports = firstResultSet(result).map(formatReport);
 
     res.json({
       success: true,
@@ -29,7 +32,7 @@ const generateManualReport = async (req, res) => {
       });
     }
 
-    const report = await generateReport(type);
+    const report = await generateReport(type, req.user.adminId);
     res.json({
       success: true,
       message: `${type} report generated successfully`,
@@ -45,17 +48,19 @@ const generateManualReport = async (req, res) => {
 
 const downloadReport = async (req, res) => {
   try {
-    const report = await Report.findOne({
-      reportId: req.params.reportId
-    });
+    const reports = await query(
+      'SELECT * FROM reports WHERE report_code = ? LIMIT 1',
+      [req.params.reportId]
+    );
+    const report = reports[0];
 
-    if (!report || !report.pdfPath) {
+    if (!report || !report.pdf_path) {
       return res.status(404).json({
         message: 'Report not found'
       });
     }
 
-    if (!fs.existsSync(report.pdfPath)) {
+    if (!fs.existsSync(report.pdf_path)) {
       return res.status(404).json({
         message: 'PDF file not found'
       });
@@ -64,10 +69,10 @@ const downloadReport = async (req, res) => {
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader(
       'Content-Disposition',
-      `attachment; filename="${report.reportId}.pdf"`
+      `attachment; filename="${report.report_code}.pdf"`
     );
 
-    const fileStream = fs.createReadStream(report.pdfPath);
+    const fileStream = fs.createReadStream(report.pdf_path);
     fileStream.pipe(res);
 
   } catch (error) {
