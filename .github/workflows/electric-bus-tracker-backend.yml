@@ -20,6 +20,7 @@ env:
   EB_APPLICATION_NAME: electric-bus-tracker
   EB_ENVIRONMENT_NAME: electric-bus-tracker-prod
   EB_BUCKET: electric-bus-tracker-eb-644019536118-ap-south-1
+  EB_VERSION_LABEL: electric-bus-${{ github.run_id }}-${{ github.run_attempt }}
 
 jobs:
   deploy:
@@ -48,27 +49,38 @@ jobs:
           cp electric-bus-tracker/dbDDL.sql deploy/dbDDL.sql
           cp electric-bus-tracker/dbDML.sql deploy/dbDML.sql
           cd deploy
-          zip -r ../electric-bus-backend-${{ github.sha }}.zip .
+          zip -r ../${{ env.EB_VERSION_LABEL }}.zip .
 
       - name: Upload application version
         run: |
-          aws s3 cp electric-bus-backend-${{ github.sha }}.zip \
-            s3://${{ env.EB_BUCKET }}/backend/electric-bus-backend-${{ github.sha }}.zip
+          aws s3 cp ${{ env.EB_VERSION_LABEL }}.zip \
+            s3://${{ env.EB_BUCKET }}/backend/${{ env.EB_VERSION_LABEL }}.zip
 
       - name: Create Elastic Beanstalk version
         run: |
           aws elasticbeanstalk create-application-version \
             --application-name "${{ env.EB_APPLICATION_NAME }}" \
-            --version-label "${{ github.sha }}" \
-            --source-bundle S3Bucket="${{ env.EB_BUCKET }}",S3Key="backend/electric-bus-backend-${{ github.sha }}.zip"
+            --version-label "${{ env.EB_VERSION_LABEL }}" \
+            --source-bundle S3Bucket="${{ env.EB_BUCKET }}",S3Key="backend/${{ env.EB_VERSION_LABEL }}.zip"
 
       - name: Deploy Elastic Beanstalk environment
         run: |
           aws elasticbeanstalk update-environment \
+            --application-name "${{ env.EB_APPLICATION_NAME }}" \
             --environment-name "${{ env.EB_ENVIRONMENT_NAME }}" \
-            --version-label "${{ github.sha }}"
+            --version-label "${{ env.EB_VERSION_LABEL }}"
 
       - name: Wait for deployment
         run: |
           aws elasticbeanstalk wait environment-updated \
+            --application-name "${{ env.EB_APPLICATION_NAME }}" \
             --environment-names "${{ env.EB_ENVIRONMENT_NAME }}"
+
+      - name: Show environment status
+        if: always()
+        run: |
+          aws elasticbeanstalk describe-environments \
+            --application-name "${{ env.EB_APPLICATION_NAME }}" \
+            --environment-names "${{ env.EB_ENVIRONMENT_NAME }}" \
+            --query 'Environments[0].{Version:VersionLabel,Status:Status,Health:Health,HealthStatus:HealthStatus}' \
+            --output table
