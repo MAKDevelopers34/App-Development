@@ -1,10 +1,14 @@
+import 'dart:async';
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 
 import '../theme/app_theme.dart';
 
-class RealBusMap extends StatelessWidget {
+class RealBusMap extends StatefulWidget {
   final List<dynamic> routes;
   final List<dynamic> buses;
   final String? selectedRouteId;
@@ -26,13 +30,36 @@ class RealBusMap extends StatelessWidget {
     this.forcedZoom,
   });
 
+  @override
+  State<RealBusMap> createState() => _RealBusMapState();
+}
+
+class _RealBusMapState extends State<RealBusMap> {
   static const LatLng _defaultCenter = LatLng(32.5838, 71.5436);
+
+  final Map<String, List<LatLng>> _roadRoutes = {};
+  final Set<String> _loadingRoutes = {};
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _fetchRoadRoutes());
+  }
+
+  @override
+  void didUpdateWidget(covariant RealBusMap oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.routes != widget.routes ||
+        oldWidget.selectedRouteId != widget.selectedRouteId) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _fetchRoadRoutes());
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final visibleRoutes = _visibleRoutes();
-    final routePoints = visibleRoutes.expand(_routePoints).toList();
-    final busPoints = buses.map(_busPoint).whereType<LatLng>().toList();
+    final routePoints = visibleRoutes.expand(_displayRoutePoints).toList();
+    final busPoints = widget.buses.map(_busPoint).whereType<LatLng>().toList();
     final allPoints = [...routePoints, ...busPoints];
     final center = _centerOf(allPoints);
 
@@ -43,12 +70,12 @@ class RealBusMap extends StatelessWidget {
           FlutterMap(
             options: MapOptions(
               initialCenter: center,
-              initialZoom: forcedZoom ?? _zoomFor(allPoints),
+              initialZoom: widget.forcedZoom ?? _zoomFor(allPoints),
               minZoom: 8,
               maxZoom: 18,
-              onTap: onMapTap == null
+              onTap: widget.onMapTap == null
                   ? null
-                  : (tapPosition, point) => onMapTap!(point),
+                  : (tapPosition, point) => widget.onMapTap!(point),
             ),
             children: [
               TileLayer(
@@ -67,34 +94,109 @@ class RealBusMap extends StatelessWidget {
   }
 
   List<Map<String, dynamic>> _visibleRoutes() {
-    final typedRoutes = routes
+    final typedRoutes = widget.routes
         .whereType<Map>()
         .map((route) => Map<String, dynamic>.from(route))
         .toList();
 
-    if (selectedRouteId == null) return typedRoutes;
+    if (widget.selectedRouteId == null) return typedRoutes;
 
     final selected = typedRoutes
-        .where((route) => route['routeId']?.toString() == selectedRouteId)
+        .where(
+          (route) => route['routeId']?.toString() == widget.selectedRouteId,
+        )
         .toList();
     return selected.isEmpty ? typedRoutes : selected;
+  }
+
+  Future<void> _fetchRoadRoutes() async {
+    final routesToFetch = _visibleRoutes().take(8).toList();
+    for (final route in routesToFetch) {
+      final rawPoints = _routePoints(route);
+      final key = _routeKey(route, rawPoints);
+      if (rawPoints.length < 2 ||
+          _roadRoutes.containsKey(key) ||
+          _loadingRoutes.contains(key)) {
+        continue;
+      }
+
+      _loadingRoutes.add(key);
+      try {
+        final roadPoints = await _fetchRoadGeometry(rawPoints);
+        if (!mounted) return;
+        if (roadPoints.length >= 2) {
+          setState(() => _roadRoutes[key] = roadPoints);
+        }
+      } catch (_) {
+        // The saved route points are still useful if the public router is busy.
+      } finally {
+        _loadingRoutes.remove(key);
+      }
+    }
+  }
+
+  Future<List<LatLng>> _fetchRoadGeometry(List<LatLng> points) async {
+    final sampledPoints = _samplePoints(points, 24);
+    final coordinates = sampledPoints
+        .map((point) => '${point.longitude},${point.latitude}')
+        .join(';');
+    final uri = Uri.parse(
+      'https://router.project-osrm.org/route/v1/driving/$coordinates'
+      '?overview=full&geometries=geojson&continue_straight=false',
+    );
+    final response = await http.get(uri).timeout(const Duration(seconds: 5));
+    if (response.statusCode != 200) return const [];
+
+    final decoded = jsonDecode(response.body);
+    if (decoded is! Map || decoded['code'] != 'Ok') return const [];
+
+    final routes = decoded['routes'];
+    if (routes is! List || routes.isEmpty) return const [];
+
+    final geometry = routes.first['geometry'];
+    final coordinatesList = geometry?['coordinates'];
+    if (coordinatesList is! List) return const [];
+
+    return coordinatesList
+        .whereType<List>()
+        .map((coordinate) {
+          if (coordinate.length < 2) return null;
+          final lng = _numberFrom(coordinate[0]);
+          final lat = _numberFrom(coordinate[1]);
+          if (lat == null || lng == null) return null;
+          return LatLng(lat, lng);
+        })
+        .whereType<LatLng>()
+        .toList();
+  }
+
+  List<LatLng> _samplePoints(List<LatLng> points, int maxPoints) {
+    if (points.length <= maxPoints) return points;
+
+    final sampled = <LatLng>[];
+    for (var i = 0; i < maxPoints; i++) {
+      final index = ((points.length - 1) * i / (maxPoints - 1)).round();
+      sampled.add(points[index]);
+    }
+    return sampled;
   }
 
   List<Polyline> _buildRouteLines(List<Map<String, dynamic>> visibleRoutes) {
     return visibleRoutes
         .map((route) {
-          final points = _routePoints(route);
-          final selected = route['routeId']?.toString() == selectedRouteId;
+          final points = _displayRoutePoints(route);
+          final selected =
+              route['routeId']?.toString() == widget.selectedRouteId;
           return Polyline(
             points: points,
             color: selected
                 ? AppTheme.primaryGreen
-                : AppTheme.darkGreen.withValues(alpha: 0.42),
-            strokeWidth: selected ? 6 : 3.5,
+                : AppTheme.darkGreen.withValues(alpha: 0.36),
+            strokeWidth: selected ? 8 : 3.5,
             borderColor: AppTheme.white.withValues(
-              alpha: selected ? 0.9 : 0.55,
+              alpha: selected ? 0.96 : 0.62,
             ),
-            borderStrokeWidth: selected ? 2 : 1,
+            borderStrokeWidth: selected ? 4 : 1.5,
           );
         })
         .where((line) => line.points.length >= 2)
@@ -105,11 +207,11 @@ class RealBusMap extends StatelessWidget {
     final markers = <Marker>[];
 
     for (final route in visibleRoutes) {
-      final isSelected = route['routeId']?.toString() == selectedRouteId;
-      final showDetails = showStopMarkers || isSelected;
+      final isSelected = route['routeId']?.toString() == widget.selectedRouteId;
+      final showDetails = widget.showStopMarkers || isSelected;
       final points = _routePoints(route);
 
-      if ((showEndpointMarkers || isSelected) && points.isNotEmpty) {
+      if ((widget.showEndpointMarkers || isSelected) && points.isNotEmpty) {
         markers.add(_pointMarker(points.first, Icons.trip_origin, 'Start'));
         if (points.length > 1) {
           markers.add(_pointMarker(points.last, Icons.flag, 'End'));
@@ -133,7 +235,7 @@ class RealBusMap extends StatelessWidget {
       }
     }
 
-    for (final rawBus in buses.whereType<Map>()) {
+    for (final rawBus in widget.buses.whereType<Map>()) {
       final bus = Map<String, dynamic>.from(rawBus);
       final point = _busPoint(bus);
       if (point != null) {
@@ -147,8 +249,8 @@ class RealBusMap extends StatelessWidget {
   Marker _pointMarker(LatLng point, IconData icon, String label) {
     return Marker(
       point: point,
-      width: 46,
-      height: 46,
+      width: 48,
+      height: 48,
       child: Tooltip(
         message: label,
         child: Container(
@@ -173,8 +275,8 @@ class RealBusMap extends StatelessWidget {
   Marker _stopMarker(LatLng point, String label) {
     return Marker(
       point: point,
-      width: 22,
-      height: 22,
+      width: 24,
+      height: 24,
       child: Tooltip(
         message: label,
         child: Container(
@@ -182,6 +284,12 @@ class RealBusMap extends StatelessWidget {
             color: AppTheme.white,
             shape: BoxShape.circle,
             border: Border.all(color: AppTheme.darkGreen, width: 2),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.12),
+                blurRadius: 4,
+              ),
+            ],
           ),
         ),
       ),
@@ -195,21 +303,21 @@ class RealBusMap extends StatelessWidget {
 
     return Marker(
       point: point,
-      width: 82,
-      height: 58,
+      width: 88,
+      height: 60,
       child: GestureDetector(
-        onTap: onBusTap == null ? null : () => onBusTap!(bus),
+        onTap: widget.onBusTap == null ? null : () => widget.onBusTap!(bus),
         child: Tooltip(
           message: '$busNumber - $routeName',
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               Container(
-                width: 44,
-                height: 36,
+                width: 46,
+                height: 38,
                 decoration: BoxDecoration(
                   color: AppTheme.primaryGreen,
-                  borderRadius: BorderRadius.circular(18),
+                  borderRadius: BorderRadius.circular(19),
                   border: Border.all(color: AppTheme.white, width: 3),
                   boxShadow: [
                     BoxShadow(
@@ -256,6 +364,24 @@ class RealBusMap extends StatelessWidget {
     );
   }
 
+  List<LatLng> _displayRoutePoints(Map<String, dynamic> route) {
+    final rawPoints = _routePoints(route);
+    final key = _routeKey(route, rawPoints);
+    return _roadRoutes[key] ?? rawPoints;
+  }
+
+  String _routeKey(Map<String, dynamic> route, List<LatLng> points) {
+    final routeId = route['routeId']?.toString() ?? 'route';
+    final first = points.isEmpty ? 'empty' : _pointKey(points.first);
+    final last = points.length < 2 ? first : _pointKey(points.last);
+    return '$routeId:${points.length}:$first:$last';
+  }
+
+  String _pointKey(LatLng point) {
+    return '${point.latitude.toStringAsFixed(5)},'
+        '${point.longitude.toStringAsFixed(5)}';
+  }
+
   List<LatLng> _routePoints(Map<String, dynamic> route) {
     final start = _pointFrom(route['startPoint']);
     final end = _pointFrom(route['endPoint']);
@@ -266,13 +392,7 @@ class RealBusMap extends StatelessWidget {
             .toList()
           ..sort((a, b) => (a['order'] ?? 0).compareTo(b['order'] ?? 0));
 
-    final points = <LatLng>[
-      ?start,
-      ...stops.map(_pointFrom).whereType<LatLng>(),
-      ?end,
-    ];
-
-    return points;
+    return <LatLng>[?start, ...stops.map(_pointFrom).whereType<LatLng>(), ?end];
   }
 
   LatLng? _busPoint(dynamic bus) {
@@ -342,7 +462,7 @@ class _MapAttribution extends StatelessWidget {
         borderRadius: BorderRadius.circular(4),
       ),
       child: const Text(
-        '© OpenStreetMap contributors',
+        'OSM',
         style: TextStyle(
           color: AppTheme.textGrey,
           fontSize: 10,

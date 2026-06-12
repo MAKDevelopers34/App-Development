@@ -859,10 +859,10 @@ BEGIN
 
   SELECT
     COUNT(*) AS total,
-    COALESCE(SUM(status = 'Completed'), 0) AS completed,
-    COALESCE(SUM(status = 'Skipped'), 0) AS skipped,
-    COALESCE(SUM(status = 'Scheduled'), 0) AS assigned,
-    COALESCE(SUM(status = 'In-Progress'), 0) AS in_progress
+    COALESCE(SUM(da.status = 'Completed'), 0) AS completed,
+    COALESCE(SUM(da.status = 'Skipped'), 0) AS skipped,
+    COALESCE(SUM(da.status = 'Scheduled'), 0) AS assigned,
+    COALESCE(SUM(da.status = 'In-Progress'), 0) AS in_progress
   FROM duty_assignments da
   JOIN drivers d ON d.driver_id = da.driver_id
   WHERE d.user_id = p_user_id
@@ -875,13 +875,20 @@ CREATE PROCEDURE sp_start_duty(
   IN p_duty_id INT
 )
 BEGIN
-  UPDATE duty_assignments da
-  JOIN drivers d ON d.driver_id = da.driver_id
-  SET da.status = 'In-Progress',
-      da.actual_start_time = NOW()
-  WHERE da.duty_id = p_duty_id
-    AND d.user_id = p_user_id
-    AND da.status = 'Scheduled';
+  DECLARE v_driver_id INT DEFAULT NULL;
+
+  SELECT driver_id
+  INTO v_driver_id
+  FROM drivers
+  WHERE user_id = p_user_id
+  LIMIT 1;
+
+  UPDATE duty_assignments
+  SET status = 'In-Progress',
+      actual_start_time = NOW()
+  WHERE duty_id = p_duty_id
+    AND driver_id = v_driver_id
+    AND status = 'Scheduled';
 
   SELECT ROW_COUNT() AS affected_rows;
 END$$
@@ -893,15 +900,21 @@ CREATE PROCEDURE sp_complete_duty(
 )
 BEGIN
   DECLARE v_affected_rows INT DEFAULT 0;
+  DECLARE v_driver_id INT DEFAULT NULL;
 
-  UPDATE duty_assignments da
-  JOIN drivers d ON d.driver_id = da.driver_id
-  SET da.status = 'Completed',
-      da.actual_end_time = NOW(),
-      da.completion_note = p_note
-  WHERE da.duty_id = p_duty_id
-    AND d.user_id = p_user_id
-    AND da.status = 'In-Progress';
+  SELECT driver_id
+  INTO v_driver_id
+  FROM drivers
+  WHERE user_id = p_user_id
+  LIMIT 1;
+
+  UPDATE duty_assignments
+  SET status = 'Completed',
+      actual_end_time = NOW(),
+      completion_note = p_note
+  WHERE duty_id = p_duty_id
+    AND driver_id = v_driver_id
+    AND status = 'In-Progress';
 
   SET v_affected_rows = ROW_COUNT();
 

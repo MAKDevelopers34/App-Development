@@ -49,27 +49,22 @@ class _LoginScreenState extends State<LoginScreen> {
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString('token', response['token']);
         await prefs.setString('role', response['user']['role']);
-        await prefs.setString('userId', response['user']['id']);
-        await prefs.setString(
-          'username', response['user']['username']
-        );
+        await prefs.setString('userId', response['user']['userId'].toString());
+        await prefs.setString('userDbId', response['user']['id'].toString());
+        await prefs.setString('username', response['user']['username']);
 
         if (!mounted) return;
 
         if (response['user']['role'] == 'driver') {
           Navigator.pushAndRemoveUntil(
             context,
-            MaterialPageRoute(
-              builder: (_) => const DriverDashboardScreen()
-            ),
+            MaterialPageRoute(builder: (_) => const DriverDashboardScreen()),
             (route) => false,
           );
         } else {
           Navigator.pushAndRemoveUntil(
             context,
-            MaterialPageRoute(
-              builder: (_) => const AdminDashboardScreen()
-            ),
+            MaterialPageRoute(builder: (_) => const AdminDashboardScreen()),
             (route) => false,
           );
         }
@@ -119,9 +114,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     shape: BoxShape.circle,
                   ),
                   child: Icon(
-                    isDriver
-                        ? Icons.person
-                        : Icons.admin_panel_settings,
+                    isDriver ? Icons.person : Icons.admin_panel_settings,
                     size: 40,
                     color: AppTheme.primaryGreen,
                   ),
@@ -149,8 +142,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     size: 20,
                   ),
                 ),
-                validator: (v) =>
-                    v!.isEmpty ? 'Username is required' : null,
+                validator: (v) => v!.isEmpty ? 'Username is required' : null,
               ),
               const SizedBox(height: 16),
 
@@ -174,8 +166,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     size: 20,
                   ),
                 ),
-                validator: (v) =>
-                    v!.isEmpty ? 'User ID is required' : null,
+                validator: (v) => v!.isEmpty ? 'User ID is required' : null,
               ),
               const SizedBox(height: 16),
 
@@ -207,13 +198,11 @@ class _LoginScreenState extends State<LoginScreen> {
                       color: AppTheme.textGrey,
                       size: 20,
                     ),
-                    onPressed: () => setState(
-                      () => _obscurePassword = !_obscurePassword
-                    ),
+                    onPressed: () =>
+                        setState(() => _obscurePassword = !_obscurePassword),
                   ),
                 ),
-                validator: (v) =>
-                    v!.isEmpty ? 'Password is required' : null,
+                validator: (v) => v!.isEmpty ? 'Password is required' : null,
               ),
 
               // Error message
@@ -225,7 +214,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     color: AppTheme.redStatus.withValues(alpha: 0.1),
                     borderRadius: BorderRadius.circular(8),
                     border: Border.all(
-                      color: AppTheme.redStatus.withValues(alpha: 0.3)
+                      color: AppTheme.redStatus.withValues(alpha: 0.3),
                     ),
                   ),
                   child: Row(
