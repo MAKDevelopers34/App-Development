@@ -50,7 +50,8 @@
       "Action": [
         "s3:CreateBucket",
         "s3:ListBucket",
-        "s3:GetBucketLocation"
+        "s3:GetBucketLocation",
+        "s3:GetBucketPolicy"
       ],
       "Resource": "arn:aws:s3:::elasticbeanstalk-ap-south-1-644019536118"
     },
@@ -60,7 +61,8 @@
         "s3:PutObject",
         "s3:GetObject",
         "s3:PutObjectAcl",
-        "s3:GetObjectAcl"
+        "s3:GetObjectAcl",
+        "s3:DeleteObject"
       ],
       "Resource": "arn:aws:s3:::elasticbeanstalk-ap-south-1-644019536118/*"
     }

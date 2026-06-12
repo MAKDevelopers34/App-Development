@@ -77,6 +77,37 @@ jobs:
             --application-name "${{ env.EB_APPLICATION_NAME }}" \
             --environment-names "${{ env.EB_ENVIRONMENT_NAME }}"
 
+      - name: Verify deployed version
+        shell: bash
+        run: |
+          env_json="$(aws elasticbeanstalk describe-environments \
+            --application-name "${{ env.EB_APPLICATION_NAME }}" \
+            --environment-names "${{ env.EB_ENVIRONMENT_NAME }}" \
+            --query 'Environments[0]' \
+            --output json)"
+
+          version="$(echo "$env_json" | jq -r '.VersionLabel')"
+          status="$(echo "$env_json" | jq -r '.Status')"
+          health="$(echo "$env_json" | jq -r '.Health')"
+          health_status="$(echo "$env_json" | jq -r '.HealthStatus // ""')"
+
+          echo "Version=$version Status=$status Health=$health HealthStatus=$health_status"
+
+          if [ "$version" != "${{ env.EB_VERSION_LABEL }}" ]; then
+            echo "Expected version ${{ env.EB_VERSION_LABEL }}, but environment is running $version"
+            exit 1
+          fi
+
+          if [ "$status" != "Ready" ]; then
+            echo "Environment is not Ready"
+            exit 1
+          fi
+
+          if [ "$health" != "Green" ] && [ "$health_status" != "Ok" ]; then
+            echo "Environment is not healthy"
+            exit 1
+          fi
+
       - name: Show environment status
         if: always()
         run: |
