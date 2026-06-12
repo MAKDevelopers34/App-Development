@@ -35,6 +35,29 @@
     {
       "Effect": "Allow",
       "Action": [
+        "autoscaling:DescribeAutoScalingGroups",
+        "autoscaling:DescribeLaunchConfigurations",
+        "autoscaling:DescribeLaunchTemplates",
+        "autoscaling:DescribeScalingActivities",
+        "ec2:DescribeImages",
+        "ec2:DescribeInstances",
+        "ec2:DescribeLaunchTemplates",
+        "ec2:DescribeLaunchTemplateVersions",
+        "ec2:DescribeSecurityGroups",
+        "ec2:DescribeSubnets",
+        "ec2:DescribeVpcs",
+        "elasticloadbalancing:DescribeLoadBalancers",
+        "elasticloadbalancing:DescribeTargetGroups",
+        "elasticloadbalancing:DescribeTargetHealth",
+        "cloudwatch:DescribeAlarms",
+        "logs:DescribeLogGroups",
+        "logs:DescribeLogStreams"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
         "s3:PutObject",
         "s3:GetObject",
         "s3:ListBucket",
