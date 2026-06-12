@@ -1,6 +1,9 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/services/api_service.dart';
+import '../../../core/widgets/real_bus_map.dart';
 
 class BusEatScreen extends StatefulWidget {
   final String routeId;
@@ -14,18 +17,33 @@ class BusEatScreen extends StatefulWidget {
 
 class _BusEatScreenState extends State<BusEatScreen> {
   Map<String, dynamic>? _routeData;
+  List<dynamic> _routeBuses = [];
   List<dynamic> _estimates = [];
   bool _isLoading = true;
+  Timer? _refreshTimer;
 
   @override
   void initState() {
     super.initState();
     _loadData();
+    _refreshTimer = Timer.periodic(
+      const Duration(seconds: 5),
+      (_) => _loadLiveData(),
+    );
+  }
+
+  @override
+  void dispose() {
+    _refreshTimer?.cancel();
+    super.dispose();
   }
 
   Future<void> _loadData() async {
     try {
       final routeResponse = await ApiService.get('/routes/${widget.routeId}');
+      final busesResponse = await ApiService.get(
+        '/gps/route/${widget.routeId}',
+      );
 
       List<dynamic> estimates = [];
       if (widget.stopId != null) {
@@ -35,13 +53,40 @@ class _BusEatScreenState extends State<BusEatScreen> {
         estimates = eatResponse['estimates'] ?? [];
       }
 
+      if (!mounted) return;
       setState(() {
         _routeData = routeResponse['route'];
+        _routeBuses = busesResponse['buses'] ?? [];
         _estimates = estimates;
         _isLoading = false;
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _loadLiveData() async {
+    try {
+      final busesResponse = await ApiService.get(
+        '/gps/route/${widget.routeId}',
+      );
+
+      List<dynamic> estimates = _estimates;
+      if (widget.stopId != null) {
+        final eatResponse = await ApiService.get(
+          '/routes/${widget.routeId}/eat/${widget.stopId}',
+        );
+        estimates = eatResponse['estimates'] ?? [];
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _routeBuses = busesResponse['buses'] ?? [];
+        _estimates = estimates;
+      });
+    } catch (e) {
+      debugPrint('Live route refresh error: $e');
     }
   }
 
@@ -102,6 +147,17 @@ class _BusEatScreenState extends State<BusEatScreen> {
                 ),
               ],
             ],
+          ),
+        ),
+
+        SizedBox(
+          height: 260,
+          child: RealBusMap(
+            routes: [_routeData!],
+            buses: _routeBuses,
+            selectedRouteId: widget.routeId,
+            showStopMarkers: true,
+            showEndpointMarkers: true,
           ),
         ),
 
@@ -237,7 +293,7 @@ class _BusEatScreenState extends State<BusEatScreen> {
           Icon(
             Icons.directions_bus_outlined,
             size: 60,
-            color: AppTheme.textGrey.withOpacity(0.4),
+            color: AppTheme.textGrey.withValues(alpha: 0.4),
           ),
           const SizedBox(height: 16),
           const Text(

@@ -105,81 +105,89 @@ class _FavouriteStopsScreenState extends State<FavouriteStopsScreen> {
       onTap: routeId.isEmpty
           ? null
           : () => Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => BusEatScreen(routeId: routeId),
-                ),
-              ),
-      child: Container(
-      margin: const EdgeInsets.only(bottom: 16),
-      decoration: BoxDecoration(
-        color: AppTheme.white,
-        borderRadius: BorderRadius.circular(14),
-        boxShadow: [
-          BoxShadow(
-            color: AppTheme.cardShadow,
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Column(
-        children: [
-          // Route header — green background matching design
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            decoration: const BoxDecoration(
-              color: AppTheme.primaryGreen,
-              borderRadius: BorderRadius.vertical(top: Radius.circular(14)),
+              context,
+              MaterialPageRoute(builder: (_) => BusEatScreen(routeId: routeId)),
             ),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    route['routeName'] ?? '',
-                    style: const TextStyle(
-                      color: AppTheme.white,
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 16),
+        decoration: BoxDecoration(
+          color: AppTheme.white,
+          borderRadius: BorderRadius.circular(14),
+          boxShadow: [
+            BoxShadow(
+              color: AppTheme.cardShadow,
+              blurRadius: 8,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Column(
+          children: [
+            // Route header — green background matching design
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              decoration: const BoxDecoration(
+                color: AppTheme.primaryGreen,
+                borderRadius: BorderRadius.vertical(top: Radius.circular(14)),
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      route['routeName'] ?? '',
+                      style: const TextStyle(
+                        color: AppTheme.white,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ),
-                ),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 3,
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 3,
+                    ),
+                    decoration: BoxDecoration(
+                      color: AppTheme.white.withValues(alpha: 0.25),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Text(
+                      '$stopCount Stops',
+                      style: const TextStyle(
+                        color: AppTheme.white,
+                        fontSize: 11,
+                      ),
+                    ),
                   ),
-                  decoration: BoxDecoration(
-                    color: AppTheme.white.withOpacity(0.25),
-                    borderRadius: BorderRadius.circular(12),
+                  const SizedBox(width: 8),
+                  GestureDetector(
+                    onTap: () => _removeFavourite(routeId),
+                    child: const Icon(
+                      Icons.star,
+                      color: Colors.amber,
+                      size: 20,
+                    ),
                   ),
-                  child: Text(
-                    '$stopCount Stops',
-                    style: const TextStyle(color: AppTheme.white, fontSize: 11),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                GestureDetector(
-                  onTap: () => _removeFavourite(routeId),
-                  child: const Icon(Icons.star, color: Colors.amber, size: 20),
-                ),
-              ],
-            ),
-          ),
-
-          // Stops list
-          ...stops.take(4).map((stop) => _buildStopRow(stop)),
-
-          if (stops.length > 4)
-            Padding(
-              padding: const EdgeInsets.all(10),
-              child: Text(
-                '+${stops.length - 4} more stops',
-                style: const TextStyle(color: AppTheme.textGrey, fontSize: 12),
+                ],
               ),
             ),
-        ],
-      ),
+
+            // Stops list
+            ...stops.take(4).map((stop) => _buildStopRow(stop)),
+
+            if (stops.length > 4)
+              Padding(
+                padding: const EdgeInsets.all(10),
+                child: Text(
+                  '+${stops.length - 4} more stops',
+                  style: const TextStyle(
+                    color: AppTheme.textGrey,
+                    fontSize: 12,
+                  ),
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -226,7 +234,7 @@ class _FavouriteStopsScreenState extends State<FavouriteStopsScreen> {
           Icon(
             Icons.star_outline,
             size: 64,
-            color: AppTheme.textGrey.withOpacity(0.4),
+            color: AppTheme.textGrey.withValues(alpha: 0.4),
           ),
           const SizedBox(height: 16),
           const Text(

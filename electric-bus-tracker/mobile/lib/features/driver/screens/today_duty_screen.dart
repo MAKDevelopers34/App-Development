@@ -18,6 +18,10 @@ class _TodayDutyScreenState extends State<TodayDutyScreen> {
   bool _isStarting = false;
   bool _isEnding = false;
   StreamSubscription<Position>? _locationSubscription;
+  Position? _lastPosition;
+  double _distanceCoveredKm = 0;
+  double _currentSpeedKmh = 0;
+  DateTime? _lastLocationAt;
 
   @override
   void initState() {
@@ -51,6 +55,9 @@ class _TodayDutyScreenState extends State<TodayDutyScreen> {
   }
 
   Future<bool> _ensureLocationPermission() async {
+    final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) return false;
+
     var permission = await Geolocator.checkPermission();
     if (permission == LocationPermission.denied) {
       permission = await Geolocator.requestPermission();
@@ -88,6 +95,7 @@ class _TodayDutyScreenState extends State<TodayDutyScreen> {
   Future<void> _stopLocationSharing() async {
     await _locationSubscription?.cancel();
     _locationSubscription = null;
+    _lastPosition = null;
   }
 
   Future<void> _publishPosition(
@@ -100,6 +108,24 @@ class _TodayDutyScreenState extends State<TodayDutyScreen> {
 
     if (busId == null || routeId == null) return;
 
+    final speedKmh = position.speed.isFinite ? position.speed * 3.6 : 0.0;
+    if (_lastPosition != null) {
+      final meters = Geolocator.distanceBetween(
+        _lastPosition!.latitude,
+        _lastPosition!.longitude,
+        position.latitude,
+        position.longitude,
+      );
+      if (meters >= 5 && meters <= 500) {
+        _distanceCoveredKm += meters / 1000;
+      }
+    }
+
+    _lastPosition = position;
+    _currentSpeedKmh = speedKmh < 0 ? 0 : speedKmh;
+    _lastLocationAt = DateTime.now();
+    if (mounted) setState(() {});
+
     try {
       await ApiService.post('/gps/update-location', {
         'busId': busId,
@@ -107,7 +133,7 @@ class _TodayDutyScreenState extends State<TodayDutyScreen> {
         'dutyId': duty['dutyId'],
         'latitude': position.latitude,
         'longitude': position.longitude,
-        'speed': position.speed.isFinite ? position.speed * 3.6 : 0,
+        'speed': _currentSpeedKmh,
       });
     } catch (e) {
       debugPrint('Location publish error: $e');
@@ -120,6 +146,7 @@ class _TodayDutyScreenState extends State<TodayDutyScreen> {
 
     try {
       final allowed = await _ensureLocationPermission();
+      if (!mounted) return;
       if (!allowed) {
         setState(() => _isStarting = false);
         return;
@@ -131,6 +158,7 @@ class _TodayDutyScreenState extends State<TodayDutyScreen> {
 
       if (response['success'] == true) {
         await _startLocationSharing(_duty!);
+        if (!mounted) return;
         _loadDuty();
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -142,6 +170,7 @@ class _TodayDutyScreenState extends State<TodayDutyScreen> {
     } catch (e) {
       debugPrint('Start duty error: $e');
     }
+    if (!mounted) return;
     setState(() => _isStarting = false);
   }
 
@@ -156,6 +185,7 @@ class _TodayDutyScreenState extends State<TodayDutyScreen> {
 
       if (response['success'] == true) {
         await _stopLocationSharing();
+        if (!mounted) return;
         _loadDuty();
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -167,6 +197,7 @@ class _TodayDutyScreenState extends State<TodayDutyScreen> {
     } catch (e) {
       debugPrint('Complete duty error: $e');
     }
+    if (!mounted) return;
     setState(() => _isEnding = false);
   }
 
@@ -382,6 +413,38 @@ class _TodayDutyScreenState extends State<TodayDutyScreen> {
                 ),
 
                 const SizedBox(height: 20),
+
+                if (isStarted) ...[
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: AppTheme.lightGreen,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Column(
+                      children: [
+                        _detailRow(
+                          Icons.speed,
+                          'Current Speed',
+                          '${_currentSpeedKmh.toStringAsFixed(1)} km/h',
+                        ),
+                        const SizedBox(height: 10),
+                        _detailRow(
+                          Icons.social_distance,
+                          'Distance Covered',
+                          '${_distanceCoveredKm.toStringAsFixed(2)} km',
+                        ),
+                        const SizedBox(height: 10),
+                        _detailRow(
+                          Icons.gps_fixed,
+                          'GPS Update',
+                          _lastLocationAt == null ? 'Waiting' : 'Live',
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                ],
 
                 // Action buttons
                 if (isAssigned)

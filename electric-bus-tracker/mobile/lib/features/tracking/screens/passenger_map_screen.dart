@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/services/api_service.dart';
 import '../../../core/widgets/bottom_nav.dart';
-import '../../../core/widgets/schematic_bus_map.dart';
+import '../../../core/widgets/real_bus_map.dart';
 import '../../routes/screens/favourite_stops_screen.dart';
 import '../../routes/screens/route_search_screen.dart';
 import 'bus_eat_screen.dart';
@@ -19,6 +19,7 @@ class _PassengerMapScreenState extends State<PassengerMapScreen> {
   final TextEditingController _searchController = TextEditingController();
 
   List<dynamic> _activeBuses = [];
+  List<dynamic> _routes = [];
   bool _isLoading = true;
   int _currentNavIndex = 0;
   Timer? _refreshTimer;
@@ -26,7 +27,7 @@ class _PassengerMapScreenState extends State<PassengerMapScreen> {
   @override
   void initState() {
     super.initState();
-    _loadActiveBuses();
+    _loadMapData();
     _refreshTimer = Timer.periodic(
       const Duration(seconds: 5),
       (_) => _loadActiveBuses(),
@@ -54,18 +55,52 @@ class _PassengerMapScreenState extends State<PassengerMapScreen> {
     }).toList();
   }
 
+  Future<void> _loadMapData() async {
+    try {
+      final routesResponse = await ApiService.get('/routes');
+      final routeSummaries = routesResponse['routes'] as List? ?? [];
+      final detailedRoutes = await Future.wait(
+        routeSummaries.map((route) async {
+          final routeId = route['routeId']?.toString();
+          if (routeId == null || routeId.isEmpty) return route;
+
+          try {
+            final detail = await ApiService.get('/routes/$routeId');
+            return detail['route'] ?? route;
+          } catch (_) {
+            return route;
+          }
+        }),
+      );
+      final busesResponse = await ApiService.get('/gps/active-buses');
+
+      if (!mounted) return;
+      setState(() {
+        _routes = detailedRoutes;
+        _activeBuses = busesResponse['buses'] as List? ?? [];
+        _isLoading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+    }
+  }
+
   Future<void> _loadActiveBuses() async {
     try {
       final response = await ApiService.get('/gps/active-buses');
       if (response['success'] == true) {
+        if (!mounted) return;
         setState(() {
           _activeBuses = response['buses'] as List? ?? [];
           _isLoading = false;
         });
       } else {
+        if (!mounted) return;
         setState(() => _isLoading = false);
       }
     } catch (e) {
+      if (!mounted) return;
       setState(() => _isLoading = false);
     }
   }
@@ -93,7 +128,14 @@ class _PassengerMapScreenState extends State<PassengerMapScreen> {
       body: SafeArea(
         child: Stack(
           children: [
-            SchematicBusMap(buses: visibleBuses),
+            RealBusMap(
+              routes: _routes,
+              buses: visibleBuses,
+              onBusTap: (bus) {
+                final routeId = bus['routeId']?.toString() ?? '';
+                if (routeId.isNotEmpty) _showBusEAT(routeId);
+              },
+            ),
             Positioned(top: 12, left: 12, right: 12, child: _buildSearchBar()),
             Positioned(
               bottom: 90,
@@ -264,8 +306,10 @@ class _PassengerMapScreenState extends State<PassengerMapScreen> {
                 : ListView.separated(
                     scrollDirection: Axis.horizontal,
                     itemCount: buses.length,
-                    separatorBuilder: (_, __) => const SizedBox(width: 10),
-                    itemBuilder: (context, index) => _buildBusCard(buses[index]),
+                    separatorBuilder: (context, index) =>
+                        const SizedBox(width: 10),
+                    itemBuilder: (context, index) =>
+                        _buildBusCard(buses[index]),
                   ),
           ),
         ],
@@ -275,9 +319,8 @@ class _PassengerMapScreenState extends State<PassengerMapScreen> {
 
   Widget _buildBusCard(Map<String, dynamic> bus) {
     final routeId = bus['routeId']?.toString() ?? '';
-    final title = bus['busNumber']?.toString() ??
-        bus['busId']?.toString() ??
-        'BUS';
+    final title =
+        bus['busNumber']?.toString() ?? bus['busId']?.toString() ?? 'BUS';
     final routeName = bus['routeName']?.toString() ?? 'Route N/A';
     final speed = bus['speed']?.toString() ?? '0';
 

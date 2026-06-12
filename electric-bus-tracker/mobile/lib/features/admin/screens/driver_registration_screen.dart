@@ -50,6 +50,7 @@ class _DriverRegistrationScreenState extends State<DriverRegistrationScreen> {
           ),
         );
       } else {
+        if (!mounted) return;
         setState(() => _isLoading = false);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -59,6 +60,7 @@ class _DriverRegistrationScreenState extends State<DriverRegistrationScreen> {
         );
       }
     } catch (e) {
+      if (!mounted) return;
       setState(() => _isLoading = false);
     }
   }

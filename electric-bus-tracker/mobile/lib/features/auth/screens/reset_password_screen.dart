@@ -41,12 +41,19 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
         'email': _emailController.text.trim(),
       });
 
+      if (!mounted) return;
       setState(() {
         _isLoading = false;
-        _codeSent = true;
-        _success = 'Code sent! Check your email inbox.';
+        _codeSent = res['success'] == true;
+        _success = res['success'] == true
+            ? 'Code sent! Check your email inbox.'
+            : null;
+        _error = res['success'] == true
+            ? null
+            : res['message'] ?? 'Unable to send reset code.';
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _isLoading = false;
         _error = 'Connection error. Try again.';

@@ -77,6 +77,7 @@ class _AddDutyScreenState extends State<AddDutyScreen> {
           ),
         );
       } else {
+        if (!mounted) return;
         setState(() => _isLoading = false);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -86,6 +87,7 @@ class _AddDutyScreenState extends State<AddDutyScreen> {
         );
       }
     } catch (e) {
+      if (!mounted) return;
       setState(() => _isLoading = false);
     }
   }

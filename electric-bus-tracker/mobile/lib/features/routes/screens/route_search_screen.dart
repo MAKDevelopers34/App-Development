@@ -32,8 +32,8 @@ class _RouteSearchScreenState extends State<RouteSearchScreen> {
       setState(() {
         _routes = response['routes'] ?? [];
         _searchResults = _routes;
-        _favoriteRouteIds =
-            (prefs.getStringList('favoriteRouteIds') ?? []).toSet();
+        _favoriteRouteIds = (prefs.getStringList('favoriteRouteIds') ?? [])
+            .toSet();
         _isLoading = false;
       });
     } catch (e) {
@@ -69,6 +69,7 @@ class _RouteSearchScreenState extends State<RouteSearchScreen> {
     }
 
     await prefs.setStringList('favoriteRouteIds', next.toList());
+    if (!mounted) return;
     setState(() => _favoriteRouteIds = next);
 
     ScaffoldMessenger.of(context).showSnackBar(
@@ -177,9 +178,7 @@ class _RouteSearchScreenState extends State<RouteSearchScreen> {
           GestureDetector(
             onTap: () => Navigator.push(
               context,
-              MaterialPageRoute(
-                builder: (_) => BusEatScreen(routeId: routeId),
-              ),
+              MaterialPageRoute(builder: (_) => BusEatScreen(routeId: routeId)),
             ),
             child: Container(
               padding: const EdgeInsets.all(14),
@@ -208,7 +207,7 @@ class _RouteSearchScreenState extends State<RouteSearchScreen> {
                           '${route['totalDistance'] ?? 0} km  •  '
                           '${route['estimatedTotalTime'] ?? 0} mins',
                           style: TextStyle(
-                            color: AppTheme.white.withOpacity(0.85),
+                            color: AppTheme.white.withValues(alpha: 0.85),
                             fontSize: 11,
                           ),
                         ),

@@ -38,6 +38,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
     try {
       final res = await ApiService.post('/reports/generate/$type', {});
       if (res['success'] == true) {
+        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('${type.toUpperCase()} report generated!'),
@@ -49,6 +50,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
     } catch (e) {
       debugPrint('Generate error: $e');
     }
+    if (!mounted) return;
     setState(() => _isGenerating = false);
   }
 

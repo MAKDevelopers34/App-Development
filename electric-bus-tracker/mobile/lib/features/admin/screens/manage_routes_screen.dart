@@ -1,6 +1,10 @@
 import 'package:flutter/material.dart';
-import '../../../core/theme/app_theme.dart';
+
 import '../../../core/services/api_service.dart';
+import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/real_bus_map.dart';
+import '../../tracking/screens/bus_eat_screen.dart';
+import 'add_route_screen.dart';
 
 class ManageRoutesScreen extends StatefulWidget {
   const ManageRoutesScreen({super.key});
@@ -23,13 +27,23 @@ class _ManageRoutesScreenState extends State<ManageRoutesScreen> {
     setState(() => _isLoading = true);
     try {
       final res = await ApiService.get('/routes');
+      if (!mounted) return;
       setState(() {
         _routes = res['routes'] ?? [];
         _isLoading = false;
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() => _isLoading = false);
     }
+  }
+
+  Future<void> _openAddRoute() async {
+    final created = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(builder: (_) => const AddRouteScreen()),
+    );
+    if (created == true) _loadRoutes();
   }
 
   Future<void> _deleteRoute(String routeId) async {
@@ -58,6 +72,16 @@ class _ManageRoutesScreenState extends State<ManageRoutesScreen> {
     }
   }
 
+  void _openRouteMap(Map<String, dynamic> route) {
+    final routeId = route['routeId']?.toString();
+    if (routeId == null || routeId.isEmpty) return;
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => BusEatScreen(routeId: routeId)),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -71,27 +95,10 @@ class _ManageRoutesScreenState extends State<ManageRoutesScreen> {
         actions: [
           Padding(
             padding: const EdgeInsets.only(right: 12),
-            child: GestureDetector(
-              onTap: () {
-                // Navigate to create route screen
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text(
-                      'Creating route via map — coming in Phase 6!',
-                    ),
-                    backgroundColor: AppTheme.primaryGreen,
-                  ),
-                );
-              },
-              child: Container(
-                width: 32,
-                height: 32,
-                decoration: const BoxDecoration(
-                  color: AppTheme.primaryGreen,
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(Icons.add, color: AppTheme.white, size: 18),
-              ),
+            child: IconButton.filled(
+              onPressed: _openAddRoute,
+              icon: const Icon(Icons.add, size: 18),
+              tooltip: 'Add route',
             ),
           ),
         ],
@@ -107,10 +114,20 @@ class _ManageRoutesScreenState extends State<ManageRoutesScreen> {
                 style: TextStyle(color: AppTheme.textGrey),
               ),
             )
-          : ListView.builder(
-              padding: const EdgeInsets.all(12),
-              itemCount: _routes.length,
-              itemBuilder: (context, i) => _buildRouteCard(_routes[i]),
+          : Column(
+              children: [
+                SizedBox(
+                  height: 220,
+                  child: RealBusMap(routes: _routes, forcedZoom: 9.8),
+                ),
+                Expanded(
+                  child: ListView.builder(
+                    padding: const EdgeInsets.all(12),
+                    itemCount: _routes.length,
+                    itemBuilder: (context, i) => _buildRouteCard(_routes[i]),
+                  ),
+                ),
+              ],
             ),
     );
   }
@@ -127,40 +144,38 @@ class _ManageRoutesScreenState extends State<ManageRoutesScreen> {
       ),
       child: Column(
         children: [
-          // Route name header
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-            decoration: const BoxDecoration(
-              color: AppTheme.primaryGreen,
-              borderRadius: BorderRadius.vertical(top: Radius.circular(14)),
-            ),
-            child: Row(
-              children: [
-                const Icon(Icons.route, color: AppTheme.white, size: 16),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    route['routeName'] ?? '',
-                    style: const TextStyle(
-                      color: AppTheme.white,
-                      fontWeight: FontWeight.w600,
-                      fontSize: 13,
+          InkWell(
+            onTap: () => _openRouteMap(route),
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(14)),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: const BoxDecoration(
+                color: AppTheme.primaryGreen,
+                borderRadius: BorderRadius.vertical(top: Radius.circular(14)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.route, color: AppTheme.white, size: 16),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      route['routeName'] ?? '',
+                      style: const TextStyle(
+                        color: AppTheme.white,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 13,
+                      ),
                     ),
                   ),
-                ),
-                Text(
-                  'Edit',
-                  style: TextStyle(
-                    color: AppTheme.white.withValues(alpha: 0.85),
-                    fontSize: 12,
-                    decoration: TextDecoration.underline,
+                  const Icon(
+                    Icons.map_outlined,
+                    color: AppTheme.white,
+                    size: 17,
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
-
-          // Route details
           Padding(
             padding: const EdgeInsets.all(12),
             child: Column(
@@ -169,35 +184,45 @@ class _ManageRoutesScreenState extends State<ManageRoutesScreen> {
                 const SizedBox(height: 6),
                 _routeDetailRow('To', route['endPoint']?['name'] ?? ''),
                 const SizedBox(height: 6),
-                _routeDetailRow('Stops', '${stops.length} stops'),
+                _routeDetailRow(
+                  'Stops',
+                  '${route['stopCount'] ?? stops.length} stops',
+                ),
                 const SizedBox(height: 6),
                 _routeDetailRow(
                   'Distance',
                   '${route['totalDistance'] ?? 0} km',
                 ),
-
                 const SizedBox(height: 10),
-
-                // Delete button
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: GestureDetector(
-                    onTap: () => _deleteRoute(route['routeId']),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 4,
-                      ),
-                      decoration: BoxDecoration(
-                        color: AppTheme.redStatus,
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: const Text(
-                        'Delete',
-                        style: TextStyle(color: AppTheme.white, fontSize: 11),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    TextButton.icon(
+                      onPressed: () => _openRouteMap(route),
+                      icon: const Icon(Icons.map_outlined, size: 16),
+                      label: const Text('View Map'),
+                    ),
+                    const SizedBox(width: 8),
+                    InkWell(
+                      onTap: () =>
+                          _deleteRoute(route['routeId']?.toString() ?? ''),
+                      borderRadius: BorderRadius.circular(8),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: AppTheme.redStatus,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: const Text(
+                          'Delete',
+                          style: TextStyle(color: AppTheme.white, fontSize: 11),
+                        ),
                       ),
                     ),
-                  ),
+                  ],
                 ),
               ],
             ),
@@ -217,12 +242,15 @@ class _ManageRoutesScreenState extends State<ManageRoutesScreen> {
             style: const TextStyle(fontSize: 12, color: AppTheme.textGrey),
           ),
         ),
-        Text(
-          value,
-          style: const TextStyle(
-            fontSize: 12,
-            fontWeight: FontWeight.w500,
-            color: AppTheme.textDark,
+        Expanded(
+          child: Text(
+            value,
+            textAlign: TextAlign.right,
+            style: const TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
+              color: AppTheme.textDark,
+            ),
           ),
         ),
       ],

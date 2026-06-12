@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/services/api_service.dart';
 import 'admin_profile_screen.dart';
@@ -21,7 +20,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   List<dynamic> _routes = [];
   List<dynamic> _activeBuses = [];
   bool _isLoading = true;
-  String _username = '';
 
   @override
   void initState() {
@@ -30,8 +28,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   }
 
   Future<void> _loadData() async {
-    final prefs = await SharedPreferences.getInstance();
-    setState(() => _username = prefs.getString('username') ?? '');
     try {
       final results = await Future.wait([
         ApiService.get('/admin/dashboard'),
