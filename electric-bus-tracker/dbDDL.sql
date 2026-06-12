@@ -480,7 +480,7 @@ CREATE PROCEDURE sp_save_reset_code(
 BEGIN
   UPDATE users
   SET reset_code = p_reset_code,
-      reset_code_expiry = DATE_ADD(NOW(), INTERVAL 10 MINUTE)
+      reset_code_expiry = DATE_ADD(NOW(), INTERVAL 5 MINUTE)
   WHERE LOWER(email) = LOWER(p_email)
     AND deletion_date IS NULL;
 

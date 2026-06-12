@@ -118,6 +118,25 @@ BEGIN
   SELECT v_affected_rows AS affected_rows;
 END`;
 
+const spSaveResetCode = `
+CREATE PROCEDURE sp_save_reset_code(
+  IN p_email VARCHAR(100),
+  IN p_reset_code VARCHAR(10)
+)
+BEGIN
+  UPDATE users
+  SET reset_code = p_reset_code,
+      reset_code_expiry = DATE_ADD(NOW(), INTERVAL 5 MINUTE)
+  WHERE LOWER(email) = LOWER(p_email)
+    AND deletion_date IS NULL;
+
+  SELECT user_id, name, email
+  FROM users
+  WHERE LOWER(email) = LOWER(p_email)
+    AND deletion_date IS NULL
+  LIMIT 1;
+END`;
+
 const main = async () => {
   const dbName = env('DB_NAME', 'electric_bus_tracker');
   assertSafeDatabaseName(dbName);
@@ -144,7 +163,9 @@ const main = async () => {
       'DROP PROCEDURE IF EXISTS sp_start_duty',
       spStartDuty,
       'DROP PROCEDURE IF EXISTS sp_complete_duty',
-      spCompleteDuty
+      spCompleteDuty,
+      'DROP PROCEDURE IF EXISTS sp_save_reset_code',
+      spSaveResetCode
     ]);
 
     console.log(`Database ${dbName} migrations applied successfully.`);

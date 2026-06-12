@@ -68,7 +68,7 @@ class _ChangingPasswordScreenState extends State<ChangingPasswordScreen> {
     return Scaffold(
       backgroundColor: AppTheme.white,
       appBar: AppBar(
-        title: const Text('Changing Password'),
+        title: const Text('Change Password'),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios, size: 18),
           onPressed: () => Navigator.pop(context),
@@ -161,7 +161,7 @@ class _ChangingPasswordScreenState extends State<ChangingPasswordScreen> {
               child: TextButton(
                 onPressed: () => Navigator.pop(context),
                 child: const Text(
-                  '← Back to Profile',
+                  'Back to Profile',
                   style: TextStyle(color: AppTheme.primaryGreen, fontSize: 13),
                 ),
               ),

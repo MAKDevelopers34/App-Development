@@ -3,6 +3,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../core/services/api_service.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../admin/screens/changing_password_screen.dart';
 import '../../auth/screens/choose_login_screen.dart';
 
 class DriverProfileScreen extends StatefulWidget {
@@ -137,6 +138,36 @@ class _DriverProfileScreenState extends State<DriverProfileScreen> {
                                   profile['licenseNo'] ?? 'Not assigned',
                                 ),
                                 const SizedBox(height: 20),
+                                SizedBox(
+                                  width: double.infinity,
+                                  child: OutlinedButton.icon(
+                                    onPressed: () => Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (_) =>
+                                            const ChangingPasswordScreen(),
+                                      ),
+                                    ),
+                                    style: OutlinedButton.styleFrom(
+                                      foregroundColor: AppTheme.primaryGreen,
+                                      side: const BorderSide(
+                                        color: AppTheme.primaryGreen,
+                                      ),
+                                      padding: const EdgeInsets.symmetric(
+                                        vertical: 13,
+                                      ),
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                    ),
+                                    icon: const Icon(
+                                      Icons.lock_reset,
+                                      size: 18,
+                                    ),
+                                    label: const Text('Reset Password'),
+                                  ),
+                                ),
+                                const SizedBox(height: 12),
                                 SizedBox(
                                   width: double.infinity,
                                   child: ElevatedButton.icon(
