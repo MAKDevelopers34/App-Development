@@ -1,11 +1,10 @@
 import 'package:flutter/material.dart';
-import '../../../core/theme/app_theme.dart';
+
 import '../../../core/services/api_service.dart';
+import '../../../core/theme/app_theme.dart';
+import '../widgets/admin_bottom_nav.dart';
 import 'admin_profile_screen.dart';
-import 'manage_duties_screen.dart';
-import 'manage_drivers_screen.dart';
-import 'manage_routes_screen.dart';
-import 'reports_screen.dart';
+import 'admin_route_detail_screen.dart';
 
 class AdminDashboardScreen extends StatefulWidget {
   const AdminDashboardScreen({super.key});
@@ -15,8 +14,6 @@ class AdminDashboardScreen extends StatefulWidget {
 }
 
 class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
-  int _currentNavIndex = 0;
-  Map<String, dynamic>? _stats;
   List<dynamic> _routes = [];
   List<dynamic> _activeBuses = [];
   bool _isLoading = true;
@@ -28,32 +25,67 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   }
 
   Future<void> _loadData() async {
+    setState(() => _isLoading = true);
+
     try {
       final results = await Future.wait([
-        ApiService.get('/admin/dashboard'),
         ApiService.get('/routes'),
         ApiService.get('/gps/active-buses'),
       ]);
 
+      final routeSummaries = results[0]['routes'] as List? ?? [];
+      final detailedRoutes = await _loadDetailedRoutes(routeSummaries);
+
+      if (!mounted) return;
       setState(() {
-        _stats = results[0]['stats'];
-        _routes = results[1]['routes'] ?? [];
-        _activeBuses = results[2]['buses'] ?? [];
+        _routes = detailedRoutes;
+        _activeBuses = results[1]['buses'] ?? [];
         _isLoading = false;
       });
-    } catch (e) {
+    } catch (_) {
+      if (!mounted) return;
       setState(() => _isLoading = false);
     }
+  }
+
+  Future<List<dynamic>> _loadDetailedRoutes(List<dynamic> routeSummaries) {
+    return Future.wait(
+      routeSummaries.map((rawRoute) async {
+        if (rawRoute is! Map) return rawRoute;
+        final route = Map<String, dynamic>.from(rawRoute);
+        final routeId = route['routeId']?.toString();
+        if (routeId == null || routeId.isEmpty) return route;
+
+        try {
+          final response = await ApiService.get('/routes/$routeId');
+          return response['route'] ?? route;
+        } catch (_) {
+          return route;
+        }
+      }),
+    );
+  }
+
+  void _openRoute(Map<String, dynamic> route) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => AdminRouteDetailScreen(
+          route: route,
+          activeBuses: _activeBuses,
+        ),
+      ),
+    ).then((_) => _loadData());
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: AppTheme.bgGrey,
+      backgroundColor: AppTheme.white,
       body: SafeArea(
         child: Column(
           children: [
-            _buildTopBar(),
+            _buildHeader(),
             Expanded(
               child: _isLoading
                   ? const Center(
@@ -62,133 +94,104 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                       ),
                     )
                   : RefreshIndicator(
-                      onRefresh: _loadData,
                       color: AppTheme.primaryGreen,
-                      child: SingleChildScrollView(
-                        physics: const AlwaysScrollableScrollPhysics(),
-                        padding: const EdgeInsets.all(16),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            // Stats row
-                            _buildStatsRow(),
-                            const SizedBox(height: 20),
-
-                            // Routes grid header
-                            Row(
-                              children: [
-                                const Text(
-                                  'Active Routes',
-                                  style: TextStyle(
-                                    fontSize: 15,
-                                    fontWeight: FontWeight.w600,
-                                    color: AppTheme.textDark,
+                      onRefresh: _loadData,
+                      child: _routes.isEmpty
+                          ? const SingleChildScrollView(
+                              physics: AlwaysScrollableScrollPhysics(),
+                              child: SizedBox(
+                                height: 420,
+                                child: Center(
+                                  child: Text(
+                                    'No routes found',
+                                    style: TextStyle(
+                                      color: AppTheme.textGrey,
+                                      fontSize: 13,
+                                    ),
                                   ),
                                 ),
-                                const Spacer(),
-                                Text(
-                                  '${_routes.length} routes',
-                                  style: const TextStyle(
-                                    fontSize: 12,
-                                    color: AppTheme.textGrey,
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 12),
-
-                            // Routes grid — matching design
-                            GridView.builder(
-                              shrinkWrap: true,
-                              physics: const NeverScrollableScrollPhysics(),
+                              ),
+                            )
+                          : GridView.builder(
+                              physics: const AlwaysScrollableScrollPhysics(),
+                              padding: const EdgeInsets.fromLTRB(
+                                16,
+                                12,
+                                16,
+                                18,
+                              ),
                               gridDelegate:
                                   const SliverGridDelegateWithFixedCrossAxisCount(
                                     crossAxisCount: 2,
                                     crossAxisSpacing: 10,
                                     mainAxisSpacing: 10,
-                                    childAspectRatio: 1.4,
+                                    childAspectRatio: 0.82,
                                   ),
                               itemCount: _routes.length,
-                              itemBuilder: (context, index) =>
-                                  _buildRouteCard(_routes[index], index),
+                              itemBuilder: (context, index) {
+                                final route =
+                                    Map<String, dynamic>.from(_routes[index]);
+                                return _buildRouteCard(route);
+                              },
                             ),
-                          ],
-                        ),
-                      ),
                     ),
             ),
           ],
         ),
       ),
-      bottomNavigationBar: _buildAdminBottomNav(),
+      bottomNavigationBar: const AdminBottomNav(selectedIndex: 2),
     );
   }
 
-  Widget _buildTopBar() {
+  Widget _buildHeader() {
     return Container(
       color: AppTheme.white,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-      child: Row(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            width: 8,
-            height: 8,
-            decoration: const BoxDecoration(
-              color: AppTheme.primaryGreen,
-              shape: BoxShape.circle,
-            ),
-          ),
-          const SizedBox(width: 8),
-          const Text(
-            'Electric Bus Tracking',
-            style: TextStyle(
-              fontSize: 15,
-              fontWeight: FontWeight.w600,
-              color: AppTheme.primaryGreen,
-            ),
-          ),
-          const Spacer(),
-          // Notification bell
-          Stack(
+          Row(
             children: [
               const Icon(
-                Icons.notifications_outlined,
-                color: AppTheme.textGrey,
+                Icons.location_on_outlined,
+                color: AppTheme.primaryGreen,
+                size: 20,
               ),
-              if ((_stats?['activeBuses'] ?? 0) > 0)
-                Positioned(
-                  right: 0,
-                  top: 0,
-                  child: Container(
-                    width: 8,
-                    height: 8,
-                    decoration: const BoxDecoration(
-                      color: AppTheme.redStatus,
-                      shape: BoxShape.circle,
-                    ),
+              const SizedBox(width: 6),
+              const Expanded(
+                child: Text(
+                  'Electric Bus Tracking',
+                  style: TextStyle(
+                    color: AppTheme.primaryGreen,
+                    fontSize: 17,
+                    fontWeight: FontWeight.w800,
                   ),
                 ),
+              ),
+              GestureDetector(
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const AdminProfileScreen()),
+                ),
+                child: const CircleAvatar(
+                  radius: 16,
+                  backgroundColor: AppTheme.primaryGreen,
+                  child: Icon(
+                    Icons.person_outline,
+                    color: AppTheme.white,
+                    size: 18,
+                  ),
+                ),
+              ),
             ],
           ),
-          const SizedBox(width: 12),
-          // Close/logout quick button
-          GestureDetector(
-            onTap: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const AdminProfileScreen()),
-            ),
-            child: Container(
-              width: 32,
-              height: 32,
-              decoration: const BoxDecoration(
-                color: AppTheme.lightGreen,
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(
-                Icons.person,
-                color: AppTheme.primaryGreen,
-                size: 18,
-              ),
+          const SizedBox(height: 8),
+          const Text(
+            'Admin Dashboard',
+            style: TextStyle(
+              color: AppTheme.textDark,
+              fontSize: 15,
+              fontWeight: FontWeight.w800,
             ),
           ),
         ],
@@ -196,254 +199,278 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     );
   }
 
-  Widget _buildStatsRow() {
-    return Row(
-      children: [
-        _statBox(
-          'Active\nBuses',
-          '${_activeBuses.length}',
-          AppTheme.primaryGreen,
-          Icons.directions_bus,
-        ),
-        const SizedBox(width: 10),
-        _statBox(
-          'Total\nDrivers',
-          '${_stats?['totalDrivers'] ?? 0}',
-          AppTheme.orangeStatus,
-          Icons.people,
-        ),
-        const SizedBox(width: 10),
-        _statBox(
-          'Today\nDuties',
-          '${_stats?['todayDuties'] ?? 0}',
-          Colors.blue,
-          Icons.assignment,
-        ),
-        const SizedBox(width: 10),
-        _statBox(
-          'Completed',
-          '${_stats?['completedDuties'] ?? 0}',
-          AppTheme.darkGreen,
-          Icons.check_circle,
-        ),
-      ],
-    );
-  }
+  Widget _buildRouteCard(Map<String, dynamic> route) {
+    final routeName = route['routeName']?.toString() ?? 'Route';
+    final busCount = _busCountFor(route);
+    final isActive = route['status']?.toString().toLowerCase() == 'active';
 
-  Widget _statBox(String label, String value, Color color, IconData icon) {
-    return Expanded(
-      child: Container(
-        padding: const EdgeInsets.all(10),
-        decoration: BoxDecoration(
-          color: AppTheme.white,
-          borderRadius: BorderRadius.circular(12),
-          boxShadow: [BoxShadow(color: AppTheme.cardShadow, blurRadius: 4)],
-        ),
-        child: Column(
-          children: [
-            Icon(icon, color: color, size: 20),
-            const SizedBox(height: 4),
-            Text(
-              value,
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.w700,
-                color: color,
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () => _openRoute(route),
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          decoration: BoxDecoration(
+            color: AppTheme.white,
+            borderRadius: BorderRadius.circular(8),
+            boxShadow: [
+              BoxShadow(
+                color: AppTheme.cardShadow,
+                blurRadius: 8,
+                offset: const Offset(0, 2),
               ),
-            ),
-            Text(
-              label,
-              textAlign: TextAlign.center,
-              style: const TextStyle(fontSize: 9, color: AppTheme.textGrey),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildRouteCard(Map<String, dynamic> route, int index) {
-    // Check if any active bus is on this route
-    final hasActiveBus = _activeBuses.any(
-      (bus) => bus['routeId'] == route['routeId'],
-    );
-
-    final stops = route['stops'] as List? ?? [];
-
-    return GestureDetector(
-      onTap: () => Navigator.push(
-        context,
-        MaterialPageRoute(builder: (_) => const ManageRoutesScreen()),
-      ),
-      child: Container(
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: AppTheme.white,
-          borderRadius: BorderRadius.circular(14),
-          boxShadow: [BoxShadow(color: AppTheme.cardShadow, blurRadius: 6)],
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Route name
-            Text(
-              route['routeName'] ?? '',
-              style: const TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-                color: AppTheme.textDark,
+            ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: ClipRRect(
+                  borderRadius: const BorderRadius.vertical(
+                    top: Radius.circular(8),
+                  ),
+                  child: _MiniRouteMap(route: route),
+                ),
               ),
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-            ),
-            const Spacer(),
-
-            // Bus dots — show active buses
-            Row(
-              children: [
-                Container(
-                  width: 8,
-                  height: 8,
-                  decoration: BoxDecoration(
-                    color: hasActiveBus
-                        ? AppTheme.primaryGreen
-                        : const Color(0xFFDDDDDD),
-                    shape: BoxShape.circle,
-                  ),
-                ),
-                const SizedBox(width: 4),
-                Container(
-                  width: 8,
-                  height: 8,
-                  decoration: BoxDecoration(
-                    color: hasActiveBus
-                        ? AppTheme.primaryGreen.withValues(alpha: 0.5)
-                        : const Color(0xFFDDDDDD),
-                    shape: BoxShape.circle,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 6),
-
-            // Bottom info
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    '${stops.length} stops',
-                    style: const TextStyle(
-                      fontSize: 10,
-                      color: AppTheme.textGrey,
+              Padding(
+                padding: const EdgeInsets.fromLTRB(8, 7, 8, 8),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      routeName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: AppTheme.textDark,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w900,
+                      ),
                     ),
-                  ),
-                ),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 6,
-                    vertical: 2,
-                  ),
-                  decoration: BoxDecoration(
-                    color: hasActiveBus
-                        ? AppTheme.primaryGreen
-                        : const Color(0xFFDDDDDD),
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  child: Text(
-                    hasActiveBus ? 'Active' : 'Idle',
-                    style: TextStyle(
-                      color: hasActiveBus ? AppTheme.white : AppTheme.textGrey,
-                      fontSize: 9,
-                      fontWeight: FontWeight.w600,
+                    const SizedBox(height: 4),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Expanded(
+                          child: Text(
+                            '$busCount\nbuses',
+                            style: const TextStyle(
+                              color: AppTheme.textGrey,
+                              fontSize: 10,
+                              height: 1.05,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 7,
+                            vertical: 3,
+                          ),
+                          decoration: BoxDecoration(
+                            color: isActive
+                                ? AppTheme.lightGreen
+                                : const Color(0xFFECECEC),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(
+                            isActive ? 'Active' : 'Inactive',
+                            style: TextStyle(
+                              color: isActive
+                                  ? AppTheme.primaryGreen
+                                  : AppTheme.textGrey,
+                              fontSize: 9,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
-                  ),
+                  ],
                 ),
-              ],
-            ),
-          ],
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
 
-  Widget _buildAdminBottomNav() {
-    return Container(
-      decoration: BoxDecoration(
-        color: AppTheme.white,
-        boxShadow: [
-          BoxShadow(
-            color: AppTheme.cardShadow,
-            blurRadius: 10,
-            offset: const Offset(0, -3),
-          ),
-        ],
-      ),
-      child: BottomNavigationBar(
-        currentIndex: _currentNavIndex,
-        onTap: (index) {
-          setState(() => _currentNavIndex = index);
-          switch (index) {
-            case 1:
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const ManageDutiesScreen()),
-              ).then((_) => setState(() => _currentNavIndex = 0));
-              break;
-            case 2:
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const ManageDriversScreen()),
-              ).then((_) => setState(() => _currentNavIndex = 0));
-              break;
-            case 3:
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const ReportsScreen()),
-              ).then((_) => setState(() => _currentNavIndex = 0));
-              break;
-            case 4:
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const AdminProfileScreen()),
-              ).then((_) => setState(() => _currentNavIndex = 0));
-              break;
-          }
-        },
-        backgroundColor: AppTheme.white,
-        selectedItemColor: AppTheme.primaryGreen,
-        unselectedItemColor: AppTheme.textGrey,
-        type: BottomNavigationBarType.fixed,
-        elevation: 0,
-        selectedFontSize: 10,
-        unselectedFontSize: 10,
-        items: const [
-          BottomNavigationBarItem(
-            icon: Icon(Icons.dashboard_outlined),
-            activeIcon: Icon(Icons.dashboard),
-            label: 'Dashboard',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.assignment_outlined),
-            activeIcon: Icon(Icons.assignment),
-            label: 'Duties',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.people_outline),
-            activeIcon: Icon(Icons.people),
-            label: 'Drivers',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.bar_chart_outlined),
-            activeIcon: Icon(Icons.bar_chart),
-            label: 'Reports',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.person_outline),
-            activeIcon: Icon(Icons.person),
-            label: 'Profile',
-          ),
-        ],
-      ),
+  int _busCountFor(Map<String, dynamic> route) {
+    final routeId = route['routeId']?.toString();
+    final activeCount = _activeBuses.whereType<Map>().where((bus) {
+      return bus['routeId']?.toString() == routeId;
+    }).length;
+
+    if (activeCount > 0) return activeCount;
+
+    final busIds = <String>{};
+    for (final rawSchedule in (route['schedule'] as List? ?? [])) {
+      if (rawSchedule is! Map) continue;
+      final busId = rawSchedule['busId']?.toString();
+      if (busId != null && busId.isNotEmpty) busIds.add(busId);
+    }
+
+    return busIds.length;
+  }
+}
+
+class _MiniRouteMap extends StatelessWidget {
+  final Map<String, dynamic> route;
+
+  const _MiniRouteMap({required this.route});
+
+  @override
+  Widget build(BuildContext context) {
+    return CustomPaint(
+      painter: _MiniRoutePainter(route),
+      child: const SizedBox.expand(),
     );
   }
+}
+
+class _MiniRoutePainter extends CustomPainter {
+  final Map<String, dynamic> route;
+
+  _MiniRoutePainter(this.route);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rect = Offset.zero & size;
+    final bgPaint = Paint()
+      ..shader = const LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: [Color(0xFFF0FFF6), Color(0xFFEAF5FF)],
+      ).createShader(rect);
+    canvas.drawRect(rect, bgPaint);
+
+    final gridPaint = Paint()
+      ..color = AppTheme.primaryGreen.withValues(alpha: 0.07)
+      ..strokeWidth = 1;
+
+    for (var i = 1; i < 4; i++) {
+      final dx = size.width * i / 4;
+      final dy = size.height * i / 4;
+      canvas.drawLine(Offset(dx, 0), Offset(dx, size.height), gridPaint);
+      canvas.drawLine(Offset(0, dy), Offset(size.width, dy), gridPaint);
+    }
+
+    final rawPoints = _routePoints();
+    final points = _toCanvasPoints(rawPoints, size);
+    if (points.length >= 2) {
+      final path = Path()..moveTo(points.first.dx, points.first.dy);
+      for (final point in points.skip(1)) {
+        path.lineTo(point.dx, point.dy);
+      }
+
+      canvas.drawPath(
+        path,
+        Paint()
+          ..color = AppTheme.primaryGreen.withValues(alpha: 0.22)
+          ..strokeWidth = 3
+          ..style = PaintingStyle.stroke
+          ..strokeCap = StrokeCap.round
+          ..strokeJoin = StrokeJoin.round,
+      );
+    }
+
+    final markerPoints = _markerPoints(points);
+    for (final point in markerPoints) {
+      canvas.drawCircle(
+        point,
+        6,
+        Paint()..color = AppTheme.white.withValues(alpha: 0.96),
+      );
+      canvas.drawCircle(
+        point,
+        4.5,
+        Paint()..color = AppTheme.primaryGreen,
+      );
+      canvas.drawCircle(point, 1.4, Paint()..color = AppTheme.white);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _MiniRoutePainter oldDelegate) {
+    return oldDelegate.route != route;
+  }
+
+  List<_GeoPoint> _routePoints() {
+    final points = <_GeoPoint>[
+      ?_pointFrom(route['startPoint']),
+      ...((route['stops'] as List? ?? [])
+          .whereType<Map>()
+          .map(_pointFrom)
+          .whereType<_GeoPoint>()),
+      ?_pointFrom(route['endPoint']),
+    ];
+
+    if (points.length >= 2) return points;
+    return const [
+      _GeoPoint(32.50, 71.45),
+      _GeoPoint(32.58, 71.54),
+    ];
+  }
+
+  List<Offset> _toCanvasPoints(List<_GeoPoint> points, Size size) {
+    final minLat = points
+        .map((point) => point.latitude)
+        .reduce((a, b) => a < b ? a : b);
+    final maxLat = points
+        .map((point) => point.latitude)
+        .reduce((a, b) => a > b ? a : b);
+    final minLng = points
+        .map((point) => point.longitude)
+        .reduce((a, b) => a < b ? a : b);
+    final maxLng = points
+        .map((point) => point.longitude)
+        .reduce((a, b) => a > b ? a : b);
+
+    final latSpan = (maxLat - minLat).abs() < 0.0001
+        ? 0.0001
+        : (maxLat - minLat).abs();
+    final lngSpan = (maxLng - minLng).abs() < 0.0001
+        ? 0.0001
+        : (maxLng - minLng).abs();
+    const padding = 18.0;
+
+    return points.map((point) {
+      final x = padding +
+          ((point.longitude - minLng) / lngSpan) * (size.width - padding * 2);
+      final y = padding +
+          (1 - ((point.latitude - minLat) / latSpan)) *
+              (size.height - padding * 2);
+      return Offset(x, y);
+    }).toList();
+  }
+
+  List<Offset> _markerPoints(List<Offset> points) {
+    if (points.length <= 3) return points;
+    return [
+      points.first,
+      points[points.length ~/ 2],
+      points.last,
+    ];
+  }
+
+  _GeoPoint? _pointFrom(dynamic source) {
+    if (source is! Map) return null;
+    final lat = _numberFrom(source['latitude']);
+    final lng = _numberFrom(source['longitude']);
+    if (lat == null || lng == null) return null;
+    return _GeoPoint(lat, lng);
+  }
+
+  double? _numberFrom(dynamic value) {
+    if (value is num) return value.toDouble();
+    return double.tryParse(value?.toString() ?? '');
+  }
+}
+
+class _GeoPoint {
+  final double latitude;
+  final double longitude;
+
+  const _GeoPoint(this.latitude, this.longitude);
 }

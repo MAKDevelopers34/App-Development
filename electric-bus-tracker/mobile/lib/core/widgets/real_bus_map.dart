@@ -212,9 +212,12 @@ class _RealBusMapState extends State<RealBusMap> {
       final points = _routePoints(route);
 
       if ((widget.showEndpointMarkers || isSelected) && points.isNotEmpty) {
-        markers.add(_pointMarker(points.first, Icons.trip_origin, 'Start'));
+        final startLabel =
+            route['startPoint']?['name']?.toString() ?? 'Start';
+        final endLabel = route['endPoint']?['name']?.toString() ?? 'End';
+        markers.add(_pointMarker(points.first, Icons.trip_origin, startLabel));
         if (points.length > 1) {
-          markers.add(_pointMarker(points.last, Icons.flag, 'End'));
+          markers.add(_pointMarker(points.last, Icons.flag, endLabel));
         }
       }
 
@@ -249,24 +252,33 @@ class _RealBusMapState extends State<RealBusMap> {
   Marker _pointMarker(LatLng point, IconData icon, String label) {
     return Marker(
       point: point,
-      width: 48,
-      height: 48,
+      width: 86,
+      height: 62,
       child: Tooltip(
         message: label,
-        child: Container(
-          decoration: BoxDecoration(
-            color: AppTheme.white,
-            shape: BoxShape.circle,
-            border: Border.all(color: AppTheme.primaryGreen, width: 3),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.18),
-                blurRadius: 6,
-                offset: const Offset(0, 2),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 34,
+              height: 34,
+              decoration: BoxDecoration(
+                color: AppTheme.white,
+                shape: BoxShape.circle,
+                border: Border.all(color: AppTheme.primaryGreen, width: 3),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.18),
+                    blurRadius: 6,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
               ),
-            ],
-          ),
-          child: Icon(icon, color: AppTheme.primaryGreen, size: 20),
+              child: Icon(icon, color: AppTheme.primaryGreen, size: 17),
+            ),
+            const SizedBox(height: 2),
+            _MapLabel(text: label.toUpperCase()),
+          ],
         ),
       ),
     );
@@ -275,22 +287,31 @@ class _RealBusMapState extends State<RealBusMap> {
   Marker _stopMarker(LatLng point, String label) {
     return Marker(
       point: point,
-      width: 24,
-      height: 24,
+      width: 74,
+      height: 44,
       child: Tooltip(
         message: label,
-        child: Container(
-          decoration: BoxDecoration(
-            color: AppTheme.white,
-            shape: BoxShape.circle,
-            border: Border.all(color: AppTheme.darkGreen, width: 2),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.12),
-                blurRadius: 4,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 15,
+              height: 15,
+              decoration: BoxDecoration(
+                color: AppTheme.primaryGreen,
+                shape: BoxShape.circle,
+                border: Border.all(color: AppTheme.white, width: 2),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.12),
+                    blurRadius: 4,
+                  ),
+                ],
               ),
-            ],
-          ),
+            ),
+            const SizedBox(height: 2),
+            _MapLabel(text: label),
+          ],
         ),
       ),
     );
@@ -467,6 +488,42 @@ class _MapAttribution extends StatelessWidget {
           color: AppTheme.textGrey,
           fontSize: 10,
           fontWeight: FontWeight.w500,
+        ),
+      ),
+    );
+  }
+}
+
+class _MapLabel extends StatelessWidget {
+  final String text;
+
+  const _MapLabel({required this.text});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      constraints: const BoxConstraints(maxWidth: 78),
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+      decoration: BoxDecoration(
+        color: AppTheme.white.withValues(alpha: 0.94),
+        borderRadius: BorderRadius.circular(4),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.12),
+            blurRadius: 4,
+            offset: const Offset(0, 1),
+          ),
+        ],
+      ),
+      child: Text(
+        text,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        textAlign: TextAlign.center,
+        style: const TextStyle(
+          color: AppTheme.textGrey,
+          fontSize: 8,
+          fontWeight: FontWeight.w700,
         ),
       ),
     );
