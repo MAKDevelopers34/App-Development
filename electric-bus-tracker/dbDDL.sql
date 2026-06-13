@@ -30,6 +30,7 @@ CREATE TABLE drivers (
   user_id INT NOT NULL UNIQUE,
   license_no VARCHAR(50) NOT NULL UNIQUE,
   hire_date DATE NOT NULL,
+  address VARCHAR(255) NULL,
   status ENUM('Available', 'On-Duty', 'Off-Duty', 'On-Leave') NOT NULL DEFAULT 'Available',
   CONSTRAINT fk_drivers_user
     FOREIGN KEY (user_id) REFERENCES users(user_id)
@@ -647,7 +648,8 @@ BEGIN
     u.name,
     u.email,
     u.contact,
-    u.account_status
+    u.account_status,
+    d.address
   FROM drivers d
   JOIN users u ON u.user_id = d.user_id
   WHERE u.deletion_date IS NULL
@@ -662,7 +664,8 @@ CREATE PROCEDURE sp_create_driver(
   IN p_contact VARCHAR(20),
   IN p_password_hash VARCHAR(255),
   IN p_license_no VARCHAR(50),
-  IN p_hire_date DATE
+  IN p_hire_date DATE,
+  IN p_address VARCHAR(255)
 )
 BEGIN
   DECLARE v_user_id INT;
@@ -672,8 +675,8 @@ BEGIN
 
   SET v_user_id = LAST_INSERT_ID();
 
-  INSERT INTO drivers(user_id, license_no, hire_date)
-  VALUES (v_user_id, p_license_no, p_hire_date);
+  INSERT INTO drivers(user_id, license_no, hire_date, address)
+  VALUES (v_user_id, p_license_no, p_hire_date, p_address);
 
   SELECT LAST_INSERT_ID() AS driver_id, v_user_id AS user_id;
 END$$
@@ -684,7 +687,8 @@ CREATE PROCEDURE sp_update_driver(
   IN p_email VARCHAR(100),
   IN p_contact VARCHAR(20),
   IN p_license_no VARCHAR(50),
-  IN p_driver_status VARCHAR(20)
+  IN p_driver_status VARCHAR(20),
+  IN p_address VARCHAR(255)
 )
 BEGIN
   UPDATE users u
@@ -693,6 +697,7 @@ BEGIN
       u.email = LOWER(p_email),
       u.contact = p_contact,
       d.license_no = p_license_no,
+      d.address = p_address,
       d.status = p_driver_status
   WHERE d.driver_id = p_driver_id;
 END$$

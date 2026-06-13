@@ -26,6 +26,94 @@ const runStatements = async (connection, statements) => {
   }
 };
 
+const ensureDriverAddressColumn = async (connection, dbName) => {
+  const [rows] = await connection.query(
+    `SELECT COUNT(*) AS count
+     FROM information_schema.columns
+     WHERE table_schema = ?
+       AND table_name = 'drivers'
+       AND column_name = 'address'`,
+    [dbName]
+  );
+
+  if (Number(rows[0]?.count || 0) === 0) {
+    await connection.query(
+      `ALTER TABLE \`${dbName}\`.drivers
+       ADD COLUMN address VARCHAR(255) NULL AFTER hire_date`
+    );
+  }
+};
+
+const spGetDrivers = `
+CREATE PROCEDURE sp_get_drivers()
+BEGIN
+  SELECT
+    d.driver_id,
+    d.license_no,
+    d.hire_date,
+    d.status AS driver_status,
+    d.address,
+    u.user_id,
+    u.username,
+    u.user_code,
+    u.name,
+    u.email,
+    u.contact,
+    u.account_status
+  FROM drivers d
+  JOIN users u ON u.user_id = d.user_id
+  WHERE u.deletion_date IS NULL
+  ORDER BY u.name;
+END`;
+
+const spCreateDriver = `
+CREATE PROCEDURE sp_create_driver(
+  IN p_username VARCHAR(50),
+  IN p_user_code VARCHAR(30),
+  IN p_name VARCHAR(100),
+  IN p_email VARCHAR(100),
+  IN p_contact VARCHAR(20),
+  IN p_password_hash VARCHAR(255),
+  IN p_license_no VARCHAR(50),
+  IN p_hire_date DATE,
+  IN p_address VARCHAR(255)
+)
+BEGIN
+  DECLARE v_user_id INT;
+
+  INSERT INTO users(username, user_code, name, email, contact, password_hash, role)
+  VALUES (LOWER(p_username), p_user_code, p_name, LOWER(p_email), p_contact, p_password_hash, 'Driver');
+
+  SET v_user_id = LAST_INSERT_ID();
+
+  INSERT INTO drivers(user_id, license_no, hire_date, address)
+  VALUES (v_user_id, p_license_no, p_hire_date, p_address);
+
+  SELECT LAST_INSERT_ID() AS driver_id, v_user_id AS user_id;
+END`;
+
+const spUpdateDriver = `
+CREATE PROCEDURE sp_update_driver(
+  IN p_driver_id INT,
+  IN p_name VARCHAR(100),
+  IN p_email VARCHAR(100),
+  IN p_contact VARCHAR(20),
+  IN p_license_no VARCHAR(50),
+  IN p_driver_status VARCHAR(20),
+  IN p_address VARCHAR(255)
+)
+BEGIN
+  UPDATE users u
+  JOIN drivers d ON d.user_id = u.user_id
+  SET u.name = p_name,
+      u.email = LOWER(p_email),
+      u.contact = p_contact,
+      d.license_no = p_license_no,
+      d.status = p_driver_status,
+      d.address = p_address
+  WHERE d.driver_id = p_driver_id;
+END`;
+
 const spGetDriverMonthlyDuties = `
 CREATE PROCEDURE sp_get_driver_monthly_duties(
   IN p_user_id INT,
@@ -157,7 +245,14 @@ const main = async () => {
     }
 
     await connection.query(`USE \`${dbName}\``);
+    await ensureDriverAddressColumn(connection, dbName);
     await runStatements(connection, [
+      'DROP PROCEDURE IF EXISTS sp_get_drivers',
+      spGetDrivers,
+      'DROP PROCEDURE IF EXISTS sp_create_driver',
+      spCreateDriver,
+      'DROP PROCEDURE IF EXISTS sp_update_driver',
+      spUpdateDriver,
       'DROP PROCEDURE IF EXISTS sp_get_driver_monthly_duties',
       spGetDriverMonthlyDuties,
       'DROP PROCEDURE IF EXISTS sp_start_duty',

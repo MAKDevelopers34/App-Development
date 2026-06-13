@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
-import '../../../core/theme/app_theme.dart';
+
 import '../../../core/services/api_service.dart';
+import '../../../core/theme/app_theme.dart';
+import '../widgets/admin_bottom_nav.dart';
 import 'driver_registration_screen.dart';
 import 'edit_driver_screen.dart';
 
@@ -12,10 +14,10 @@ class ManageDriversScreen extends StatefulWidget {
 }
 
 class _ManageDriversScreenState extends State<ManageDriversScreen> {
+  final _searchController = TextEditingController();
   List<dynamic> _drivers = [];
   List<dynamic> _filtered = [];
   bool _isLoading = true;
-  final _searchController = TextEditingController();
 
   @override
   void initState() {
@@ -23,42 +25,103 @@ class _ManageDriversScreenState extends State<ManageDriversScreen> {
     _loadDrivers();
   }
 
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
   Future<void> _loadDrivers() async {
     setState(() => _isLoading = true);
     try {
       final res = await ApiService.get('/admin/drivers');
+      if (!mounted) return;
       setState(() {
         _drivers = res['drivers'] ?? [];
         _filtered = _drivers;
         _isLoading = false;
       });
-    } catch (e) {
+    } catch (_) {
+      if (!mounted) return;
       setState(() => _isLoading = false);
     }
   }
 
   void _search(String query) {
+    final term = query.trim().toLowerCase();
     setState(() {
-      _filtered = _drivers.where((d) {
-        final name =
-            d['profileInfo']?['fullName']?.toString().toLowerCase() ?? '';
-        final username = d['username']?.toString().toLowerCase() ?? '';
-        return name.contains(query.toLowerCase()) ||
-            username.contains(query.toLowerCase());
+      _filtered = _drivers.where((raw) {
+        final driver = Map<String, dynamic>.from(raw as Map);
+        final profile = driver['profileInfo'] as Map?;
+        final values = [
+          profile?['fullName'],
+          driver['username'],
+          driver['userId'],
+          driver['email'],
+          profile?['phone'],
+          profile?['licenseNo'],
+        ].map((value) => value?.toString().toLowerCase() ?? '');
+        return values.any((value) => value.contains(term));
       }).toList();
     });
   }
 
-  Future<void> _toggleStatus(String driverId, bool isActive) async {
+  Future<void> _openCreate() async {
+    final created = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(builder: (_) => const DriverRegistrationScreen()),
+    );
+    if (created == true) _loadDrivers();
+  }
+
+  Future<void> _openEdit(Map<String, dynamic> driver) async {
+    final updated = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(builder: (_) => EditDriverScreen(driver: driver)),
+    );
+    if (updated == true) _loadDrivers();
+  }
+
+  Future<void> _removeDriver(Map<String, dynamic> driver) async {
+    final profile = driver['profileInfo'] as Map?;
+    final name = profile?['fullName']?.toString() ?? driver['username'] ?? 'driver';
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Remove Driver'),
+        content: Text('Remove $name from the active driver list?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: TextButton.styleFrom(foregroundColor: AppTheme.redStatus),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+
     try {
-      if (isActive) {
-        await ApiService.post('/admin/drivers/$driverId/deactivate', {});
-      } else {
-        await ApiService.post('/admin/drivers/$driverId/activate', {});
+      final id = driver['_id']?.toString() ?? driver['driverId']?.toString();
+      if (id == null) return;
+      final res = await ApiService.delete('/admin/drivers/$id');
+      if (res['success'] != true) {
+        await ApiService.post('/admin/drivers/$id/deactivate', {});
       }
       _loadDrivers();
-    } catch (e) {
-      debugPrint('Toggle error: $e');
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Could not remove driver'),
+          backgroundColor: AppTheme.redStatus,
+        ),
+      );
     }
   }
 
@@ -69,64 +132,23 @@ class _ManageDriversScreenState extends State<ManageDriversScreen> {
       appBar: AppBar(
         title: const Text('Manage Drivers'),
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios, size: 18),
+          icon: const Icon(Icons.arrow_back_ios_new, size: 18),
           onPressed: () => Navigator.pop(context),
         ),
         actions: [
           Padding(
             padding: const EdgeInsets.only(right: 12),
-            child: GestureDetector(
-              onTap: () async {
-                await Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => const DriverRegistrationScreen(),
-                  ),
-                );
-                _loadDrivers();
-              },
-              child: Container(
-                width: 32,
-                height: 32,
-                decoration: const BoxDecoration(
-                  color: AppTheme.primaryGreen,
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(Icons.add, color: AppTheme.white, size: 18),
-              ),
+            child: IconButton.filled(
+              onPressed: _openCreate,
+              icon: const Icon(Icons.person_add_alt_1_outlined, size: 18),
+              tooltip: 'Register driver',
             ),
           ),
         ],
       ),
       body: Column(
         children: [
-          Container(
-            color: AppTheme.white,
-            padding: const EdgeInsets.all(12),
-            child: TextField(
-              controller: _searchController,
-              onChanged: _search,
-              decoration: InputDecoration(
-                hintText: 'Search by name...',
-                prefixIcon: const Icon(
-                  Icons.search,
-                  color: AppTheme.primaryGreen,
-                  size: 20,
-                ),
-                isDense: true,
-                suffixIcon: _searchController.text.isNotEmpty
-                    ? IconButton(
-                        icon: const Icon(Icons.clear, size: 18),
-                        onPressed: () {
-                          _searchController.clear();
-                          _search('');
-                        },
-                      )
-                    : null,
-              ),
-            ),
-          ),
-
+          _buildSearch(),
           Expanded(
             child: _isLoading
                 ? const Center(
@@ -134,167 +156,232 @@ class _ManageDriversScreenState extends State<ManageDriversScreen> {
                       color: AppTheme.primaryGreen,
                     ),
                   )
-                : _filtered.isEmpty
-                ? const Center(
-                    child: Text(
-                      'No drivers found',
-                      style: TextStyle(color: AppTheme.textGrey),
-                    ),
-                  )
-                : ListView.builder(
-                    padding: const EdgeInsets.all(12),
-                    itemCount: _filtered.length,
-                    itemBuilder: (context, i) => _buildDriverCard(_filtered[i]),
+                : RefreshIndicator(
+                    color: AppTheme.primaryGreen,
+                    onRefresh: _loadDrivers,
+                    child: _filtered.isEmpty
+                        ? const SingleChildScrollView(
+                            physics: AlwaysScrollableScrollPhysics(),
+                            child: SizedBox(
+                              height: 420,
+                              child: Center(
+                                child: Text(
+                                  'No drivers found',
+                                  style: TextStyle(color: AppTheme.textGrey),
+                                ),
+                              ),
+                            ),
+                          )
+                        : ListView.builder(
+                            physics: const AlwaysScrollableScrollPhysics(),
+                            padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+                            itemCount: _filtered.length,
+                            itemBuilder: (context, index) {
+                              return _buildDriverCard(
+                                Map<String, dynamic>.from(
+                                  _filtered[index] as Map,
+                                ),
+                              );
+                            },
+                          ),
                   ),
+          ),
+        ],
+      ),
+      bottomNavigationBar: const AdminBottomNav(selectedIndex: 1),
+    );
+  }
+
+  Widget _buildSearch() {
+    return Container(
+      color: AppTheme.white,
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+      child: Container(
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: AppTheme.white,
+          borderRadius: BorderRadius.circular(8),
+          boxShadow: [
+            BoxShadow(
+              color: AppTheme.cardShadow,
+              blurRadius: 8,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: TextField(
+          controller: _searchController,
+          onChanged: _search,
+          style: const TextStyle(fontSize: 12),
+          decoration: InputDecoration(
+            hintText: 'Search by route or driver...',
+            hintStyle: const TextStyle(fontSize: 12, color: AppTheme.textGrey),
+            isDense: true,
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 12,
+              vertical: 10,
+            ),
+            suffixIcon: _searchController.text.isEmpty
+                ? null
+                : IconButton(
+                    icon: const Icon(Icons.close, size: 16),
+                    onPressed: () {
+                      _searchController.clear();
+                      _search('');
+                    },
+                  ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDriverCard(Map<String, dynamic> driver) {
+    final profile = driver['profileInfo'] as Map?;
+    final status = driver['status']?.toString() ?? 'Available';
+    final isActive = driver['isActive'] == true && status != 'On-Leave';
+    final badgeText = status == 'On-Leave'
+        ? 'On Leave'
+        : isActive
+            ? 'Active'
+            : 'Inactive';
+    final name =
+        profile?['fullName']?.toString() ??
+        driver['username']?.toString() ??
+        'Driver';
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.fromLTRB(14, 12, 12, 12),
+      decoration: BoxDecoration(
+        color: AppTheme.white,
+        borderRadius: BorderRadius.circular(8),
+        boxShadow: [
+          BoxShadow(
+            color: AppTheme.cardShadow,
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: AppTheme.textDark,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    _smallLine(driver['email']),
+                    _smallLine(profile?['phone']),
+                    _smallLine('License: ${profile?['licenseNo'] ?? 'N/A'}'),
+                  ],
+                ),
+              ),
+              _StatusBadge(text: badgeText, active: isActive),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              _SquareAction(
+                color: AppTheme.orangeStatus,
+                icon: Icons.edit_outlined,
+                onTap: () => _openEdit(driver),
+              ),
+              const Spacer(),
+              _SquareAction(
+                color: AppTheme.redStatus,
+                icon: Icons.close,
+                onTap: () => _removeDriver(driver),
+              ),
+            ],
           ),
         ],
       ),
     );
   }
 
-  Widget _buildDriverCard(Map<String, dynamic> driver) {
-    final isActive = driver['isActive'] == true;
-    final fullName = driver['profileInfo']?['fullName'] ?? driver['username'];
-    final phone = driver['profileInfo']?['phone'] ?? 'N/A';
-
-    return Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: AppTheme.white,
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [BoxShadow(color: AppTheme.cardShadow, blurRadius: 4)],
+  Widget _smallLine(dynamic value) {
+    return Text(
+      value?.toString() ?? '',
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: const TextStyle(
+        color: AppTheme.textDark,
+        fontSize: 10,
+        height: 1.25,
+        fontWeight: FontWeight.w400,
       ),
-      child: Row(
-        children: [
-          // Avatar
-          Container(
-            width: 44,
-            height: 44,
-            decoration: BoxDecoration(
-              color: isActive ? AppTheme.lightGreen : const Color(0xFFFEECEC),
-              shape: BoxShape.circle,
-            ),
-            child: Icon(
-              Icons.person,
-              color: isActive ? AppTheme.primaryGreen : AppTheme.redStatus,
-              size: 22,
-            ),
-          ),
-          const SizedBox(width: 12),
+    );
+  }
+}
 
-          // Info
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  fullName,
-                  style: const TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                    color: AppTheme.textDark,
-                  ),
-                ),
-                Text(
-                  driver['userId'] ?? '',
-                  style: const TextStyle(
-                    fontSize: 11,
-                    color: AppTheme.textGrey,
-                  ),
-                ),
-                Text(
-                  phone,
-                  style: const TextStyle(
-                    fontSize: 11,
-                    color: AppTheme.textGrey,
-                  ),
-                ),
-              ],
-            ),
-          ),
+class _StatusBadge extends StatelessWidget {
+  final String text;
+  final bool active;
 
-          // Status + actions column
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              // Status badge — Active/Inactive
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(
-                  color: isActive ? AppTheme.primaryGreen : AppTheme.redStatus,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Text(
-                  isActive ? 'Active' : 'Inactive',
-                  style: const TextStyle(
-                    color: AppTheme.white,
-                    fontSize: 10,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-              const SizedBox(height: 6),
+  const _StatusBadge({required this.text, required this.active});
 
-              // Action buttons row
-              Row(
-                children: [
-                  // Edit button
-                  GestureDetector(
-                    onTap: () async {
-                      await Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => EditDriverScreen(driver: driver),
-                        ),
-                      );
-                      _loadDrivers();
-                    },
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 3,
-                      ),
-                      decoration: BoxDecoration(
-                        color: AppTheme.primaryGreen,
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: const Text(
-                        'Edit',
-                        style: TextStyle(color: AppTheme.white, fontSize: 10),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 6),
+  @override
+  Widget build(BuildContext context) {
+    final bg = active ? AppTheme.lightGreen : const Color(0xFFFFE8E8);
+    final fg = active ? AppTheme.primaryGreen : AppTheme.redStatus;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Text(
+        text,
+        style: TextStyle(
+          color: fg,
+          fontSize: 10,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+    );
+  }
+}
 
-                  // Deactivate/Activate button
-                  GestureDetector(
-                    onTap: () => _toggleStatus(driver['_id'], isActive),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 3,
-                      ),
-                      decoration: BoxDecoration(
-                        color: isActive
-                            ? AppTheme.redStatus
-                            : AppTheme.primaryGreen,
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Text(
-                        isActive ? 'Deactivate' : 'Activate',
-                        style: const TextStyle(
-                          color: AppTheme.white,
-                          fontSize: 10,
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ],
+class _SquareAction extends StatelessWidget {
+  final Color color;
+  final IconData icon;
+  final VoidCallback onTap;
+
+  const _SquareAction({
+    required this.color,
+    required this.icon,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(7),
+      child: Container(
+        width: 28,
+        height: 28,
+        decoration: BoxDecoration(
+          color: color,
+          borderRadius: BorderRadius.circular(7),
+        ),
+        child: Icon(icon, color: AppTheme.white, size: 17),
       ),
     );
   }

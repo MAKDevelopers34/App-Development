@@ -59,7 +59,9 @@ const formatDriver = (row) => ({
     fullName: row.name,
     phone: row.contact,
     licenseNo: row.license_no,
-    hireDate: asDate(row.hire_date)
+    cnic: row.license_no,
+    hireDate: asDate(row.hire_date),
+    address: row.address || ''
   }
 });
 
