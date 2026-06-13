@@ -1,6 +1,7 @@
 const {
   callProcedure,
   firstResultSet,
+  getPool,
   query
 } = require('../config/database');
 const {
@@ -28,6 +29,135 @@ const distanceKm = (aLat, aLng, bLat, bLng) => {
     Math.sin(dLng / 2) * Math.sin(dLng / 2);
 
   return radius * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+};
+
+const codeFromName = (name) => String(name || 'STOP')
+  .toUpperCase()
+  .replace(/[^A-Z0-9]+/g, '-')
+  .replace(/^-+|-+$/g, '')
+  .slice(0, 12) || 'STOP';
+
+const getStops = async (req, res) => {
+  try {
+    const stops = await query(
+      `SELECT
+         stop_id,
+         stop_code,
+         name,
+         latitude,
+         longitude,
+         creation_date,
+         status
+       FROM stops
+       WHERE status = 'Active'
+         AND deletion_date IS NULL
+       ORDER BY name`
+    );
+
+    return res.json({
+      success: true,
+      count: stops.length,
+      stops: stops.map(formatStop)
+    });
+  } catch (error) {
+    return res.status(500).json({
+      message: 'Server error',
+      error: error.message
+    });
+  }
+};
+
+const findOrCreateStop = async (runQuery, point, routeId, index) => {
+  if (point.stopId) {
+    const existingById = await runQuery(
+      `SELECT stop_id
+       FROM stops
+       WHERE stop_id = ?
+         AND deletion_date IS NULL
+       LIMIT 1`,
+      [Number(point.stopId)]
+    );
+    if (existingById[0]) return existingById[0].stop_id;
+  }
+
+  const existingByName = await runQuery(
+    `SELECT stop_id
+     FROM stops
+     WHERE LOWER(name) = LOWER(?)
+       AND deletion_date IS NULL
+     LIMIT 1`,
+    [point.name]
+  );
+  if (existingByName[0]) return existingByName[0].stop_id;
+
+  const createdStop = await runQuery(
+    `INSERT INTO stops(stop_code, name, latitude, longitude)
+     VALUES (?, ?, ?, ?)`,
+    [
+      `${codeFromName(point.name)}-${routeId}-${index}`,
+      point.name,
+      point.latitude,
+      point.longitude
+    ]
+  );
+
+  return createdStop.insertId;
+};
+
+const saveRouteStops = async ({
+  runQuery = query,
+  routeId,
+  startPoint,
+  endPoint,
+  stops,
+  totalDistance,
+  estimatedTotalTime
+}) => {
+  const orderedPoints = [startPoint, ...stops, endPoint].filter((point) => {
+    return point?.name && point.latitude != null && point.longitude != null;
+  });
+  const linkedStops = new Set();
+
+  for (let index = 0; index < orderedPoints.length; index += 1) {
+    const point = orderedPoints[index];
+    const stopId = await findOrCreateStop(runQuery, point, routeId, index + 1);
+    if (linkedStops.has(stopId)) continue;
+    linkedStops.add(stopId);
+
+    const stopDistance = index === 0
+      ? 0
+      : distanceKm(
+        Number(startPoint.latitude),
+        Number(startPoint.longitude),
+        Number(point.latitude),
+        Number(point.longitude)
+      );
+    const totalKm = Number(totalDistance || 0);
+    const totalMinutes = Number(estimatedTotalTime || 0);
+    const estimatedMinutes = index === 0
+      ? 0
+      : totalKm > 0 && totalMinutes > 0
+        ? Math.round((stopDistance / totalKm) * totalMinutes)
+        : 0;
+
+    await runQuery(
+      `INSERT INTO route_stop_details(
+         route_id,
+         stop_id,
+         stop_order,
+         distance_from_start,
+         estimated_minutes_from_start
+       )
+       VALUES (?, ?, ?, ?, ?)`,
+      [
+        routeId,
+        stopId,
+        linkedStops.size,
+        Number(stopDistance.toFixed(2)),
+        estimatedMinutes
+      ]
+    );
+  }
 };
 
 const getRoutes = async (req, res) => {
@@ -119,6 +249,8 @@ const deleteRoute = async (req, res) => {
 };
 
 const createRoute = async (req, res) => {
+  let connection;
+
   try {
     const {
       routeCode,
@@ -126,7 +258,8 @@ const createRoute = async (req, res) => {
       startPoint,
       endPoint,
       totalDistance,
-      estimatedTotalTime
+      estimatedTotalTime,
+      stops = []
     } = req.body;
 
     if (!routeCode || !routeName || !startPoint || !endPoint) {
@@ -135,7 +268,10 @@ const createRoute = async (req, res) => {
       });
     }
 
-    const result = await callProcedure('sp_create_route', [
+    connection = await getPool().getConnection();
+    await connection.beginTransaction();
+
+    const [result] = await connection.query('CALL sp_create_route(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', [
       routeCode,
       routeName,
       startPoint.name,
@@ -148,17 +284,45 @@ const createRoute = async (req, res) => {
       estimatedTotalTime || 0
     ]);
     const route = firstResultSet(result)[0];
+    const routeId = route?.route_id;
+
+    if (!routeId) {
+      throw new Error('Route was not created');
+    }
+
+    const runQuery = async (sql, params = []) => {
+      const [rows] = await connection.execute(sql, params);
+      return rows;
+    };
+
+    await saveRouteStops({
+      runQuery,
+      routeId,
+      startPoint,
+      endPoint,
+      stops: Array.isArray(stops) ? stops : [],
+      totalDistance,
+      estimatedTotalTime
+    });
+
+    await connection.commit();
 
     return res.status(201).json({
       success: true,
       message: 'Route created',
-      routeId: route?.route_id
+      routeId
     });
   } catch (error) {
+    if (connection) {
+      await connection.rollback();
+    }
+
     return res.status(500).json({
       message: 'Server error',
       error: error.message
     });
+  } finally {
+    if (connection) connection.release();
   }
 };
 
@@ -241,6 +405,7 @@ const removeFavoriteRoute = async (req, res) => res.json({
 });
 
 module.exports = {
+  getStops,
   getRoutes,
   getRouteById,
   searchRoutes,

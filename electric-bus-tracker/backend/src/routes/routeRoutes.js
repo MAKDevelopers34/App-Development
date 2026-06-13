@@ -1,5 +1,6 @@
 const express = require('express');
 const {
+  getStops,
   getRoutes,
   getRouteById,
   searchRoutes,
@@ -16,6 +17,7 @@ const router = express.Router();
 
 router.get('/', getRoutes);
 router.get('/search', searchRoutes);
+router.get('/stops', getStops);
 router.get('/favorites', getFavoriteRoutes);
 router.post('/favorites', saveFavoriteRoute);
 router.delete('/favorites/:routeId', removeFavoriteRoute);
