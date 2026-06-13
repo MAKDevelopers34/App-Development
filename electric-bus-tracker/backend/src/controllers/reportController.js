@@ -7,10 +7,48 @@ const {
 const { formatReport } = require('../utils/formatters');
 const { generateReport } = require('../utils/reportGenerator');
 
+const enrichReport = async (report) => {
+  const [periodRows, totalRows] = await Promise.all([
+    query(
+      `SELECT
+        COUNT(DISTINCT driver_id) AS drivers_performed_duties,
+        COUNT(DISTINCT bus_id) AS buses_performed_duties
+       FROM duty_assignments
+       WHERE scheduled_date BETWEEN ? AND ?`,
+      [report.periodStart, report.periodEnd]
+    ),
+    query(
+      `SELECT
+        (SELECT COUNT(*)
+         FROM stops
+         WHERE status = 'Active'
+           AND deletion_date IS NULL) AS total_stops,
+        (SELECT COUNT(*)
+         FROM routes
+         WHERE status = 'Active') AS total_routes`
+    )
+  ]);
+
+  return {
+    ...report,
+    data: {
+      ...report.data,
+      driversPerformedDuties: Number(
+        periodRows[0]?.drivers_performed_duties || 0
+      ),
+      busesPerformedDuties: Number(periodRows[0]?.buses_performed_duties || 0),
+      totalStops: Number(totalRows[0]?.total_stops || 0),
+      totalRoutes: Number(totalRows[0]?.total_routes || 0)
+    }
+  };
+};
+
 const getReports = async (req, res) => {
   try {
     const result = await callProcedure('sp_get_reports');
-    const reports = firstResultSet(result).map(formatReport);
+    const reports = await Promise.all(
+      firstResultSet(result).map((row) => enrichReport(formatReport(row)))
+    );
 
     res.json({
       success: true,

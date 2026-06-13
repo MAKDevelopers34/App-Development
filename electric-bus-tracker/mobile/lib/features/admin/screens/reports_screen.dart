@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/services/api_service.dart';
@@ -41,7 +42,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('${type.toUpperCase()} report generated!'),
+            content: Text('${type.toUpperCase()} report generated as PDF'),
             backgroundColor: AppTheme.primaryGreen,
           ),
         );
@@ -145,8 +146,10 @@ class _ReportsScreenState extends State<ReportsScreen> {
   }
 
   Widget _buildReportCard(Map<String, dynamic> report) {
-    final type = report['type'] as String;
-    final generatedAt = DateTime.parse(report['generatedAt']);
+    final type = report['type']?.toString() ?? 'daily';
+    final generatedAt = DateTime.tryParse(
+      report['generatedAt']?.toString() ?? '',
+    );
     final data = report['data'] ?? {};
 
     Color typeColor;
@@ -213,22 +216,34 @@ class _ReportsScreenState extends State<ReportsScreen> {
                       ),
                     ),
                     const SizedBox(width: 8),
-                    Text(
-                      DateFormat('dd MMM yyyy').format(generatedAt),
-                      style: const TextStyle(
-                        fontSize: 12,
-                        color: AppTheme.textGrey,
+                    if (generatedAt != null)
+                      Text(
+                        DateFormat('dd MMM yyyy').format(generatedAt),
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: AppTheme.textGrey,
+                        ),
                       ),
-                    ),
                   ],
                 ),
                 const SizedBox(height: 6),
                 Text(
-                  'Duties: ${data['totalDuties'] ?? 0}  •  '
-                  'Completed: ${data['completedDuties'] ?? 0}  •  '
+                  'Duties: ${data['totalDuties'] ?? 0}  -  '
+                  'Completed: ${data['completedDuties'] ?? 0}  -  '
                   'Skipped: ${data['skippedDuties'] ?? 0}',
                   style: const TextStyle(
                     fontSize: 11,
+                    color: AppTheme.textGrey,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Drivers: ${data['driversPerformedDuties'] ?? data['activeDrivers'] ?? 0}/${data['totalDrivers'] ?? 0}  -  '
+                  'Buses: ${data['busesPerformedDuties'] ?? 0}/${data['totalBuses'] ?? 0}  -  '
+                  'Routes: ${data['totalRoutes'] ?? 0}  -  '
+                  'Stops: ${data['totalStops'] ?? 0}',
+                  style: const TextStyle(
+                    fontSize: 10,
                     color: AppTheme.textGrey,
                   ),
                 ),
@@ -243,10 +258,14 @@ class _ReportsScreenState extends State<ReportsScreen> {
               color: AppTheme.primaryGreen,
               size: 22,
             ),
-            onPressed: () {
+            onPressed: () async {
+              final url =
+                  '${ApiService.baseUrl}/reports/download/${report['reportId']}';
+              await Clipboard.setData(ClipboardData(text: url));
+              if (!mounted) return;
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(
-                  content: Text('Report ID: ${report['reportId']}'),
+                  content: Text('PDF link copied: ${report['reportId']}'),
                   backgroundColor: AppTheme.primaryGreen,
                 ),
               );

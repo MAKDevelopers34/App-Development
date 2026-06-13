@@ -4,6 +4,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/services/api_service.dart';
 import '../../auth/screens/choose_login_screen.dart';
 import 'changing_password_screen.dart';
+import 'reports_screen.dart';
 
 class AdminProfileScreen extends StatefulWidget {
   const AdminProfileScreen({super.key});
@@ -82,7 +83,7 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
                   ),
                   const SizedBox(height: 24),
 
-                  // Info card — matching design
+                  // Info card matching design
                   Container(
                     decoration: BoxDecoration(
                       color: AppTheme.white,
@@ -114,7 +115,27 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
 
                   const SizedBox(height: 20),
 
-                  // Reset Password button — red as in design
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      onPressed: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => const ReportsScreen(),
+                        ),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppTheme.primaryGreen,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                      ),
+                      icon: const Icon(Icons.picture_as_pdf, size: 18),
+                      label: const Text('Generate Reports'),
+                    ),
+                  ),
+
+                  const SizedBox(height: 12),
+
+                  // Reset Password button red as in design
                   SizedBox(
                     width: double.infinity,
                     child: ElevatedButton.icon(
@@ -135,7 +156,7 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
 
                   const SizedBox(height: 12),
 
-                  // Logout button — green outline
+                  // Logout button green outline
                   SizedBox(
                     width: double.infinity,
                     child: OutlinedButton.icon(
