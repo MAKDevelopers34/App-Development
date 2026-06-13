@@ -5,6 +5,7 @@ import '../../../core/services/api_service.dart';
 import '../../auth/screens/choose_login_screen.dart';
 import 'changing_password_screen.dart';
 import 'reports_screen.dart';
+import '../utils/admin_navigation.dart';
 
 class AdminProfileScreen extends StatefulWidget {
   const AdminProfileScreen({super.key});
@@ -54,7 +55,7 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
         title: const Text('Back to Dashboard'),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios, size: 18),
-          onPressed: () => Navigator.pop(context),
+          onPressed: () => AdminNavigation.goDashboard(context),
         ),
       ),
       body: _isLoading

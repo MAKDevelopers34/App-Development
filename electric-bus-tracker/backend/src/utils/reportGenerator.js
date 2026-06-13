@@ -34,12 +34,12 @@ const getPeriod = (type) => {
     };
   }
 
-  const start = new Date(now.getFullYear(), now.getMonth(), 1);
-  const end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+  const start = new Date(now);
+  start.setDate(now.getDate() - 29);
 
   return {
     periodStart: toDateOnly(start),
-    periodEnd: toDateOnly(end)
+    periodEnd: toDateOnly(now)
   };
 };
 

@@ -4,6 +4,7 @@ import '../../../core/services/api_service.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/real_bus_map.dart';
 import '../widgets/admin_bottom_nav.dart';
+import '../utils/admin_navigation.dart';
 import 'admin_profile_screen.dart';
 
 class AdminRouteDetailScreen extends StatefulWidget {
@@ -140,7 +141,7 @@ class _AdminRouteDetailScreenState extends State<AdminRouteDetailScreen> {
                       _buildBusSection(),
                       const SizedBox(height: 16),
                       TextButton(
-                        onPressed: () => Navigator.maybePop(context),
+                        onPressed: () => AdminNavigation.goDashboard(context),
                         child: const Text(
                           'Back to Dashboard',
                           style: TextStyle(
@@ -300,9 +301,7 @@ class _AdminRouteDetailScreenState extends State<AdminRouteDetailScreen> {
       padding: const EdgeInsets.fromLTRB(16, 13, 16, 12),
       decoration: const BoxDecoration(
         color: AppTheme.white,
-        border: Border(
-          top: BorderSide(color: Color(0xFFE6E6E6)),
-        ),
+        border: Border(top: BorderSide(color: Color(0xFFE6E6E6))),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -351,11 +350,7 @@ class _AdminRouteDetailScreenState extends State<AdminRouteDetailScreen> {
           const SizedBox(height: 10),
           Row(
             children: [
-              const Icon(
-                Icons.access_time,
-                color: AppTheme.textGrey,
-                size: 14,
-              ),
+              const Icon(Icons.access_time, color: AppTheme.textGrey, size: 14),
               const SizedBox(width: 5),
               Expanded(
                 child: Text(

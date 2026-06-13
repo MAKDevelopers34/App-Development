@@ -25,7 +25,10 @@ class AdminBottomNav extends StatelessWidget {
         screen = const ManageRoutesScreen();
     }
 
-    Navigator.push(context, MaterialPageRoute(builder: (_) => screen));
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(builder: (_) => screen),
+    );
   }
 
   @override

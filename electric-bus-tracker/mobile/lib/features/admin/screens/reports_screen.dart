@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/services/api_service.dart';
+import '../utils/admin_navigation.dart';
 
 class ReportsScreen extends StatefulWidget {
   const ReportsScreen({super.key});
@@ -12,6 +13,10 @@ class ReportsScreen extends StatefulWidget {
 }
 
 class _ReportsScreenState extends State<ReportsScreen> {
+  static const _downloadChannel = MethodChannel(
+    'electric_bus_tracker/downloads',
+  );
+
   List<dynamic> _reports = [];
   bool _isLoading = true;
   bool _isGenerating = false;
@@ -55,6 +60,37 @@ class _ReportsScreenState extends State<ReportsScreen> {
     setState(() => _isGenerating = false);
   }
 
+  Future<void> _downloadReport(Map<String, dynamic> report) async {
+    final reportId = report['reportId']?.toString();
+    if (reportId == null || reportId.isEmpty) return;
+
+    try {
+      final token = await ApiService.getToken();
+      final safeId = reportId.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
+      await _downloadChannel.invokeMethod('downloadPdf', {
+        'url': '${ApiService.baseUrl}/reports/download/$reportId',
+        'fileName': '$safeId.pdf',
+        'token': token,
+      });
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('$safeId.pdf downloading to phone Downloads'),
+          backgroundColor: AppTheme.primaryGreen,
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not download PDF: $error'),
+          backgroundColor: AppTheme.redStatus,
+        ),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -63,7 +99,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
         title: const Text('Reports'),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios, size: 18),
-          onPressed: () => Navigator.pop(context),
+          onPressed: () => AdminNavigation.goDashboard(context),
         ),
       ),
       body: Column(
@@ -258,18 +294,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
               color: AppTheme.primaryGreen,
               size: 22,
             ),
-            onPressed: () async {
-              final url =
-                  '${ApiService.baseUrl}/reports/download/${report['reportId']}';
-              await Clipboard.setData(ClipboardData(text: url));
-              if (!mounted) return;
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text('PDF link copied: ${report['reportId']}'),
-                  backgroundColor: AppTheme.primaryGreen,
-                ),
-              );
-            },
+            onPressed: () => _downloadReport(report),
           ),
         ],
       ),

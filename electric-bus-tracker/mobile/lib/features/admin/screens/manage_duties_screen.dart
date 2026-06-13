@@ -6,6 +6,7 @@ import '../../../core/theme/app_theme.dart';
 import '../widgets/admin_bottom_nav.dart';
 import 'add_duty_screen.dart';
 import 'edit_duty_screen.dart';
+import '../utils/admin_navigation.dart';
 
 class ManageDutiesScreen extends StatefulWidget {
   const ManageDutiesScreen({super.key});
@@ -101,7 +102,7 @@ class _ManageDutiesScreenState extends State<ManageDutiesScreen> {
         title: const Text('Manage Duties'),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios_new, size: 18),
-          onPressed: () => Navigator.pop(context),
+          onPressed: () => AdminNavigation.goDashboard(context),
         ),
         actions: [
           Padding(

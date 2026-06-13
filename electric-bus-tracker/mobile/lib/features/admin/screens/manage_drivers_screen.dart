@@ -5,6 +5,7 @@ import '../../../core/theme/app_theme.dart';
 import '../widgets/admin_bottom_nav.dart';
 import 'driver_registration_screen.dart';
 import 'edit_driver_screen.dart';
+import '../utils/admin_navigation.dart';
 
 class ManageDriversScreen extends StatefulWidget {
   const ManageDriversScreen({super.key});
@@ -84,7 +85,8 @@ class _ManageDriversScreenState extends State<ManageDriversScreen> {
 
   Future<void> _removeDriver(Map<String, dynamic> driver) async {
     final profile = driver['profileInfo'] as Map?;
-    final name = profile?['fullName']?.toString() ?? driver['username'] ?? 'driver';
+    final name =
+        profile?['fullName']?.toString() ?? driver['username'] ?? 'driver';
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -133,7 +135,7 @@ class _ManageDriversScreenState extends State<ManageDriversScreen> {
         title: const Text('Manage Drivers'),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios_new, size: 18),
-          onPressed: () => Navigator.pop(context),
+          onPressed: () => AdminNavigation.goDashboard(context),
         ),
         actions: [
           Padding(
@@ -243,8 +245,8 @@ class _ManageDriversScreenState extends State<ManageDriversScreen> {
     final badgeText = status == 'On-Leave'
         ? 'On Leave'
         : isActive
-            ? 'Active'
-            : 'Inactive';
+        ? 'Active'
+        : 'Inactive';
     final name =
         profile?['fullName']?.toString() ??
         driver['username']?.toString() ??
@@ -348,11 +350,7 @@ class _StatusBadge extends StatelessWidget {
       ),
       child: Text(
         text,
-        style: TextStyle(
-          color: fg,
-          fontSize: 10,
-          fontWeight: FontWeight.w800,
-        ),
+        style: TextStyle(color: fg, fontSize: 10, fontWeight: FontWeight.w800),
       ),
     );
   }

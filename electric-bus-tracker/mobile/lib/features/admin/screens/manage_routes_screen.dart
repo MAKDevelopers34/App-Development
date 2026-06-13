@@ -5,6 +5,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/real_bus_map.dart';
 import '../../tracking/screens/bus_eat_screen.dart';
 import 'add_route_screen.dart';
+import '../utils/admin_navigation.dart';
 
 class ManageRoutesScreen extends StatefulWidget {
   const ManageRoutesScreen({super.key});
@@ -90,7 +91,7 @@ class _ManageRoutesScreenState extends State<ManageRoutesScreen> {
         title: const Text('Manage Routes'),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios, size: 18),
-          onPressed: () => Navigator.pop(context),
+          onPressed: () => AdminNavigation.goDashboard(context),
         ),
         actions: [
           Padding(
