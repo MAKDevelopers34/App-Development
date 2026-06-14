@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -36,6 +37,7 @@ class RealBusMap extends StatefulWidget {
 
 class _RealBusMapState extends State<RealBusMap> {
   static const LatLng _defaultCenter = LatLng(32.5838, 71.5436);
+  static const Distance _distance = Distance();
 
   final Map<String, List<LatLng>> _roadRoutes = {};
   final Set<String> _loadingRoutes = {};
@@ -212,8 +214,7 @@ class _RealBusMapState extends State<RealBusMap> {
       final points = _routePoints(route);
 
       if ((widget.showEndpointMarkers || isSelected) && points.isNotEmpty) {
-        final startLabel =
-            route['startPoint']?['name']?.toString() ?? 'Start';
+        final startLabel = route['startPoint']?['name']?.toString() ?? 'Start';
         final endLabel = route['endPoint']?['name']?.toString() ?? 'End';
         markers.add(_pointMarker(points.first, Icons.trip_origin, startLabel));
         if (points.length > 1) {
@@ -232,7 +233,7 @@ class _RealBusMapState extends State<RealBusMap> {
         for (final stop in stops) {
           final point = _pointFrom(stop);
           if (point != null) {
-            markers.add(_stopMarker(point, stop['name']?.toString() ?? 'Stop'));
+            markers.add(_stopMarker(point, stop, route));
           }
         }
       }
@@ -284,35 +285,168 @@ class _RealBusMapState extends State<RealBusMap> {
     );
   }
 
-  Marker _stopMarker(LatLng point, String label) {
+  Marker _stopMarker(
+    LatLng point,
+    Map<String, dynamic> stop,
+    Map<String, dynamic> route,
+  ) {
+    final label = stop['name']?.toString() ?? 'Stop';
     return Marker(
       point: point,
       width: 74,
       height: 44,
-      child: Tooltip(
-        message: label,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 15,
-              height: 15,
-              decoration: BoxDecoration(
-                color: AppTheme.primaryGreen,
-                shape: BoxShape.circle,
-                border: Border.all(color: AppTheme.white, width: 2),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.12),
-                    blurRadius: 4,
-                  ),
-                ],
+      child: GestureDetector(
+        onTap: () => _showStopEatSheet(route, stop),
+        child: Tooltip(
+          message: label,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 15,
+                height: 15,
+                decoration: BoxDecoration(
+                  color: AppTheme.primaryGreen,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: AppTheme.white, width: 2),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.12),
+                      blurRadius: 4,
+                    ),
+                  ],
+                ),
               ),
-            ),
-            const SizedBox(height: 2),
-            _MapLabel(text: label),
-          ],
+              const SizedBox(height: 2),
+              _MapLabel(text: label),
+            ],
+          ),
         ),
+      ),
+    );
+  }
+
+  void _showStopEatSheet(
+    Map<String, dynamic> route,
+    Map<String, dynamic> stop,
+  ) {
+    final estimates = _stopEstimates(route, stop);
+    final stopName = stop['name']?.toString() ?? 'Stop';
+
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: AppTheme.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+      ),
+      builder: (context) {
+        return SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(18, 16, 18, 18),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Icon(
+                      Icons.location_on_outlined,
+                      color: AppTheme.primaryGreen,
+                      size: 20,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        stopName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: AppTheme.textDark,
+                          fontSize: 17,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 14),
+                if (estimates.isEmpty)
+                  const Text(
+                    'No active bus is still remaining for this stop.',
+                    style: TextStyle(
+                      color: AppTheme.textGrey,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  )
+                else
+                  ...estimates.map(_buildEatRow),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildEatRow(_StopEat estimate) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppTheme.bgGrey,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 36,
+            height: 36,
+            decoration: const BoxDecoration(
+              color: AppTheme.primaryGreen,
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(
+              Icons.directions_bus,
+              color: AppTheme.white,
+              size: 18,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  estimate.busName,
+                  style: const TextStyle(
+                    color: AppTheme.textDark,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  '${estimate.distanceKm.toStringAsFixed(1)} km remaining at ${estimate.speedKmh.round()} km/h',
+                  style: const TextStyle(
+                    color: AppTheme.textGrey,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Text(
+            estimate.durationText,
+            style: const TextStyle(
+              color: AppTheme.primaryGreen,
+              fontSize: 14,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -416,6 +550,112 @@ class _RealBusMapState extends State<RealBusMap> {
     return <LatLng>[?start, ...stops.map(_pointFrom).whereType<LatLng>(), ?end];
   }
 
+  List<_StopEat> _stopEstimates(
+    Map<String, dynamic> route,
+    Map<String, dynamic> stop,
+  ) {
+    final routeId = route['routeId']?.toString();
+    final targetPoint = _pointFrom(stop);
+    final routePoints = _routePoints(route);
+    if (routeId == null || targetPoint == null || routePoints.length < 2) {
+      return const [];
+    }
+
+    final targetProgress = _progressAlongRoute(routePoints, targetPoint);
+    if (targetProgress == null) return const [];
+
+    final estimates = <_StopEat>[];
+    for (final rawBus in widget.buses.whereType<Map>()) {
+      final bus = Map<String, dynamic>.from(rawBus);
+      if (bus['routeId']?.toString() != routeId) continue;
+
+      final busPoint = _busPoint(bus);
+      if (busPoint == null) continue;
+
+      final busProgress = _progressAlongRoute(routePoints, busPoint);
+      if (busProgress == null) continue;
+
+      final remainingMeters = targetProgress.meters - busProgress.meters;
+      if (remainingMeters <= 35) continue;
+
+      final rawSpeed = _numberFrom(bus['speed']) ?? 0;
+      final speedKmh = rawSpeed > 3 ? rawSpeed : 18.0;
+      final minutes = math.max(
+        1,
+        ((remainingMeters / 1000) / speedKmh * 60).round(),
+      );
+
+      estimates.add(
+        _StopEat(
+          busName: bus['busNumber']?.toString() ?? 'Bus ${bus['busId'] ?? ''}',
+          distanceKm: remainingMeters / 1000,
+          speedKmh: speedKmh,
+          durationMinutes: minutes,
+        ),
+      );
+    }
+
+    estimates.sort((a, b) => a.durationMinutes.compareTo(b.durationMinutes));
+    return estimates;
+  }
+
+  _RouteProgress? _progressAlongRoute(List<LatLng> points, LatLng target) {
+    if (points.length < 2) return null;
+
+    var bestDistance = double.infinity;
+    var bestProgress = 0.0;
+    var cumulative = 0.0;
+
+    for (var i = 0; i < points.length - 1; i++) {
+      final start = points[i];
+      final end = points[i + 1];
+      final segmentMeters = _distance.as(LengthUnit.Meter, start, end);
+      if (segmentMeters <= 0) continue;
+
+      final projection = _projectToSegment(start, end, target);
+      final projectedPoint = _interpolate(start, end, projection);
+      final distanceToSegment = _distance.as(
+        LengthUnit.Meter,
+        target,
+        projectedPoint,
+      );
+
+      if (distanceToSegment < bestDistance) {
+        bestDistance = distanceToSegment;
+        bestProgress = cumulative + (segmentMeters * projection);
+      }
+
+      cumulative += segmentMeters;
+    }
+
+    return _RouteProgress(bestProgress);
+  }
+
+  double _projectToSegment(LatLng start, LatLng end, LatLng target) {
+    final latScale = math.cos(start.latitude * math.pi / 180);
+    final ax = start.longitude * latScale;
+    final ay = start.latitude;
+    final bx = end.longitude * latScale;
+    final by = end.latitude;
+    final px = target.longitude * latScale;
+    final py = target.latitude;
+
+    final dx = bx - ax;
+    final dy = by - ay;
+    final lengthSquared = dx * dx + dy * dy;
+    if (lengthSquared <= 0) return 0;
+
+    final t = ((px - ax) * dx + (py - ay) * dy) / lengthSquared;
+    return t.clamp(0.0, 1.0).toDouble();
+  }
+
+  LatLng _interpolate(LatLng start, LatLng end, double amount) {
+    return LatLng(
+      start.latitude + ((end.latitude - start.latitude) * amount),
+      start.longitude + ((end.longitude - start.longitude) * amount),
+    );
+  }
+
   LatLng? _busPoint(dynamic bus) {
     if (bus is! Map) return null;
     return _pointFrom(bus['location']);
@@ -468,6 +708,33 @@ class _RealBusMapState extends State<RealBusMap> {
     if (span > 0.07) return 11.7;
     if (span > 0.025) return 13;
     return 14.4;
+  }
+}
+
+class _RouteProgress {
+  final double meters;
+
+  const _RouteProgress(this.meters);
+}
+
+class _StopEat {
+  final String busName;
+  final double distanceKm;
+  final double speedKmh;
+  final int durationMinutes;
+
+  const _StopEat({
+    required this.busName,
+    required this.distanceKm,
+    required this.speedKmh,
+    required this.durationMinutes,
+  });
+
+  String get durationText {
+    if (durationMinutes < 60) return '$durationMinutes min';
+    final hours = durationMinutes ~/ 60;
+    final minutes = durationMinutes % 60;
+    return minutes == 0 ? '${hours}h' : '${hours}h ${minutes}m';
   }
 }
 
