@@ -7,8 +7,8 @@ Flutter + Node/Express + MySQL implementation for the Electric Bus Tracker proje
 - Passenger route search, local favourites, live bus tracking, and estimated arrival screen.
 - Driver login, profile, daily duty, monthly schedule, duty start/end, and GPS publishing.
 - Admin dashboard, driver management, route management, duty management, and PDF reports.
-- MySQL schema, seed data, views, triggers, and stored procedures in `dbDDL.sql` and `dbDML.sql`.
-- No Google Maps API dependency. The app uses a built-in schematic live-tracking view.
+- MySQL schema, minimal admin seed, views, triggers, and stored procedures in `dbDDL.sql` and `dbDML.sql`.
+- No Google Maps API dependency. The app uses OpenStreetMap tiles through Flutter map widgets.
 
 ## Database Setup
 
@@ -60,10 +60,11 @@ flutter run --dart-define=API_BASE_URL=http://10.0.2.2:5000/api
 For a physical phone, replace `10.0.2.2` with your computer LAN IP.
 For AWS, replace it with your deployed backend URL.
 
-## Demo Logins
+## Initial Login
 
 - Admin: username `admin_main`, user ID `ADM-001`, password `admin123`
-- Driver: username `driver_ahmad`, user ID `DRV-001`, password `driver123`
+
+Drivers, buses, routes, duties, and stops are now created from inside the admin app.
 
 ## Notes
 

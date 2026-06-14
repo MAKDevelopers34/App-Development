@@ -66,32 +66,6 @@ BEGIN
   ORDER BY u.name;
 END`;
 
-const spCreateDriver = `
-CREATE PROCEDURE sp_create_driver(
-  IN p_username VARCHAR(50),
-  IN p_user_code VARCHAR(30),
-  IN p_name VARCHAR(100),
-  IN p_email VARCHAR(100),
-  IN p_contact VARCHAR(20),
-  IN p_password_hash VARCHAR(255),
-  IN p_license_no VARCHAR(50),
-  IN p_hire_date DATE,
-  IN p_address VARCHAR(255)
-)
-BEGIN
-  DECLARE v_user_id INT;
-
-  INSERT INTO users(username, user_code, name, email, contact, password_hash, role)
-  VALUES (LOWER(p_username), p_user_code, p_name, LOWER(p_email), p_contact, p_password_hash, 'Driver');
-
-  SET v_user_id = LAST_INSERT_ID();
-
-  INSERT INTO drivers(user_id, license_no, hire_date, address)
-  VALUES (v_user_id, p_license_no, p_hire_date, p_address);
-
-  SELECT LAST_INSERT_ID() AS driver_id, v_user_id AS user_id;
-END`;
-
 const spUpdateDriver = `
 CREATE PROCEDURE sp_update_driver(
   IN p_driver_id INT,
@@ -149,54 +123,6 @@ BEGIN
     AND YEAR(da.scheduled_date) = p_year;
 END`;
 
-const spGetDriverTodayDuty = `
-CREATE PROCEDURE sp_get_driver_today_duty(IN p_user_id INT)
-BEGIN
-  SELECT
-    da.*,
-    b.bus_number,
-    b.bus_id,
-    r.route_id,
-    r.name AS route_name,
-    r.starting_point,
-    r.destination_point
-  FROM duty_assignments da
-  JOIN drivers d ON d.driver_id = da.driver_id
-  JOIN buses b ON b.bus_id = da.bus_id
-  JOIN schedules s ON s.schedule_id = da.schedule_id
-  JOIN routes r ON r.route_id = s.route_id
-  WHERE d.user_id = p_user_id
-    AND da.scheduled_date = CURDATE()
-    AND da.status IN ('In-Progress', 'Scheduled')
-  ORDER BY
-    CASE da.status
-      WHEN 'In-Progress' THEN 0
-      ELSE 1
-    END,
-    da.scheduled_start_time
-  LIMIT 1;
-END`;
-
-const spGetDriverUpcomingDuty = `
-CREATE PROCEDURE sp_get_driver_upcoming_duty(IN p_user_id INT)
-BEGIN
-  SELECT
-    da.*,
-    b.bus_number,
-    r.route_id,
-    r.name AS route_name
-  FROM duty_assignments da
-  JOIN drivers d ON d.driver_id = da.driver_id
-  JOIN buses b ON b.bus_id = da.bus_id
-  JOIN schedules s ON s.schedule_id = da.schedule_id
-  JOIN routes r ON r.route_id = s.route_id
-  WHERE d.user_id = p_user_id
-    AND da.status = 'Scheduled'
-    AND TIMESTAMP(da.scheduled_date, da.scheduled_start_time) > NOW()
-  ORDER BY da.scheduled_date, da.scheduled_start_time
-  LIMIT 1;
-END`;
-
 const spStartDuty = `
 CREATE PROCEDURE sp_start_duty(
   IN p_user_id INT,
@@ -224,41 +150,6 @@ BEGIN
 
   SELECT ROW_COUNT() AS affected_rows;
 END`;
-
-const viewActiveBuses = `
-CREATE OR REPLACE VIEW view_active_buses AS
-SELECT
-  latest.location_id,
-  latest.bus_id,
-  b.bus_number,
-  latest.driver_id,
-  u.name AS driver_name,
-  latest.route_id,
-  r.name AS route_name,
-  latest.duty_id,
-  latest.latitude,
-  latest.longitude,
-  latest.speed,
-  latest.recorded_at
-FROM bus_locations latest
-JOIN (
-  SELECT bus_id, MAX(recorded_at) AS max_recorded_at
-  FROM bus_locations
-  WHERE is_active = TRUE
-  GROUP BY bus_id
-) pick
-  ON pick.bus_id = latest.bus_id
-  AND pick.max_recorded_at = latest.recorded_at
-JOIN buses b
-  ON b.bus_id = latest.bus_id
-  AND b.status = 'Active'
-JOIN drivers d ON d.driver_id = latest.driver_id
-JOIN users u ON u.user_id = d.user_id
-JOIN routes r ON r.route_id = latest.route_id
-JOIN duty_assignments da ON da.duty_id = latest.duty_id
-WHERE latest.is_active = TRUE
-  AND da.status = 'In-Progress'
-  AND latest.recorded_at >= DATE_SUB(NOW(), INTERVAL 10 MINUTE)`;
 
 const spCompleteDuty = `
 CREATE PROCEDURE sp_complete_duty(
@@ -337,22 +228,26 @@ const main = async () => {
       'DROP PROCEDURE IF EXISTS sp_get_drivers',
       spGetDrivers,
       'DROP PROCEDURE IF EXISTS sp_create_driver',
-      spCreateDriver,
+      'DROP PROCEDURE IF EXISTS sp_get_route_by_id',
+      'DROP PROCEDURE IF EXISTS sp_search_routes',
+      'DROP PROCEDURE IF EXISTS sp_delete_route',
+      'DROP PROCEDURE IF EXISTS sp_get_buses',
+      'DROP PROCEDURE IF EXISTS sp_update_duty_times',
+      'DROP PROCEDURE IF EXISTS sp_get_active_buses',
+      'DROP PROCEDURE IF EXISTS sp_get_buses_by_route',
       'DROP PROCEDURE IF EXISTS sp_update_driver',
       spUpdateDriver,
       'DROP PROCEDURE IF EXISTS sp_get_driver_monthly_duties',
       spGetDriverMonthlyDuties,
       'DROP PROCEDURE IF EXISTS sp_get_driver_today_duty',
-      spGetDriverTodayDuty,
       'DROP PROCEDURE IF EXISTS sp_get_driver_upcoming_duty',
-      spGetDriverUpcomingDuty,
       'DROP PROCEDURE IF EXISTS sp_start_duty',
       spStartDuty,
       'DROP PROCEDURE IF EXISTS sp_complete_duty',
       spCompleteDuty,
       'DROP PROCEDURE IF EXISTS sp_save_reset_code',
       spSaveResetCode,
-      viewActiveBuses
+      'DROP VIEW IF EXISTS view_active_buses'
     ]);
 
     console.log(`Database ${dbName} migrations applied successfully.`);

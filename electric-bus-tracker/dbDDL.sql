@@ -234,40 +234,6 @@ CREATE TABLE audit_logs (
   INDEX idx_audit_action (action)
 );
 
-CREATE OR REPLACE VIEW view_active_buses AS
-SELECT
-  latest.location_id,
-  latest.bus_id,
-  b.bus_number,
-  latest.driver_id,
-  u.name AS driver_name,
-  latest.route_id,
-  r.name AS route_name,
-  latest.duty_id,
-  latest.latitude,
-  latest.longitude,
-  latest.speed,
-  latest.recorded_at
-FROM bus_locations latest
-JOIN (
-  SELECT bus_id, MAX(recorded_at) AS max_recorded_at
-  FROM bus_locations
-  WHERE is_active = TRUE
-  GROUP BY bus_id
-) pick
-  ON pick.bus_id = latest.bus_id
-  AND pick.max_recorded_at = latest.recorded_at
-JOIN buses b
-  ON b.bus_id = latest.bus_id
-  AND b.status = 'Active'
-JOIN drivers d ON d.driver_id = latest.driver_id
-JOIN users u ON u.user_id = d.user_id
-JOIN routes r ON r.route_id = latest.route_id
-JOIN duty_assignments da ON da.duty_id = latest.duty_id
-WHERE latest.is_active = TRUE
-  AND da.status = 'In-Progress'
-  AND latest.recorded_at >= DATE_SUB(NOW(), INTERVAL 10 MINUTE);
-
 CREATE OR REPLACE VIEW view_admin_dashboard_stats AS
 SELECT
   (SELECT COUNT(*) FROM buses WHERE status = 'Active') AS active_buses,
@@ -542,62 +508,6 @@ BEGIN
   ORDER BY r.name;
 END$$
 
-CREATE PROCEDURE sp_get_route_by_id(IN p_route_id INT)
-BEGIN
-  SELECT * FROM routes WHERE route_id = p_route_id AND status = 'Active';
-
-  SELECT
-    s.stop_id,
-    s.stop_code,
-    s.name,
-    s.latitude,
-    s.longitude,
-    rsd.stop_order,
-    rsd.distance_from_start,
-    rsd.estimated_minutes_from_start
-  FROM route_stop_details rsd
-  JOIN stops s ON s.stop_id = rsd.stop_id
-  WHERE rsd.route_id = p_route_id
-    AND s.status = 'Active'
-    AND s.deletion_date IS NULL
-  ORDER BY rsd.stop_order;
-
-  SELECT
-    schedule_id,
-    bus_id,
-    departure_time,
-    arrival_time,
-    service_date,
-    status
-  FROM schedules
-  WHERE route_id = p_route_id
-  ORDER BY service_date, departure_time;
-END$$
-
-CREATE PROCEDURE sp_search_routes(IN p_query VARCHAR(100))
-BEGIN
-  SELECT DISTINCT
-    r.route_id,
-    r.route_code,
-    r.name,
-    r.starting_point,
-    r.destination_point,
-    r.distance,
-    r.estimated_duration,
-    r.status
-  FROM routes r
-  LEFT JOIN route_stop_details rsd ON rsd.route_id = r.route_id
-  LEFT JOIN stops s ON s.stop_id = rsd.stop_id
-  WHERE r.status = 'Active'
-    AND (
-      LOWER(r.name) LIKE CONCAT('%', LOWER(p_query), '%')
-      OR LOWER(r.starting_point) LIKE CONCAT('%', LOWER(p_query), '%')
-      OR LOWER(r.destination_point) LIKE CONCAT('%', LOWER(p_query), '%')
-      OR LOWER(s.name) LIKE CONCAT('%', LOWER(p_query), '%')
-    )
-  ORDER BY r.name;
-END$$
-
 CREATE PROCEDURE sp_create_route(
   IN p_route_code VARCHAR(30),
   IN p_name VARCHAR(100),
@@ -639,11 +549,6 @@ BEGIN
   SELECT LAST_INSERT_ID() AS route_id;
 END$$
 
-CREATE PROCEDURE sp_delete_route(IN p_route_id INT)
-BEGIN
-  UPDATE routes SET status = 'Inactive' WHERE route_id = p_route_id;
-END$$
-
 CREATE PROCEDURE sp_get_drivers()
 BEGIN
   SELECT
@@ -663,31 +568,6 @@ BEGIN
   JOIN users u ON u.user_id = d.user_id
   WHERE u.deletion_date IS NULL
   ORDER BY u.name;
-END$$
-
-CREATE PROCEDURE sp_create_driver(
-  IN p_username VARCHAR(50),
-  IN p_user_code VARCHAR(30),
-  IN p_name VARCHAR(100),
-  IN p_email VARCHAR(100),
-  IN p_contact VARCHAR(20),
-  IN p_password_hash VARCHAR(255),
-  IN p_license_no VARCHAR(50),
-  IN p_hire_date DATE,
-  IN p_address VARCHAR(255)
-)
-BEGIN
-  DECLARE v_user_id INT;
-
-  INSERT INTO users(username, user_code, name, email, contact, password_hash, role)
-  VALUES (LOWER(p_username), p_user_code, p_name, LOWER(p_email), p_contact, p_password_hash, 'Driver');
-
-  SET v_user_id = LAST_INSERT_ID();
-
-  INSERT INTO drivers(user_id, license_no, hire_date, address)
-  VALUES (v_user_id, p_license_no, p_hire_date, p_address);
-
-  SELECT LAST_INSERT_ID() AS driver_id, v_user_id AS user_id;
 END$$
 
 CREATE PROCEDURE sp_update_driver(
@@ -720,14 +600,6 @@ BEGIN
   JOIN drivers d ON d.user_id = u.user_id
   SET u.account_status = p_account_status
   WHERE d.driver_id = p_driver_id;
-END$$
-
-CREATE PROCEDURE sp_get_buses()
-BEGIN
-  SELECT *
-  FROM buses
-  WHERE status <> 'Inactive'
-  ORDER BY bus_number;
 END$$
 
 CREATE PROCEDURE sp_create_duty(
@@ -796,64 +668,6 @@ BEGIN
   JOIN schedules s ON s.schedule_id = da.schedule_id
   JOIN routes r ON r.route_id = s.route_id
   ORDER BY da.scheduled_date DESC, da.scheduled_start_time DESC;
-END$$
-
-CREATE PROCEDURE sp_update_duty_times(
-  IN p_duty_id INT,
-  IN p_start_time TIME,
-  IN p_end_time TIME
-)
-BEGIN
-  UPDATE duty_assignments
-  SET scheduled_start_time = p_start_time,
-      scheduled_end_time = p_end_time
-  WHERE duty_id = p_duty_id;
-END$$
-
-CREATE PROCEDURE sp_get_driver_today_duty(IN p_user_id INT)
-BEGIN
-  SELECT
-    da.*,
-    b.bus_number,
-    b.bus_id,
-    r.route_id,
-    r.name AS route_name,
-    r.starting_point,
-    r.destination_point
-  FROM duty_assignments da
-  JOIN drivers d ON d.driver_id = da.driver_id
-  JOIN buses b ON b.bus_id = da.bus_id
-  JOIN schedules s ON s.schedule_id = da.schedule_id
-  JOIN routes r ON r.route_id = s.route_id
-  WHERE d.user_id = p_user_id
-    AND da.scheduled_date = CURDATE()
-    AND da.status IN ('In-Progress', 'Scheduled')
-  ORDER BY
-    CASE da.status
-      WHEN 'In-Progress' THEN 0
-      ELSE 1
-    END,
-    da.scheduled_start_time
-  LIMIT 1;
-END$$
-
-CREATE PROCEDURE sp_get_driver_upcoming_duty(IN p_user_id INT)
-BEGIN
-  SELECT
-    da.*,
-    b.bus_number,
-    r.route_id,
-    r.name AS route_name
-  FROM duty_assignments da
-  JOIN drivers d ON d.driver_id = da.driver_id
-  JOIN buses b ON b.bus_id = da.bus_id
-  JOIN schedules s ON s.schedule_id = da.schedule_id
-  JOIN routes r ON r.route_id = s.route_id
-  WHERE d.user_id = p_user_id
-    AND da.status = 'Scheduled'
-    AND TIMESTAMP(da.scheduled_date, da.scheduled_start_time) > NOW()
-  ORDER BY da.scheduled_date, da.scheduled_start_time
-  LIMIT 1;
 END$$
 
 CREATE PROCEDURE sp_get_driver_monthly_duties(
@@ -987,18 +801,6 @@ BEGIN
   );
 
   SELECT LAST_INSERT_ID() AS location_id;
-END$$
-
-CREATE PROCEDURE sp_get_active_buses()
-BEGIN
-  SELECT * FROM view_active_buses ORDER BY recorded_at DESC;
-END$$
-
-CREATE PROCEDURE sp_get_buses_by_route(IN p_route_id INT)
-BEGIN
-  SELECT * FROM view_active_buses
-  WHERE route_id = p_route_id
-  ORDER BY recorded_at DESC;
 END$$
 
 CREATE PROCEDURE sp_get_reports()

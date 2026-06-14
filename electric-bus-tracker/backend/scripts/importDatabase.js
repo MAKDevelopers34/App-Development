@@ -84,10 +84,25 @@ const databaseStatus = async (connection, dbName) => {
 
   const requiredRoutines = [
     'sp_get_user_for_login',
+    'sp_record_login_failure',
+    'sp_record_login_success',
+    'sp_get_user_profile',
+    'sp_change_password',
+    'sp_save_reset_code',
+    'sp_reset_password',
     'sp_get_routes',
-    'sp_get_route_by_id',
-    'sp_get_active_buses',
-    'sp_get_admin_duties'
+    'sp_create_route',
+    'sp_get_drivers',
+    'sp_update_driver',
+    'sp_set_driver_account_status',
+    'sp_create_duty',
+    'sp_get_admin_duties',
+    'sp_get_driver_monthly_duties',
+    'sp_start_duty',
+    'sp_complete_duty',
+    'sp_update_bus_location',
+    'sp_get_reports',
+    'sp_create_report'
   ];
   const [routines] = await connection.query(
     `SELECT routine_name

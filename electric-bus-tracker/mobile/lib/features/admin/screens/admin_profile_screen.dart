@@ -107,11 +107,6 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
                             'Phone Number',
                             _user?['profileInfo']?['phone'] ?? 'N/A',
                           ),
-                          const Divider(height: 1, indent: 16),
-                          _infoRow(
-                            'Contact Number',
-                            _user?['profileInfo']?['phone'] ?? 'N/A',
-                          ),
                         ],
                       ),
                     ),
