@@ -1230,7 +1230,7 @@ class _SmartRoutePainter extends CustomPainter {
   static const double _selectedStrokeWidth = 7.0;
   static const double _borderStrokeWidth = 1.8;
   static const double _sharedLaneOffset = 2.8;
-  static const double _arrowSpacingPx = 86.0;
+  static const double _arrowSpacingPx = 96.0;
   static const double _laneSnapPx = 18.0;
   static const double _angleBucket = math.pi / 12;
 
@@ -1420,7 +1420,7 @@ class _SmartRoutePainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round
-      ..strokeWidth = 1.35;
+      ..strokeWidth = 1.15;
 
     for (final segments in routeSegments) {
       var walked = 0.0;
@@ -1448,10 +1448,10 @@ class _SmartRoutePainter extends CustomPainter {
   }
 
   void _drawArrow(Canvas canvas, Offset center, double angle, Paint paint) {
-    const length = 8.2;
-    const spread = 0.54;
+    const length = 5.8;
+    const spread = 0.42;
     final forward = Offset(math.cos(angle), math.sin(angle));
-    final tip = center + forward * 3.0;
+    final tip = center + forward * 2.2;
     final left =
         tip - Offset(math.cos(angle - spread), math.sin(angle - spread)) * length;
     final right =
