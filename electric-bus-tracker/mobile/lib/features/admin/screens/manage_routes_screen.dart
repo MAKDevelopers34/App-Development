@@ -5,6 +5,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/real_bus_map.dart';
 import '../../tracking/screens/bus_eat_screen.dart';
 import 'add_route_screen.dart';
+import '../widgets/admin_bottom_nav.dart';
 import '../utils/admin_navigation.dart';
 
 class ManageRoutesScreen extends StatefulWidget {
@@ -85,51 +86,55 @@ class _ManageRoutesScreenState extends State<ManageRoutesScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppTheme.bgGrey,
-      appBar: AppBar(
-        title: const Text('Manage Routes'),
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios, size: 18),
-          onPressed: () => AdminNavigation.goDashboard(context),
-        ),
-        actions: [
-          Padding(
-            padding: const EdgeInsets.only(right: 12),
-            child: IconButton.filled(
-              onPressed: _openAddRoute,
-              icon: const Icon(Icons.add, size: 18),
-              tooltip: 'Add route',
-            ),
+    return AdminNavigation.dashboardBackScope(
+      context: context,
+      child: Scaffold(
+        backgroundColor: AppTheme.bgGrey,
+        appBar: AppBar(
+          title: const Text('Manage Routes'),
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back_ios, size: 18),
+            onPressed: () => AdminNavigation.goDashboard(context),
           ),
-        ],
-      ),
-      body: _isLoading
-          ? const Center(
-              child: CircularProgressIndicator(color: AppTheme.primaryGreen),
-            )
-          : _routes.isEmpty
-          ? const Center(
-              child: Text(
-                'No routes found',
-                style: TextStyle(color: AppTheme.textGrey),
+          actions: [
+            Padding(
+              padding: const EdgeInsets.only(right: 12),
+              child: IconButton.filled(
+                onPressed: _openAddRoute,
+                icon: const Icon(Icons.add, size: 18),
+                tooltip: 'Add route',
               ),
-            )
-          : Column(
-              children: [
-                SizedBox(
-                  height: 220,
-                  child: RealBusMap(routes: _routes, forcedZoom: 9.8),
-                ),
-                Expanded(
-                  child: ListView.builder(
-                    padding: const EdgeInsets.all(12),
-                    itemCount: _routes.length,
-                    itemBuilder: (context, i) => _buildRouteCard(_routes[i]),
-                  ),
-                ),
-              ],
             ),
+          ],
+        ),
+        body: _isLoading
+            ? const Center(
+                child: CircularProgressIndicator(color: AppTheme.primaryGreen),
+              )
+            : _routes.isEmpty
+            ? const Center(
+                child: Text(
+                  'No routes found',
+                  style: TextStyle(color: AppTheme.textGrey),
+                ),
+              )
+            : Column(
+                children: [
+                  SizedBox(
+                    height: 220,
+                    child: RealBusMap(routes: _routes, forcedZoom: 9.8),
+                  ),
+                  Expanded(
+                    child: ListView.builder(
+                      padding: const EdgeInsets.all(12),
+                      itemCount: _routes.length,
+                      itemBuilder: (context, i) => _buildRouteCard(_routes[i]),
+                    ),
+                  ),
+                ],
+              ),
+        bottomNavigationBar: const AdminBottomNav(selectedIndex: 2),
+      ),
     );
   }
 

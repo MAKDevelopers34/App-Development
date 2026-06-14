@@ -12,4 +12,19 @@ class AdminNavigation {
       (route) => false,
     );
   }
+
+  static Widget dashboardBackScope({
+    required BuildContext context,
+    required Widget child,
+  }) {
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop) {
+          goDashboard(context);
+        }
+      },
+      child: child,
+    );
+  }
 }

@@ -118,8 +118,42 @@ const downloadReport = async (req, res) => {
   }
 };
 
+const downloadGeneratedReport = async (req, res) => {
+  try {
+    const { type } = req.params;
+
+    if (!['daily', 'weekly', 'monthly'].includes(type)) {
+      return res.status(400).json({
+        message: 'Invalid type. Use daily, weekly or monthly'
+      });
+    }
+
+    const report = await generateReport(type, req.user.adminId);
+
+    if (!report || !report.pdfPath || !fs.existsSync(report.pdfPath)) {
+      return res.status(500).json({
+        message: 'PDF file could not be generated'
+      });
+    }
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${report.reportId}.pdf"`
+    );
+
+    fs.createReadStream(report.pdfPath).pipe(res);
+  } catch (error) {
+    res.status(500).json({
+      message: 'Error generating report',
+      error: error.message
+    });
+  }
+};
+
 module.exports = {
   getReports,
   generateManualReport,
-  downloadReport
+  downloadReport,
+  downloadGeneratedReport
 };

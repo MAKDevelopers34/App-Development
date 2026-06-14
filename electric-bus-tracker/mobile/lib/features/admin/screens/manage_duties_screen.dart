@@ -96,63 +96,71 @@ class _ManageDutiesScreenState extends State<ManageDutiesScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppTheme.bgGrey,
-      appBar: AppBar(
-        title: const Text('Manage Duties'),
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new, size: 18),
-          onPressed: () => AdminNavigation.goDashboard(context),
-        ),
-        actions: [
-          Padding(
-            padding: const EdgeInsets.only(right: 12),
-            child: IconButton.filled(
-              onPressed: _openAddDuty,
-              icon: const Icon(Icons.add, size: 18),
-              tooltip: 'Add duty',
-            ),
+    return AdminNavigation.dashboardBackScope(
+      context: context,
+      child: Scaffold(
+        backgroundColor: AppTheme.bgGrey,
+        appBar: AppBar(
+          title: const Text('Manage Duties'),
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back_ios_new, size: 18),
+            onPressed: () => AdminNavigation.goDashboard(context),
           ),
-        ],
-      ),
-      body: Column(
-        children: [
-          _buildSearch(),
-          Expanded(
-            child: _isLoading
-                ? const Center(
-                    child: CircularProgressIndicator(
+          actions: [
+            Padding(
+              padding: const EdgeInsets.only(right: 12),
+              child: IconButton.filled(
+                onPressed: _openAddDuty,
+                icon: const Icon(Icons.add, size: 18),
+                tooltip: 'Add duty',
+              ),
+            ),
+          ],
+        ),
+        body: Column(
+          children: [
+            _buildSearch(),
+            Expanded(
+              child: _isLoading
+                  ? const Center(
+                      child: CircularProgressIndicator(
+                        color: AppTheme.primaryGreen,
+                      ),
+                    )
+                  : RefreshIndicator(
                       color: AppTheme.primaryGreen,
-                    ),
-                  )
-                : RefreshIndicator(
-                    color: AppTheme.primaryGreen,
-                    onRefresh: _loadDuties,
-                    child: _groupedDuties.isEmpty
-                        ? const SingleChildScrollView(
-                            physics: AlwaysScrollableScrollPhysics(),
-                            child: SizedBox(
-                              height: 420,
-                              child: Center(
-                                child: Text(
-                                  'No duties found',
-                                  style: TextStyle(color: AppTheme.textGrey),
+                      onRefresh: _loadDuties,
+                      child: _groupedDuties.isEmpty
+                          ? const SingleChildScrollView(
+                              physics: AlwaysScrollableScrollPhysics(),
+                              child: SizedBox(
+                                height: 420,
+                                child: Center(
+                                  child: Text(
+                                    'No duties found',
+                                    style: TextStyle(color: AppTheme.textGrey),
+                                  ),
                                 ),
                               ),
+                            )
+                          : ListView(
+                              physics: const AlwaysScrollableScrollPhysics(),
+                              padding: const EdgeInsets.fromLTRB(
+                                12,
+                                10,
+                                12,
+                                12,
+                              ),
+                              children: _groupedDuties.entries
+                                  .map(_buildRouteGroup)
+                                  .toList(),
                             ),
-                          )
-                        : ListView(
-                            physics: const AlwaysScrollableScrollPhysics(),
-                            padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
-                            children: _groupedDuties.entries
-                                .map(_buildRouteGroup)
-                                .toList(),
-                          ),
-                  ),
-          ),
-        ],
+                    ),
+            ),
+          ],
+        ),
+        bottomNavigationBar: const AdminBottomNav(selectedIndex: 0),
       ),
-      bottomNavigationBar: const AdminBottomNav(selectedIndex: 0),
     );
   }
 

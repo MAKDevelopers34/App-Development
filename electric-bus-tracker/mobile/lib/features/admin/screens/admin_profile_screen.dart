@@ -49,134 +49,137 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppTheme.bgGrey,
-      appBar: AppBar(
-        title: const Text('Back to Dashboard'),
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios, size: 18),
-          onPressed: () => AdminNavigation.goDashboard(context),
+    return AdminNavigation.dashboardBackScope(
+      context: context,
+      child: Scaffold(
+        backgroundColor: AppTheme.bgGrey,
+        appBar: AppBar(
+          title: const Text('Back to Dashboard'),
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back_ios, size: 18),
+            onPressed: () => AdminNavigation.goDashboard(context),
+          ),
         ),
-      ),
-      body: _isLoading
-          ? const Center(
-              child: CircularProgressIndicator(color: AppTheme.primaryGreen),
-            )
-          : SingleChildScrollView(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                children: [
-                  const SizedBox(height: 10),
+        body: _isLoading
+            ? const Center(
+                child: CircularProgressIndicator(color: AppTheme.primaryGreen),
+              )
+            : SingleChildScrollView(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  children: [
+                    const SizedBox(height: 10),
 
-                  // Avatar
-                  Container(
-                    width: 90,
-                    height: 90,
-                    decoration: const BoxDecoration(
-                      color: AppTheme.primaryGreen,
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(
-                      Icons.person,
-                      size: 48,
-                      color: AppTheme.white,
-                    ),
-                  ),
-                  const SizedBox(height: 24),
-
-                  // Info card matching design
-                  Container(
-                    decoration: BoxDecoration(
-                      color: AppTheme.white,
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    child: Column(
-                      children: [
-                        _infoRow(
-                          'Name',
-                          _user?['profileInfo']?['fullName'] ?? 'Admin User',
-                        ),
-                        const Divider(height: 1, indent: 16),
-                        _infoRow('User ID', _user?['userId'] ?? ''),
-                        const Divider(height: 1, indent: 16),
-                        _infoRow('Email', _user?['email'] ?? ''),
-                        const Divider(height: 1, indent: 16),
-                        _infoRow(
-                          'Phone Number',
-                          _user?['profileInfo']?['phone'] ?? 'N/A',
-                        ),
-                        const Divider(height: 1, indent: 16),
-                        _infoRow(
-                          'Contact Number',
-                          _user?['profileInfo']?['phone'] ?? 'N/A',
-                        ),
-                      ],
-                    ),
-                  ),
-
-                  const SizedBox(height: 20),
-
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton.icon(
-                      onPressed: () => Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => const ReportsScreen(),
-                        ),
+                    // Avatar
+                    Container(
+                      width: 90,
+                      height: 90,
+                      decoration: const BoxDecoration(
+                        color: AppTheme.primaryGreen,
+                        shape: BoxShape.circle,
                       ),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: AppTheme.primaryGreen,
-                        padding: const EdgeInsets.symmetric(vertical: 14),
+                      child: const Icon(
+                        Icons.person,
+                        size: 48,
+                        color: AppTheme.white,
                       ),
-                      icon: const Icon(Icons.picture_as_pdf, size: 18),
-                      label: const Text('Generate Reports'),
                     ),
-                  ),
+                    const SizedBox(height: 24),
 
-                  const SizedBox(height: 12),
+                    // Info card matching design
+                    Container(
+                      decoration: BoxDecoration(
+                        color: AppTheme.white,
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: Column(
+                        children: [
+                          _infoRow(
+                            'Name',
+                            _user?['profileInfo']?['fullName'] ?? 'Admin User',
+                          ),
+                          const Divider(height: 1, indent: 16),
+                          _infoRow('User ID', _user?['userId'] ?? ''),
+                          const Divider(height: 1, indent: 16),
+                          _infoRow('Email', _user?['email'] ?? ''),
+                          const Divider(height: 1, indent: 16),
+                          _infoRow(
+                            'Phone Number',
+                            _user?['profileInfo']?['phone'] ?? 'N/A',
+                          ),
+                          const Divider(height: 1, indent: 16),
+                          _infoRow(
+                            'Contact Number',
+                            _user?['profileInfo']?['phone'] ?? 'N/A',
+                          ),
+                        ],
+                      ),
+                    ),
 
-                  // Reset Password button red as in design
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton.icon(
-                      onPressed: () => Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => const ChangingPasswordScreen(),
+                    const SizedBox(height: 20),
+
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton.icon(
+                        onPressed: () => Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => const ReportsScreen(),
+                          ),
                         ),
-                      ),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: AppTheme.redStatus,
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                      ),
-                      icon: const Icon(Icons.lock_reset, size: 18),
-                      label: const Text('Reset Password'),
-                    ),
-                  ),
-
-                  const SizedBox(height: 12),
-
-                  // Logout button green outline
-                  SizedBox(
-                    width: double.infinity,
-                    child: OutlinedButton.icon(
-                      onPressed: _logout,
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: AppTheme.primaryGreen,
-                        side: const BorderSide(color: AppTheme.primaryGreen),
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppTheme.primaryGreen,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
                         ),
+                        icon: const Icon(Icons.picture_as_pdf, size: 18),
+                        label: const Text('Generate Reports'),
                       ),
-                      icon: const Icon(Icons.logout, size: 18),
-                      label: const Text('Logout'),
                     ),
-                  ),
-                ],
+
+                    const SizedBox(height: 12),
+
+                    // Reset Password button red as in design
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton.icon(
+                        onPressed: () => Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => const ChangingPasswordScreen(),
+                          ),
+                        ),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppTheme.redStatus,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                        ),
+                        icon: const Icon(Icons.lock_reset, size: 18),
+                        label: const Text('Reset Password'),
+                      ),
+                    ),
+
+                    const SizedBox(height: 12),
+
+                    // Logout button green outline
+                    SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton.icon(
+                        onPressed: _logout,
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: AppTheme.primaryGreen,
+                          side: const BorderSide(color: AppTheme.primaryGreen),
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                        icon: const Icon(Icons.logout, size: 18),
+                        label: const Text('Logout'),
+                      ),
+                    ),
+                  ],
+                ),
               ),
-            ),
+      ),
     );
   }
 

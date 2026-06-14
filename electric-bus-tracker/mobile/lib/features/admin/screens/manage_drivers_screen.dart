@@ -129,68 +129,76 @@ class _ManageDriversScreenState extends State<ManageDriversScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppTheme.bgGrey,
-      appBar: AppBar(
-        title: const Text('Manage Drivers'),
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new, size: 18),
-          onPressed: () => AdminNavigation.goDashboard(context),
-        ),
-        actions: [
-          Padding(
-            padding: const EdgeInsets.only(right: 12),
-            child: IconButton.filled(
-              onPressed: _openCreate,
-              icon: const Icon(Icons.person_add_alt_1_outlined, size: 18),
-              tooltip: 'Register driver',
-            ),
+    return AdminNavigation.dashboardBackScope(
+      context: context,
+      child: Scaffold(
+        backgroundColor: AppTheme.bgGrey,
+        appBar: AppBar(
+          title: const Text('Manage Drivers'),
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back_ios_new, size: 18),
+            onPressed: () => AdminNavigation.goDashboard(context),
           ),
-        ],
-      ),
-      body: Column(
-        children: [
-          _buildSearch(),
-          Expanded(
-            child: _isLoading
-                ? const Center(
-                    child: CircularProgressIndicator(
+          actions: [
+            Padding(
+              padding: const EdgeInsets.only(right: 12),
+              child: IconButton.filled(
+                onPressed: _openCreate,
+                icon: const Icon(Icons.person_add_alt_1_outlined, size: 18),
+                tooltip: 'Register driver',
+              ),
+            ),
+          ],
+        ),
+        body: Column(
+          children: [
+            _buildSearch(),
+            Expanded(
+              child: _isLoading
+                  ? const Center(
+                      child: CircularProgressIndicator(
+                        color: AppTheme.primaryGreen,
+                      ),
+                    )
+                  : RefreshIndicator(
                       color: AppTheme.primaryGreen,
-                    ),
-                  )
-                : RefreshIndicator(
-                    color: AppTheme.primaryGreen,
-                    onRefresh: _loadDrivers,
-                    child: _filtered.isEmpty
-                        ? const SingleChildScrollView(
-                            physics: AlwaysScrollableScrollPhysics(),
-                            child: SizedBox(
-                              height: 420,
-                              child: Center(
-                                child: Text(
-                                  'No drivers found',
-                                  style: TextStyle(color: AppTheme.textGrey),
+                      onRefresh: _loadDrivers,
+                      child: _filtered.isEmpty
+                          ? const SingleChildScrollView(
+                              physics: AlwaysScrollableScrollPhysics(),
+                              child: SizedBox(
+                                height: 420,
+                                child: Center(
+                                  child: Text(
+                                    'No drivers found',
+                                    style: TextStyle(color: AppTheme.textGrey),
+                                  ),
                                 ),
                               ),
+                            )
+                          : ListView.builder(
+                              physics: const AlwaysScrollableScrollPhysics(),
+                              padding: const EdgeInsets.fromLTRB(
+                                12,
+                                10,
+                                12,
+                                12,
+                              ),
+                              itemCount: _filtered.length,
+                              itemBuilder: (context, index) {
+                                return _buildDriverCard(
+                                  Map<String, dynamic>.from(
+                                    _filtered[index] as Map,
+                                  ),
+                                );
+                              },
                             ),
-                          )
-                        : ListView.builder(
-                            physics: const AlwaysScrollableScrollPhysics(),
-                            padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
-                            itemCount: _filtered.length,
-                            itemBuilder: (context, index) {
-                              return _buildDriverCard(
-                                Map<String, dynamic>.from(
-                                  _filtered[index] as Map,
-                                ),
-                              );
-                            },
-                          ),
-                  ),
-          ),
-        ],
+                    ),
+            ),
+          ],
+        ),
+        bottomNavigationBar: const AdminBottomNav(selectedIndex: 1),
       ),
-      bottomNavigationBar: const AdminBottomNav(selectedIndex: 1),
     );
   }
 
