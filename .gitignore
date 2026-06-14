@@ -6,6 +6,7 @@ node_modules/
 *.log
 *.log.*
 **/var/log/**
+electric-bus-tracker/eb-bundle/
 *.zip
 deploy/
 .deploy/
