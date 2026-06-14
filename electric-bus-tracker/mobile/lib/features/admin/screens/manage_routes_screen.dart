@@ -133,7 +133,7 @@ class _ManageRoutesScreenState extends State<ManageRoutesScreen> {
                   ),
                 ],
               ),
-        bottomNavigationBar: const AdminBottomNav(selectedIndex: 2),
+        bottomNavigationBar: const AdminBottomNav(selectedIndex: 3),
       ),
     );
   }

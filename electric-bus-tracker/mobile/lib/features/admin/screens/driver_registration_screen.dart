@@ -51,7 +51,10 @@ class _DriverRegistrationScreenState extends State<DriverRegistrationScreen> {
         Navigator.pop(context, true);
       } else {
         setState(() => _isLoading = false);
-        _showSnack(res['message'] ?? 'Failed to register driver', isError: true);
+        _showSnack(
+          res['error'] ?? res['message'] ?? 'Failed to register driver',
+          isError: true,
+        );
       }
     } catch (_) {
       if (!mounted) return;

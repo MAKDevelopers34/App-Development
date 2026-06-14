@@ -378,6 +378,8 @@ class _ManageDutiesScreenState extends State<ManageDutiesScreen> {
         profile?['fullName']?.toString() ??
         driver?['username']?.toString() ??
         'Driver';
+    final status = duty['status']?.toString().toLowerCase() ?? 'scheduled';
+    final canEdit = status == 'scheduled';
 
     return Container(
       margin: const EdgeInsets.only(bottom: 6),
@@ -444,12 +446,17 @@ class _ManageDutiesScreenState extends State<ManageDutiesScreen> {
           Column(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
-              _IconAction(
-                color: AppTheme.orangeStatus,
-                icon: Icons.edit_outlined,
-                onTap: () => _openEditDuty(duty),
-              ),
-              const SizedBox(height: 42),
+              _DutyStatusBadge(status: status),
+              const SizedBox(height: 8),
+              if (canEdit)
+                _IconAction(
+                  color: AppTheme.orangeStatus,
+                  icon: Icons.edit_outlined,
+                  onTap: () => _openEditDuty(duty),
+                )
+              else
+                const SizedBox(width: 28, height: 28),
+              const SizedBox(height: 6),
               Text(
                 _formatClock(duty['scheduledStartTime']),
                 style: const TextStyle(
@@ -463,6 +470,36 @@ class _ManageDutiesScreenState extends State<ManageDutiesScreen> {
         ],
       ),
     );
+  }
+
+  String _statusLabel(String status) {
+    switch (status) {
+      case 'completed':
+        return 'Complete';
+      case 'started':
+      case 'in-progress':
+        return 'Started';
+      case 'skipped':
+      case 'not completed':
+        return 'Not Done';
+      default:
+        return 'Scheduled';
+    }
+  }
+
+  Color _statusColor(String status) {
+    switch (status) {
+      case 'completed':
+        return AppTheme.primaryGreen;
+      case 'started':
+      case 'in-progress':
+        return const Color(0xFF2563EB);
+      case 'skipped':
+      case 'not completed':
+        return AppTheme.redStatus;
+      default:
+        return AppTheme.orangeStatus;
+    }
   }
 
   String _formatClock(dynamic value) {
@@ -501,6 +538,37 @@ class _ManageDutiesScreenState extends State<ManageDutiesScreen> {
 
   bool _sameDay(DateTime a, DateTime b) {
     return a.year == b.year && a.month == b.month && a.day == b.day;
+  }
+}
+
+class _DutyStatusBadge extends StatelessWidget {
+  final String status;
+
+  const _DutyStatusBadge({required this.status});
+
+  @override
+  Widget build(BuildContext context) {
+    final state = context.findAncestorStateOfType<_ManageDutiesScreenState>();
+    final color = state?._statusColor(status) ?? AppTheme.orangeStatus;
+    final label = state?._statusLabel(status) ?? 'Scheduled';
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Text(
+        label,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(
+          color: color,
+          fontSize: 9,
+          fontWeight: FontWeight.w900,
+        ),
+      ),
+    );
   }
 }
 

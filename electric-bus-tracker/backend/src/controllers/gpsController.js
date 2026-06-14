@@ -40,7 +40,9 @@ const activeBusRows = async (routeId = null) => {
      JOIN duty_assignments da
        ON da.duty_id = latest.duty_id
       AND da.status = 'In-Progress'
-     JOIN buses b ON b.bus_id = latest.bus_id
+     JOIN buses b
+       ON b.bus_id = latest.bus_id
+      AND b.status = 'Active'
      JOIN drivers d ON d.driver_id = latest.driver_id
      JOIN users u ON u.user_id = d.user_id
      JOIN routes r ON r.route_id = latest.route_id

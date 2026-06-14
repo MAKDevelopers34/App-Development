@@ -592,7 +592,9 @@ const getRouteEat = async (req, res) => {
        JOIN duty_assignments da
          ON da.duty_id = latest.duty_id
         AND da.status = 'In-Progress'
-       JOIN buses b ON b.bus_id = latest.bus_id
+       JOIN buses b
+         ON b.bus_id = latest.bus_id
+        AND b.status = 'Active'
        JOIN drivers d ON d.driver_id = latest.driver_id
        JOIN users u ON u.user_id = d.user_id
        JOIN routes r ON r.route_id = latest.route_id
@@ -646,7 +648,9 @@ const getRouteEat = async (req, res) => {
            ) AS minutes_until_start
          FROM duty_assignments da
          JOIN schedules s ON s.schedule_id = da.schedule_id
-         JOIN buses b ON b.bus_id = da.bus_id
+         JOIN buses b
+           ON b.bus_id = da.bus_id
+          AND b.status = 'Active'
          JOIN drivers d ON d.driver_id = da.driver_id
          JOIN users u ON u.user_id = d.user_id
          WHERE s.route_id = ?

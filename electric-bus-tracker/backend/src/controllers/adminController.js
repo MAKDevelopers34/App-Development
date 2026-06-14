@@ -1,5 +1,6 @@
 const bcrypt = require('bcryptjs');
 const {
+  getPool,
   query,
   callProcedure,
   firstResultSet
@@ -52,6 +53,41 @@ const sqlDate = (value) => {
 
 const sqlTime = (value) => String(value || '').slice(0, 5);
 
+const normalizeBusStatus = (value, fallback = 'Active') => {
+  const status = String(value || fallback).trim().toLowerCase();
+  if (status === 'maintenance') return 'Maintenance';
+  if (status === 'active') return 'Active';
+  return fallback;
+};
+
+const busRegistrationDate = (value) => (
+  value ? sqlDate(value) : new Date().toISOString().slice(0, 10)
+);
+
+const assertActiveBus = async (busId) => {
+  const rows = await query(
+    `SELECT bus_id
+     FROM buses
+     WHERE bus_id = ?
+       AND status = 'Active'
+     LIMIT 1`,
+    [Number(busId)]
+  );
+  return Boolean(rows[0]);
+};
+
+const hasColumn = async (connection, tableName, columnName) => {
+  const [rows] = await connection.execute(
+    `SELECT COUNT(*) AS count
+     FROM information_schema.columns
+     WHERE table_schema = DATABASE()
+       AND table_name = ?
+       AND column_name = ?`,
+    [tableName, columnName]
+  );
+  return Number(rows[0]?.count || 0) > 0;
+};
+
 const dashboard = async (req, res) => {
   try {
     await refreshDutyStatuses();
@@ -91,6 +127,8 @@ const getDrivers = async (req, res) => {
 };
 
 const createDriver = async (req, res) => {
+  let connection;
+
   try {
     const {
       username,
@@ -115,35 +153,89 @@ const createDriver = async (req, res) => {
     const driverUserCode = userId || await generateDriverUserCode();
     const defaultPassword = password || 'driver123';
     const passwordHash = await bcrypt.hash(defaultPassword, 10);
-    const result = await callProcedure('sp_create_driver', [
-      driverUsername,
-      driverUserCode,
-      fullName,
-      email,
-      phone || 'N/A',
-      passwordHash,
+    const normalizedEmail = String(email).trim().toLowerCase();
+    const normalizedUsername = String(driverUsername).trim().toLowerCase();
+
+    const existing = await query(
+      `SELECT username, user_code, email
+       FROM users
+       WHERE username = ?
+          OR user_code = ?
+          OR LOWER(email) = ?
+       LIMIT 1`,
+      [normalizedUsername, driverUserCode, normalizedEmail]
+    );
+
+    if (existing[0]) {
+      return res.status(409).json({
+        message: 'A driver with this username, user ID, or email already exists'
+      });
+    }
+
+    connection = await getPool().getConnection();
+    await connection.beginTransaction();
+
+    const [userResult] = await connection.execute(
+      `INSERT INTO users(
+         username,
+         user_code,
+         name,
+         email,
+         contact,
+         password_hash,
+         role
+       )
+       VALUES (?, ?, ?, ?, ?, ?, 'Driver')`,
+      [
+        normalizedUsername,
+        driverUserCode,
+        fullName,
+        normalizedEmail,
+        phone || 'N/A',
+        passwordHash
+      ]
+    );
+    const userDbId = userResult.insertId;
+    const driverAddressExists = await hasColumn(
+      connection,
+      'drivers',
+      'address'
+    );
+    const driverValues = [
+      userDbId,
       licenseNo || cnic || `DL-${driverUserCode}`,
-      hireDate || new Date().toISOString().slice(0, 10),
-      address || ''
-    ]);
-    const created = firstResultSet(result)[0];
+      hireDate || new Date().toISOString().slice(0, 10)
+    ];
+    const driverSql = driverAddressExists
+      ? `INSERT INTO drivers(user_id, license_no, hire_date, address)
+         VALUES (?, ?, ?, ?)`
+      : `INSERT INTO drivers(user_id, license_no, hire_date)
+         VALUES (?, ?, ?)`;
+    if (driverAddressExists) driverValues.push(address || '');
+
+    const [driverResult] = await connection.execute(driverSql, driverValues);
+    await connection.commit();
 
     return res.status(201).json({
       success: true,
       message: 'Driver registered successfully',
-      driverId: created?.driver_id,
-      userDbId: created?.user_id,
+      driverId: driverResult.insertId,
+      userDbId,
       credentials: {
-        username: driverUsername,
+        username: normalizedUsername,
         userId: driverUserCode,
         temporaryPassword: password ? null : defaultPassword
       }
     });
   } catch (error) {
+    if (connection) await connection.rollback();
+
     return res.status(500).json({
       message: 'Server error',
       error: error.message
     });
+  } finally {
+    if (connection) connection.release();
   }
 };
 
@@ -251,13 +343,166 @@ const setDriverStatus = async (req, res) => {
 
 const getBuses = async (req, res) => {
   try {
-    const result = await callProcedure('sp_get_buses');
-    const buses = firstResultSet(result).map(formatBus);
+    const rows = await query(
+      `SELECT *
+       FROM buses
+       WHERE status <> 'Inactive'
+       ORDER BY bus_number`
+    );
+    const buses = rows.map(formatBus);
 
     return res.json({
       success: true,
       count: buses.length,
       buses
+    });
+  } catch (error) {
+    return res.status(500).json({
+      message: 'Server error',
+      error: error.message
+    });
+  }
+};
+
+const createBus = async (req, res) => {
+  try {
+    const busNumber = String(req.body.busNumber || req.body.bus_number || '').trim();
+    const capacity = Number(req.body.capacity || 40);
+    const model = String(req.body.model || 'Electric Bus').trim();
+    const status = normalizeBusStatus(req.body.status);
+    const registrationDate = busRegistrationDate(req.body.registrationDate);
+
+    if (!busNumber) {
+      return res.status(400).json({ message: 'Bus number is required' });
+    }
+    if (!Number.isInteger(capacity) || capacity <= 0) {
+      return res.status(400).json({ message: 'Capacity must be a positive number' });
+    }
+
+    const duplicate = await query(
+      `SELECT bus_id
+       FROM buses
+       WHERE bus_number = ?
+       LIMIT 1`,
+      [busNumber]
+    );
+
+    if (duplicate[0]) {
+      return res.status(409).json({ message: 'Bus number already exists' });
+    }
+
+    const result = await query(
+      `INSERT INTO buses(bus_number, capacity, model, status, registration_date)
+       VALUES (?, ?, ?, ?, ?)`,
+      [busNumber, capacity, model || 'Electric Bus', status, registrationDate]
+    );
+
+    return res.status(201).json({
+      success: true,
+      message: 'Bus added successfully',
+      busId: result.insertId
+    });
+  } catch (error) {
+    return res.status(500).json({
+      message: 'Server error',
+      error: error.message
+    });
+  }
+};
+
+const updateBus = async (req, res) => {
+  try {
+    const busId = Number(req.params.busId);
+    const existingRows = await query(
+      `SELECT *
+       FROM buses
+       WHERE bus_id = ?
+         AND status <> 'Inactive'
+       LIMIT 1`,
+      [busId]
+    );
+    const existing = existingRows[0];
+
+    if (!existing) {
+      return res.status(404).json({ message: 'Bus not found' });
+    }
+
+    const busNumber = String(req.body.busNumber || existing.bus_number).trim();
+    const capacity = Number(req.body.capacity || existing.capacity);
+    const model = String(req.body.model || existing.model || 'Electric Bus').trim();
+    const status = normalizeBusStatus(req.body.status, existing.status);
+    const registrationDate = busRegistrationDate(
+      req.body.registrationDate || existing.registration_date
+    );
+
+    if (!busNumber) {
+      return res.status(400).json({ message: 'Bus number is required' });
+    }
+    if (!Number.isInteger(capacity) || capacity <= 0) {
+      return res.status(400).json({ message: 'Capacity must be a positive number' });
+    }
+
+    const duplicate = await query(
+      `SELECT bus_id
+       FROM buses
+       WHERE bus_number = ?
+         AND bus_id <> ?
+       LIMIT 1`,
+      [busNumber, busId]
+    );
+
+    if (duplicate[0]) {
+      return res.status(409).json({ message: 'Bus number already exists' });
+    }
+
+    await query(
+      `UPDATE buses
+       SET bus_number = ?,
+           capacity = ?,
+           model = ?,
+           status = ?,
+           registration_date = ?
+       WHERE bus_id = ?`,
+      [busNumber, capacity, model || 'Electric Bus', status, registrationDate, busId]
+    );
+
+    return res.json({
+      success: true,
+      message: 'Bus updated successfully'
+    });
+  } catch (error) {
+    return res.status(500).json({
+      message: 'Server error',
+      error: error.message
+    });
+  }
+};
+
+const deleteBus = async (req, res) => {
+  try {
+    const busId = Number(req.params.busId);
+    const result = await query(
+      `UPDATE buses
+       SET status = 'Inactive'
+       WHERE bus_id = ?
+         AND status <> 'Inactive'`,
+      [busId]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ message: 'Bus not found' });
+    }
+
+    await query(
+      `UPDATE bus_locations
+       SET is_active = FALSE
+       WHERE bus_id = ?`,
+      [busId]
+    );
+
+    return res.json({
+      success: true,
+      message: 'Bus removed from active list'
     });
   } catch (error) {
     return res.status(500).json({
@@ -302,6 +547,12 @@ const createDuty = async (req, res) => {
         !scheduledStartTime || !scheduledEndTime) {
       return res.status(400).json({
         message: 'driverId, busId, routeId, date and times are required'
+      });
+    }
+
+    if (!await assertActiveBus(busId)) {
+      return res.status(400).json({
+        message: 'Only active buses can be assigned to duties'
       });
     }
 
@@ -358,6 +609,18 @@ const updateDuty = async (req, res) => {
         !scheduledStartTime || !scheduledEndTime) {
       return res.status(400).json({
         message: 'driverId, busId, routeId, date and times are required'
+      });
+    }
+
+    if (existing.status !== 'Scheduled') {
+      return res.status(400).json({
+        message: 'Only scheduled duties can be edited'
+      });
+    }
+
+    if (!await assertActiveBus(busId)) {
+      return res.status(400).json({
+        message: 'Only active buses can be assigned to duties'
       });
     }
 
@@ -456,6 +719,9 @@ module.exports = {
   deleteDriver,
   setDriverStatus,
   getBuses,
+  createBus,
+  updateBus,
+  deleteBus,
   getDuties,
   createDuty,
   updateDuty,

@@ -206,6 +206,9 @@ class _EditDutyScreenState extends State<EditDutyScreen> {
             _label('Select Driver *'),
             _driverDropdown(),
             const SizedBox(height: 18),
+            _label('Select Bus *'),
+            _busDropdown(),
+            const SizedBox(height: 18),
             _label('Date *'),
             _pickerField(
               value: _selectedDate == null
@@ -294,6 +297,29 @@ class _EditDutyScreenState extends State<EditDutyScreen> {
     );
   }
 
+  Widget _busDropdown() {
+    final buses = _activeBuses;
+
+    return DropdownButtonFormField<String>(
+      initialValue: _containsId(buses, _selectedBusId) ? _selectedBusId : null,
+      isExpanded: true,
+      decoration: _inputDecoration(),
+      items: buses.map<DropdownMenuItem<String>>((raw) {
+        final bus = Map<String, dynamic>.from(raw as Map);
+        return DropdownMenuItem(
+          value: _idOf(bus),
+          child: Text(
+            bus['busNumber']?.toString() ?? 'Bus',
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 12),
+          ),
+        );
+      }).toList(),
+      onChanged: (value) => setState(() => _selectedBusId = value),
+      validator: (value) => value == null ? 'Select active bus' : null,
+    );
+  }
+
   Widget _pickerField({required String value, required VoidCallback onTap}) {
     return TextFormField(
       readOnly: true,
@@ -346,13 +372,15 @@ class _EditDutyScreenState extends State<EditDutyScreen> {
   }
 
   String? _bestBusId() {
-    final active = _buses.whereType<Map>().where((bus) {
+    if (_activeBuses.isEmpty) return null;
+    return _idOf(_activeBuses.first);
+  }
+
+  List<Map<dynamic, dynamic>> get _activeBuses {
+    return _buses.whereType<Map>().where((bus) {
       final status = bus['status']?.toString().toLowerCase() ?? 'active';
       return status == 'active';
     }).toList();
-    final source = active.isNotEmpty ? active : _buses.whereType<Map>().toList();
-    if (source.isEmpty) return null;
-    return _idOf(source.first);
   }
 
   String _calculatedEndTime() {

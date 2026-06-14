@@ -249,7 +249,9 @@ JOIN (
 ) pick
   ON pick.bus_id = latest.bus_id
   AND pick.max_recorded_at = latest.recorded_at
-JOIN buses b ON b.bus_id = latest.bus_id
+JOIN buses b
+  ON b.bus_id = latest.bus_id
+  AND b.status = 'Active'
 JOIN drivers d ON d.driver_id = latest.driver_id
 JOIN users u ON u.user_id = d.user_id
 JOIN routes r ON r.route_id = latest.route_id

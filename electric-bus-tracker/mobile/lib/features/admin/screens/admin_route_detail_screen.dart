@@ -160,7 +160,7 @@ class _AdminRouteDetailScreenState extends State<AdminRouteDetailScreen> {
           ],
         ),
       ),
-      bottomNavigationBar: const AdminBottomNav(selectedIndex: 2),
+      bottomNavigationBar: const AdminBottomNav(selectedIndex: 3),
     );
   }
 

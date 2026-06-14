@@ -16,6 +16,7 @@ class _AddDutyScreenState extends State<AddDutyScreen> {
   final _formKey = GlobalKey<FormState>();
   String? _selectedRouteId;
   String? _selectedDriverId;
+  String? _selectedBusId;
   DateTime? _selectedDate;
   String? _startTime;
   bool _isLoading = false;
@@ -57,9 +58,8 @@ class _AddDutyScreenState extends State<AddDutyScreen> {
       return;
     }
 
-    final bus = _bestBus();
-    if (bus == null) {
-      _showSnack('No active bus available for this duty', isError: true);
+    if (_selectedBusId == null) {
+      _showSnack('Select an active bus for this duty', isError: true);
       return;
     }
 
@@ -68,7 +68,7 @@ class _AddDutyScreenState extends State<AddDutyScreen> {
       final res = await ApiService.post('/admin/duties', {
         'routeId': _selectedRouteId,
         'driverId': _selectedDriverId,
-        'busId': _idOf(bus),
+        'busId': _selectedBusId,
         'scheduledDate': DateFormat('yyyy-MM-dd').format(_selectedDate!),
         'scheduledStartTime': _startTime,
         'scheduledEndTime': _calculatedEndTime(),
@@ -184,6 +184,9 @@ class _AddDutyScreenState extends State<AddDutyScreen> {
             _label('Select Driver *'),
             _driverDropdown(),
             const SizedBox(height: 18),
+            _label('Select Bus *'),
+            _busDropdown(),
+            const SizedBox(height: 18),
             _label('Date *'),
             _pickerField(
               value: _selectedDate == null
@@ -272,6 +275,29 @@ class _AddDutyScreenState extends State<AddDutyScreen> {
     );
   }
 
+  Widget _busDropdown() {
+    final buses = _activeBuses;
+
+    return DropdownButtonFormField<String>(
+      initialValue: _containsId(buses, _selectedBusId) ? _selectedBusId : null,
+      isExpanded: true,
+      decoration: _inputDecoration(),
+      items: buses.map<DropdownMenuItem<String>>((raw) {
+        final bus = Map<String, dynamic>.from(raw as Map);
+        return DropdownMenuItem(
+          value: _idOf(bus),
+          child: Text(
+            bus['busNumber']?.toString() ?? 'Bus',
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 12),
+          ),
+        );
+      }).toList(),
+      onChanged: (value) => setState(() => _selectedBusId = value),
+      validator: (value) => value == null ? 'Select active bus' : null,
+    );
+  }
+
   Widget _pickerField({required String value, required VoidCallback onTap}) {
     return TextFormField(
       readOnly: true,
@@ -318,14 +344,16 @@ class _AddDutyScreenState extends State<AddDutyScreen> {
     );
   }
 
-  Map<String, dynamic>? _bestBus() {
-    final active = _buses.whereType<Map>().where((bus) {
+  List<Map<dynamic, dynamic>> get _activeBuses {
+    return _buses.whereType<Map>().where((bus) {
       final status = bus['status']?.toString().toLowerCase() ?? 'active';
       return status == 'active';
     }).toList();
-    final source = active.isNotEmpty ? active : _buses.whereType<Map>().toList();
-    if (source.isEmpty) return null;
-    return Map<String, dynamic>.from(source.first);
+  }
+
+  bool _containsId(List<Map<dynamic, dynamic>> items, String? id) {
+    if (id == null) return false;
+    return items.any((item) => _idOf(item) == id);
   }
 
   String _calculatedEndTime() {

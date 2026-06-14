@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../../core/theme/app_theme.dart';
 import '../screens/manage_drivers_screen.dart';
 import '../screens/manage_duties_screen.dart';
+import '../screens/manage_buses_screen.dart';
 import '../screens/manage_routes_screen.dart';
 
 class AdminBottomNav extends StatelessWidget {
@@ -25,6 +26,9 @@ class AdminBottomNav extends StatelessWidget {
         break;
       case 1:
         screen = const ManageDriversScreen();
+        break;
+      case 2:
+        screen = const ManageBusesScreen();
         break;
       default:
         screen = const ManageRoutesScreen();
@@ -60,10 +64,17 @@ class AdminBottomNav extends StatelessWidget {
             ),
             const SizedBox(width: 4),
             _AdminNavButton(
-              icon: Icons.route,
-              label: 'Route',
+              icon: Icons.directions_bus_outlined,
+              label: 'Bus',
               selected: selectedIndex == 2,
               onTap: () => _openSection(context, 2),
+            ),
+            const SizedBox(width: 4),
+            _AdminNavButton(
+              icon: Icons.route,
+              label: 'Route',
+              selected: selectedIndex == 3,
+              onTap: () => _openSection(context, 3),
             ),
           ],
         ),

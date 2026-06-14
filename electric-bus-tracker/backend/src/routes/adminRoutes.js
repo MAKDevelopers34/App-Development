@@ -7,6 +7,9 @@ const {
   deleteDriver,
   setDriverStatus,
   getBuses,
+  createBus,
+  updateBus,
+  deleteBus,
   getDuties,
   createDuty,
   updateDuty,
@@ -34,6 +37,9 @@ router.post('/drivers/:driverId/deactivate', (req, res, next) => {
 });
 
 router.get('/buses', getBuses);
+router.post('/buses', createBus);
+router.put('/buses/:busId', updateBus);
+router.delete('/buses/:busId', deleteBus);
 
 router.get('/duties', getDuties);
 router.post('/duties', createDuty);

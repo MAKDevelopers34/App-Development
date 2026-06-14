@@ -210,7 +210,7 @@ class _AddRouteScreenState extends State<AddRouteScreen> {
                 child: _buildCreateCard(),
               ),
       ),
-      bottomNavigationBar: const AdminBottomNav(selectedIndex: 2),
+      bottomNavigationBar: const AdminBottomNav(selectedIndex: 3),
     );
   }
 
@@ -677,7 +677,7 @@ class _RoutePointPickerScreenState extends State<_RoutePointPickerScreen> {
           ],
         ),
       ),
-      bottomNavigationBar: const AdminBottomNav(selectedIndex: 2),
+      bottomNavigationBar: const AdminBottomNav(selectedIndex: 3),
     );
   }
 }
@@ -808,7 +808,7 @@ class _RouteStopsPickerScreenState extends State<_RouteStopsPickerScreen> {
           ],
         ),
       ),
-      bottomNavigationBar: const AdminBottomNav(selectedIndex: 2),
+      bottomNavigationBar: const AdminBottomNav(selectedIndex: 3),
     );
   }
 
