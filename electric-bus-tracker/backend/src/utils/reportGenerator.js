@@ -59,7 +59,7 @@ const generateReport = async (type, adminId = 1) => {
           COUNT(da.duty_id) AS total_duties,
           COALESCE(SUM(da.status = 'Completed'), 0) AS completed_duties,
           COALESCE(SUM(da.status = 'Skipped'), 0) AS skipped_duties,
-          (SELECT COUNT(*) FROM buses WHERE deletion_date IS NULL) AS total_buses,
+          (SELECT COUNT(*) FROM buses WHERE status = 'Active') AS total_buses,
           (
             SELECT COUNT(DISTINCT bus_id)
             FROM duty_assignments
@@ -69,7 +69,7 @@ const generateReport = async (type, adminId = 1) => {
             SELECT COUNT(*)
             FROM drivers d
             JOIN users u ON u.user_id = d.user_id
-            WHERE u.deletion_date IS NULL
+            WHERE u.account_status = 'Active'
           ) AS total_drivers,
           (
             SELECT COUNT(DISTINCT driver_id)
@@ -81,13 +81,11 @@ const generateReport = async (type, adminId = 1) => {
             FROM drivers d
             JOIN users u ON u.user_id = d.user_id
             WHERE u.account_status = 'Active'
-              AND u.deletion_date IS NULL
           ) AS active_drivers,
           (
             SELECT COUNT(*)
             FROM stops
             WHERE status = 'Active'
-              AND deletion_date IS NULL
           ) AS total_stops,
           (
             SELECT COUNT(*)

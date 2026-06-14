@@ -21,8 +21,7 @@ const enrichReport = async (report) => {
       `SELECT
         (SELECT COUNT(*)
          FROM stops
-         WHERE status = 'Active'
-           AND deletion_date IS NULL) AS total_stops,
+         WHERE status = 'Active') AS total_stops,
         (SELECT COUNT(*)
          FROM routes
          WHERE status = 'Active') AS total_routes`
