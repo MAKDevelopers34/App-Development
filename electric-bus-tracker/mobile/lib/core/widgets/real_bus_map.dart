@@ -61,7 +61,11 @@ class _RealBusMapState extends State<RealBusMap> {
   Widget build(BuildContext context) {
     final visibleRoutes = _visibleRoutes();
     final routePoints = visibleRoutes.expand(_displayRoutePoints).toList();
-    final busPoints = widget.buses.map(_busPoint).whereType<LatLng>().toList();
+    final busPoints = widget.buses
+        .whereType<Map>()
+        .map((bus) => _displayBusPoint(Map<String, dynamic>.from(bus)))
+        .whereType<LatLng>()
+        .toList();
     final allPoints = [...routePoints, ...busPoints];
     final center = _centerOf(allPoints);
 
@@ -185,8 +189,15 @@ class _RealBusMapState extends State<RealBusMap> {
 
   List<Polyline> _buildRouteLines(List<Map<String, dynamic>> visibleRoutes) {
     return visibleRoutes
-        .map((route) {
-          final points = _displayRoutePoints(route);
+        .asMap()
+        .entries
+        .map((entry) {
+          final route = entry.value;
+          final points = _visibleRoutePoints(
+            route,
+            routeIndex: entry.key,
+            routeCount: visibleRoutes.length,
+          );
           final selected =
               route['routeId']?.toString() == widget.selectedRouteId;
           return Polyline(
@@ -208,10 +219,18 @@ class _RealBusMapState extends State<RealBusMap> {
   List<Marker> _buildMarkers(List<Map<String, dynamic>> visibleRoutes) {
     final markers = <Marker>[];
 
-    for (final route in visibleRoutes) {
+    for (final entry in visibleRoutes.asMap().entries) {
+      final route = entry.value;
       final isSelected = route['routeId']?.toString() == widget.selectedRouteId;
       final showDetails = widget.showStopMarkers || isSelected;
       final points = _routePoints(route);
+      final visualPoints = _visibleRoutePoints(
+        route,
+        routeIndex: entry.key,
+        routeCount: visibleRoutes.length,
+      );
+
+      markers.addAll(_routeDirectionMarkers(route, visualPoints));
 
       if ((widget.showEndpointMarkers || isSelected) && points.isNotEmpty) {
         final startLabel = route['startPoint']?['name']?.toString() ?? 'Start';
@@ -241,7 +260,7 @@ class _RealBusMapState extends State<RealBusMap> {
 
     for (final rawBus in widget.buses.whereType<Map>()) {
       final bus = Map<String, dynamic>.from(rawBus);
-      final point = _busPoint(bus);
+      final point = _displayBusPoint(bus);
       if (point != null) {
         markers.add(_busMarker(point, bus));
       }
@@ -453,26 +472,31 @@ class _RealBusMapState extends State<RealBusMap> {
 
   Marker _busMarker(LatLng point, Map<String, dynamic> bus) {
     final busNumber = bus['busNumber']?.toString() ?? 'BUS';
-    final speed = (bus['speed'] as num?)?.round() ?? 0;
     final routeName = bus['routeName']?.toString() ?? 'Route';
 
     return Marker(
       point: point,
-      width: 88,
-      height: 60,
+      width: 100,
+      height: 72,
       child: GestureDetector(
-        onTap: widget.onBusTap == null ? null : () => widget.onBusTap!(bus),
+        onTap: () {
+          if (widget.onBusTap != null) {
+            widget.onBusTap!(bus);
+          } else {
+            _showBusSheet(bus);
+          }
+        },
         child: Tooltip(
           message: '$busNumber - $routeName',
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               Container(
-                width: 46,
-                height: 38,
+                width: 48,
+                height: 48,
                 decoration: BoxDecoration(
                   color: AppTheme.primaryGreen,
-                  borderRadius: BorderRadius.circular(19),
+                  borderRadius: BorderRadius.circular(16),
                   border: Border.all(color: AppTheme.white, width: 3),
                   boxShadow: [
                     BoxShadow(
@@ -485,7 +509,7 @@ class _RealBusMapState extends State<RealBusMap> {
                 child: const Icon(
                   Icons.directions_bus,
                   color: AppTheme.white,
-                  size: 22,
+                  size: 24,
                 ),
               ),
               Container(
@@ -502,7 +526,7 @@ class _RealBusMapState extends State<RealBusMap> {
                   ],
                 ),
                 child: Text(
-                  '$busNumber  $speed km/h',
+                  busNumber,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
@@ -519,10 +543,291 @@ class _RealBusMapState extends State<RealBusMap> {
     );
   }
 
+  void _showBusSheet(Map<String, dynamic> bus) {
+    final busNumber = bus['busNumber']?.toString() ?? 'BUS';
+    final routeName = bus['routeName']?.toString() ?? 'Route';
+    final speed = (_numberFrom(bus['speed']) ?? 0).round();
+    final driver = bus['driverName']?.toString();
+
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: AppTheme.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+      ),
+      builder: (context) {
+        return SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(18, 16, 18, 18),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      width: 42,
+                      height: 42,
+                      decoration: const BoxDecoration(
+                        color: AppTheme.primaryGreen,
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(
+                        Icons.directions_bus,
+                        color: AppTheme.white,
+                        size: 22,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            busNumber,
+                            style: const TextStyle(
+                              color: AppTheme.textDark,
+                              fontSize: 17,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                          Text(
+                            routeName,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: AppTheme.textGrey,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 14),
+                _BusInfoRow(label: 'Speed', value: '$speed km/h'),
+                if (driver != null && driver.isNotEmpty)
+                  _BusInfoRow(label: 'Driver', value: driver),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   List<LatLng> _displayRoutePoints(Map<String, dynamic> route) {
     final rawPoints = _routePoints(route);
     final key = _routeKey(route, rawPoints);
     return _roadRoutes[key] ?? rawPoints;
+  }
+
+  List<LatLng> _visibleRoutePoints(
+    Map<String, dynamic> route, {
+    required int routeIndex,
+    required int routeCount,
+  }) {
+    final points = _displayRoutePoints(route);
+    if (points.length < 2 ||
+        routeCount <= 1 ||
+        widget.selectedRouteId != null) {
+      return points;
+    }
+
+    final offsetMeters = ((routeIndex - ((routeCount - 1) / 2)) * 5.5)
+        .clamp(-11.0, 11.0)
+        .toDouble();
+    if (offsetMeters.abs() < 0.1) return points;
+
+    return _offsetPolyline(points, offsetMeters);
+  }
+
+  List<LatLng> _offsetPolyline(List<LatLng> points, double offsetMeters) {
+    final offsetPoints = <LatLng>[];
+    for (var i = 0; i < points.length; i++) {
+      final previous = points[math.max(0, i - 1)];
+      final next = points[math.min(points.length - 1, i + 1)];
+      final bearing = _bearing(previous, next) + 90;
+      offsetPoints.add(_destinationPoint(points[i], bearing, offsetMeters));
+    }
+    return offsetPoints;
+  }
+
+  List<Marker> _routeDirectionMarkers(
+    Map<String, dynamic> route,
+    List<LatLng> points,
+  ) {
+    if (points.length < 2) return const [];
+
+    final markers = <Marker>[];
+    final routeName =
+        route['routeName']?.toString() ?? route['name']?.toString() ?? 'Route';
+    final labelIndex = (points.length * 0.52).floor().clamp(
+      1,
+      points.length - 1,
+    );
+    final labelPoint = points[labelIndex];
+
+    markers.add(
+      Marker(
+        point: labelPoint,
+        width: 126,
+        height: 26,
+        child: IgnorePointer(
+          child: Center(
+            child: Container(
+              constraints: const BoxConstraints(maxWidth: 118),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: AppTheme.white.withValues(alpha: 0.94),
+                borderRadius: BorderRadius.circular(7),
+                border: Border.all(
+                  color: AppTheme.primaryGreen.withValues(alpha: 0.45),
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.14),
+                    blurRadius: 5,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
+              ),
+              child: Text(
+                routeName,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: AppTheme.primaryGreen,
+                  fontSize: 9,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    for (final fraction in const [0.28, 0.66]) {
+      final index = (points.length * fraction).floor().clamp(
+        1,
+        points.length - 1,
+      );
+      final previous = points[index - 1];
+      final current = points[index];
+      final radians =
+          (_bearing(previous, current) * math.pi / 180) + math.pi / 2;
+
+      markers.add(
+        Marker(
+          point: current,
+          width: 28,
+          height: 28,
+          child: IgnorePointer(
+            child: Transform.rotate(
+              angle: radians,
+              child: Container(
+                decoration: BoxDecoration(
+                  color: AppTheme.primaryGreen,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: AppTheme.white, width: 2),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.18),
+                      blurRadius: 4,
+                      offset: const Offset(0, 1),
+                    ),
+                  ],
+                ),
+                child: const Icon(
+                  Icons.navigation,
+                  color: AppTheme.white,
+                  size: 15,
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return markers;
+  }
+
+  LatLng? _displayBusPoint(Map<String, dynamic> bus) {
+    final rawPoint = _busPoint(bus);
+    if (rawPoint == null) return null;
+
+    final routeId = bus['routeId']?.toString();
+    if (routeId == null) return rawPoint;
+
+    for (final route in _visibleRoutes()) {
+      if (route['routeId']?.toString() != routeId) continue;
+      final routePoints = _displayRoutePoints(route);
+      final snapped = _snapPointToRoute(routePoints, rawPoint);
+      return snapped ?? rawPoint;
+    }
+
+    return rawPoint;
+  }
+
+  LatLng? _snapPointToRoute(List<LatLng> points, LatLng target) {
+    if (points.length < 2) return null;
+
+    var bestDistance = double.infinity;
+    LatLng? bestPoint;
+    for (var i = 0; i < points.length - 1; i++) {
+      final projection = _projectToSegment(points[i], points[i + 1], target);
+      final projectedPoint = _interpolate(points[i], points[i + 1], projection);
+      final distanceToSegment = _distance.as(
+        LengthUnit.Meter,
+        target,
+        projectedPoint,
+      );
+
+      if (distanceToSegment < bestDistance) {
+        bestDistance = distanceToSegment;
+        bestPoint = projectedPoint;
+      }
+    }
+
+    return bestDistance <= 500 ? bestPoint : target;
+  }
+
+  double _bearing(LatLng from, LatLng to) {
+    final lat1 = from.latitude * math.pi / 180;
+    final lat2 = to.latitude * math.pi / 180;
+    final deltaLng = (to.longitude - from.longitude) * math.pi / 180;
+    final y = math.sin(deltaLng) * math.cos(lat2);
+    final x =
+        math.cos(lat1) * math.sin(lat2) -
+        math.sin(lat1) * math.cos(lat2) * math.cos(deltaLng);
+    return (math.atan2(y, x) * 180 / math.pi + 360) % 360;
+  }
+
+  LatLng _destinationPoint(LatLng start, double bearing, double meters) {
+    const earthRadius = 6371000.0;
+    final angularDistance = meters / earthRadius;
+    final bearingRad = bearing * math.pi / 180;
+    final lat1 = start.latitude * math.pi / 180;
+    final lng1 = start.longitude * math.pi / 180;
+
+    final lat2 = math.asin(
+      math.sin(lat1) * math.cos(angularDistance) +
+          math.cos(lat1) * math.sin(angularDistance) * math.cos(bearingRad),
+    );
+    final lng2 =
+        lng1 +
+        math.atan2(
+          math.sin(bearingRad) * math.sin(angularDistance) * math.cos(lat1),
+          math.cos(angularDistance) - math.sin(lat1) * math.sin(lat2),
+        );
+
+    return LatLng(lat2 * 180 / math.pi, lng2 * 180 / math.pi);
   }
 
   String _routeKey(Map<String, dynamic> route, List<LatLng> points) {
@@ -735,6 +1040,46 @@ class _StopEat {
     final hours = durationMinutes ~/ 60;
     final minutes = durationMinutes % 60;
     return minutes == 0 ? '${hours}h' : '${hours}h ${minutes}m';
+  }
+}
+
+class _BusInfoRow extends StatelessWidget {
+  final String label;
+  final String value;
+
+  const _BusInfoRow({required this.label, required this.value});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: AppTheme.bgGrey,
+        borderRadius: BorderRadius.circular(9),
+      ),
+      child: Row(
+        children: [
+          Text(
+            label,
+            style: const TextStyle(
+              color: AppTheme.textGrey,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const Spacer(),
+          Text(
+            value,
+            style: const TextStyle(
+              color: AppTheme.textDark,
+              fontSize: 13,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 
