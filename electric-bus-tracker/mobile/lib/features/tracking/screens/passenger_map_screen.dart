@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:latlong2/latlong.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/services/api_service.dart';
 import '../../../core/widgets/bottom_nav.dart';
@@ -19,6 +20,8 @@ class _PassengerMapScreenState extends State<PassengerMapScreen> {
 
   List<dynamic> _activeBuses = [];
   List<dynamic> _routes = [];
+  LatLng? _searchFocusPoint;
+  double? _searchFocusZoom;
   bool _isLoading = true;
   int _currentNavIndex = 0;
   Timer? _refreshTimer;
@@ -38,20 +41,6 @@ class _PassengerMapScreenState extends State<PassengerMapScreen> {
     _refreshTimer?.cancel();
     _searchController.dispose();
     super.dispose();
-  }
-
-  List<dynamic> get _filteredBuses {
-    final query = _searchController.text.trim().toLowerCase();
-    if (query.isEmpty) return _activeBuses;
-
-    return _activeBuses.where((bus) {
-      final busNumber = bus['busNumber']?.toString().toLowerCase() ?? '';
-      final routeName = bus['routeName']?.toString().toLowerCase() ?? '';
-      final driverName = bus['driverName']?.toString().toLowerCase() ?? '';
-      return busNumber.contains(query) ||
-          routeName.contains(query) ||
-          driverName.contains(query);
-    }).toList();
   }
 
   Future<void> _loadMapData() async {
@@ -111,16 +100,97 @@ class _PassengerMapScreenState extends State<PassengerMapScreen> {
     );
   }
 
+  void _handleSearchChanged(String value) {
+    final focus = _findRouteOrStop(value);
+    setState(() {
+      _searchFocusPoint = focus?.point;
+      _searchFocusZoom = focus?.zoom;
+    });
+  }
+
+  _MapSearchFocus? _findRouteOrStop(String value) {
+    final query = value.trim().toLowerCase();
+    if (query.isEmpty) return null;
+
+    for (final rawRoute in _routes.whereType<Map>()) {
+      final route = Map<String, dynamic>.from(rawRoute);
+      for (final point in _routeNamedPoints(route)) {
+        final name = point.name.toLowerCase();
+        if (name.contains(query)) {
+          return _MapSearchFocus(point.point, 15.4);
+        }
+      }
+    }
+
+    for (final rawRoute in _routes.whereType<Map>()) {
+      final route = Map<String, dynamic>.from(rawRoute);
+      final routeName = route['routeName']?.toString().toLowerCase() ?? '';
+      final routeCode = route['routeCode']?.toString().toLowerCase() ?? '';
+      if (!routeName.contains(query) && !routeCode.contains(query)) continue;
+
+      final points = _routeNamedPoints(route).map((item) => item.point).toList();
+      if (points.isEmpty) return null;
+      return _MapSearchFocus(_centerOf(points), 13.2);
+    }
+
+    return null;
+  }
+
+  List<_NamedPoint> _routeNamedPoints(Map<String, dynamic> route) {
+    final points = <_NamedPoint>[];
+
+    void addPoint(dynamic source) {
+      if (source is! Map) return;
+      final name = source['name']?.toString();
+      final point = _pointFrom(source);
+      if (name == null || name.isEmpty || point == null) return;
+      points.add(_NamedPoint(name, point));
+    }
+
+    addPoint(route['startPoint']);
+    for (final stop in (route['stops'] as List? ?? []).whereType<Map>()) {
+      addPoint(stop);
+    }
+    addPoint(route['endPoint']);
+    return points;
+  }
+
+  LatLng _centerOf(List<LatLng> points) {
+    final lat = points.map((point) => point.latitude).reduce((a, b) => a + b);
+    final lng = points.map((point) => point.longitude).reduce((a, b) => a + b);
+    return LatLng(lat / points.length, lng / points.length);
+  }
+
+  LatLng? _pointFrom(Map source) {
+    final lat = _numberFrom(source['latitude']);
+    final lng = _numberFrom(source['longitude']);
+    if (lat == null || lng == null) return null;
+    if (lat.abs() > 90 || lng.abs() > 180) return null;
+    return LatLng(lat, lng);
+  }
+
+  double? _numberFrom(dynamic value) {
+    if (value is num) return value.toDouble();
+    return double.tryParse(value?.toString() ?? '');
+  }
+
   @override
   Widget build(BuildContext context) {
-    final visibleBuses = _filteredBuses;
+    final visibleBuses = _activeBuses;
 
     return Scaffold(
       backgroundColor: AppTheme.white,
       body: SafeArea(
         child: Stack(
           children: [
-            RealBusMap(routes: _routes, buses: visibleBuses),
+            RealBusMap(
+              routes: _routes,
+              buses: visibleBuses,
+              requireRoadGeometryForRoutes: true,
+              showRouteLabels: false,
+              focusPoint: _searchFocusPoint,
+              focusZoom: _searchFocusZoom,
+            ),
             Positioned(top: 12, left: 12, right: 12, child: _buildSearchBar()),
             Positioned(
               bottom: 90,
@@ -214,10 +284,10 @@ class _PassengerMapScreenState extends State<PassengerMapScreen> {
                     ),
                     child: TextField(
                       controller: _searchController,
-                      onChanged: (_) => setState(() {}),
+                      onChanged: _handleSearchChanged,
                       style: const TextStyle(fontSize: 13),
                       decoration: const InputDecoration(
-                        hintText: 'Search bus, route, driver',
+                        hintText: 'Search route or stop',
                         hintStyle: TextStyle(
                           color: AppTheme.textGrey,
                           fontSize: 13,
@@ -389,4 +459,18 @@ class _PassengerMapScreenState extends State<PassengerMapScreen> {
       ],
     );
   }
+}
+
+class _MapSearchFocus {
+  final LatLng point;
+  final double zoom;
+
+  const _MapSearchFocus(this.point, this.zoom);
+}
+
+class _NamedPoint {
+  final String name;
+  final LatLng point;
+
+  const _NamedPoint(this.name, this.point);
 }

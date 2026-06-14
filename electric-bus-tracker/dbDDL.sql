@@ -527,9 +527,12 @@ BEGIN
     r.distance,
     r.estimated_duration,
     r.status,
-    COUNT(rsd.stop_id) AS stop_count
+    COUNT(s.stop_id) AS stop_count
   FROM routes r
   LEFT JOIN route_stop_details rsd ON rsd.route_id = r.route_id
+  LEFT JOIN stops s ON s.stop_id = rsd.stop_id
+    AND s.status = 'Active'
+    AND s.deletion_date IS NULL
   WHERE r.status = 'Active'
   GROUP BY r.route_id
   ORDER BY r.name;
@@ -537,7 +540,7 @@ END$$
 
 CREATE PROCEDURE sp_get_route_by_id(IN p_route_id INT)
 BEGIN
-  SELECT * FROM routes WHERE route_id = p_route_id;
+  SELECT * FROM routes WHERE route_id = p_route_id AND status = 'Active';
 
   SELECT
     s.stop_id,
@@ -551,6 +554,8 @@ BEGIN
   FROM route_stop_details rsd
   JOIN stops s ON s.stop_id = rsd.stop_id
   WHERE rsd.route_id = p_route_id
+    AND s.status = 'Active'
+    AND s.deletion_date IS NULL
   ORDER BY rsd.stop_order;
 
   SELECT

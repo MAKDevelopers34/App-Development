@@ -73,6 +73,7 @@ const findOrCreateStop = async (runQuery, point, routeId, index) => {
       `SELECT stop_id
        FROM stops
        WHERE stop_id = ?
+         AND status = 'Active'
          AND deletion_date IS NULL
        LIMIT 1`,
       [Number(point.stopId)]
@@ -84,6 +85,7 @@ const findOrCreateStop = async (runQuery, point, routeId, index) => {
     `SELECT stop_id
      FROM stops
      WHERE LOWER(name) = LOWER(?)
+       AND status = 'Active'
        AND deletion_date IS NULL
      LIMIT 1`,
     [point.name]
@@ -162,8 +164,31 @@ const saveRouteStops = async ({
 
 const getRoutes = async (req, res) => {
   try {
-    const result = await callProcedure('sp_get_routes');
-    const routes = firstResultSet(result).map((row) => formatRoute(row));
+    const rows = await query(
+      `SELECT
+         r.route_id,
+         r.route_code,
+         r.name,
+         r.starting_point,
+         r.start_latitude,
+         r.start_longitude,
+         r.destination_point,
+         r.destination_latitude,
+         r.destination_longitude,
+         r.distance,
+         r.estimated_duration,
+         r.status,
+         COUNT(s.stop_id) AS stop_count
+       FROM routes r
+       LEFT JOIN route_stop_details rsd ON rsd.route_id = r.route_id
+       LEFT JOIN stops s ON s.stop_id = rsd.stop_id
+        AND s.status = 'Active'
+        AND s.deletion_date IS NULL
+       WHERE r.status = 'Active'
+       GROUP BY r.route_id
+       ORDER BY r.name`
+    );
+    const routes = rows.map((row) => formatRoute(row));
 
     return res.json({
       success: true,
@@ -185,15 +210,53 @@ const getRouteById = async (req, res) => {
       return res.status(400).json({ message: 'Invalid route id' });
     }
 
-    const result = await callProcedure('sp_get_route_by_id', [routeId]);
-    const routeRow = Array.isArray(result[0]) ? result[0][0] : null;
+    const routeRows = await query(
+      `SELECT *
+       FROM routes
+       WHERE route_id = ?
+         AND status = 'Active'
+       LIMIT 1`,
+      [routeId]
+    );
+    const routeRow = routeRows[0];
 
     if (!routeRow) {
       return res.status(404).json({ message: 'Route not found' });
     }
 
-    const stops = (result[1] || []).map(formatStop);
-    const schedules = (result[2] || []).map(formatSchedule);
+    const stopRows = await query(
+      `SELECT
+         s.stop_id,
+         s.stop_code,
+         s.name,
+         s.latitude,
+         s.longitude,
+         rsd.stop_order,
+         rsd.distance_from_start,
+         rsd.estimated_minutes_from_start
+       FROM route_stop_details rsd
+       JOIN stops s ON s.stop_id = rsd.stop_id
+       WHERE rsd.route_id = ?
+         AND s.status = 'Active'
+         AND s.deletion_date IS NULL
+       ORDER BY rsd.stop_order`,
+      [routeId]
+    );
+    const scheduleRows = await query(
+      `SELECT
+         schedule_id,
+         bus_id,
+         departure_time,
+         arrival_time,
+         service_date,
+         status
+       FROM schedules
+       WHERE route_id = ?
+       ORDER BY service_date, departure_time`,
+      [routeId]
+    );
+    const stops = stopRows.map(formatStop);
+    const schedules = scheduleRows.map(formatSchedule);
 
     return res.json({
       success: true,
@@ -215,8 +278,36 @@ const searchRoutes = async (req, res) => {
       return getRoutes(req, res);
     }
 
-    const result = await callProcedure('sp_search_routes', [term]);
-    const routes = firstResultSet(result).map((row) => formatRoute(row));
+    const rows = await query(
+      `SELECT DISTINCT
+         r.route_id,
+         r.route_code,
+         r.name,
+         r.starting_point,
+         r.start_latitude,
+         r.start_longitude,
+         r.destination_point,
+         r.destination_latitude,
+         r.destination_longitude,
+         r.distance,
+         r.estimated_duration,
+         r.status
+       FROM routes r
+       LEFT JOIN route_stop_details rsd ON rsd.route_id = r.route_id
+       LEFT JOIN stops s ON s.stop_id = rsd.stop_id
+        AND s.status = 'Active'
+        AND s.deletion_date IS NULL
+       WHERE r.status = 'Active'
+         AND (
+           LOWER(r.name) LIKE CONCAT('%', LOWER(?), '%')
+           OR LOWER(r.starting_point) LIKE CONCAT('%', LOWER(?), '%')
+           OR LOWER(r.destination_point) LIKE CONCAT('%', LOWER(?), '%')
+           OR LOWER(s.name) LIKE CONCAT('%', LOWER(?), '%')
+         )
+       ORDER BY r.name`,
+      [term, term, term, term]
+    );
+    const routes = rows.map((row) => formatRoute(row));
 
     return res.json({
       success: true,
@@ -238,7 +329,17 @@ const deleteRoute = async (req, res) => {
       return res.status(400).json({ message: 'Invalid route id' });
     }
 
-    await callProcedure('sp_delete_route', [routeId]);
+    const result = await query(
+      `UPDATE routes
+       SET status = 'Inactive'
+       WHERE route_id = ?
+         AND status = 'Active'`,
+      [routeId]
+    );
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ message: 'Route not found' });
+    }
+
     return res.json({ success: true, message: 'Route deactivated' });
   } catch (error) {
     return res.status(500).json({
@@ -339,7 +440,12 @@ const getRouteEat = async (req, res) => {
       `SELECT s.*, rsd.stop_order
        FROM route_stop_details rsd
        JOIN stops s ON s.stop_id = rsd.stop_id
-       WHERE rsd.route_id = ? AND s.stop_id = ?
+       JOIN routes r ON r.route_id = rsd.route_id
+       WHERE rsd.route_id = ?
+         AND s.stop_id = ?
+         AND r.status = 'Active'
+         AND s.status = 'Active'
+         AND s.deletion_date IS NULL
        LIMIT 1`,
       [routeId, stopId]
     );
