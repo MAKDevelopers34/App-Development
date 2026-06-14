@@ -36,7 +36,7 @@ class RealBusMap extends StatefulWidget {
     this.onBusTap,
     this.onMapTap,
     this.forcedZoom,
-    this.requireRoadGeometryForRoutes = false,
+    this.requireRoadGeometryForRoutes = true,
     this.showRouteLabels = true,
     this.showRouteDirectionArrows = true,
     this.focusPoint,
@@ -85,7 +85,7 @@ class _RealBusMapState extends State<RealBusMap> {
         .toList();
     final allPoints = [...routePoints, ...busPoints];
     final center = _centerOf(allPoints);
-    final useSmartRouteOverlay = widget.requireRoadGeometryForRoutes;
+    final useSmartRouteOverlay = visibleRoutes.isNotEmpty;
 
     return ClipRRect(
       borderRadius: BorderRadius.circular(0),

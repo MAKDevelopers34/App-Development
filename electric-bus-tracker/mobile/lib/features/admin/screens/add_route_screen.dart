@@ -937,10 +937,10 @@ class _RouteEditorMap extends StatelessWidget {
                 polylines: [
                   Polyline(
                     points: routeLine,
-                    color: const Color(0xFF2F80ED),
-                    strokeWidth: 5,
-                    borderColor: AppTheme.white.withValues(alpha: 0.9),
-                    borderStrokeWidth: 2,
+                    color: AppTheme.primaryGreen,
+                    strokeWidth: 5.8,
+                    borderColor: Colors.black.withValues(alpha: 0.86),
+                    borderStrokeWidth: 1.8,
                   ),
                 ],
               ),
