@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -630,30 +631,7 @@ class _RealBusMapState extends State<RealBusMap> {
     required int routeIndex,
     required int routeCount,
   }) {
-    final points = _displayRoutePoints(route);
-    if (points.length < 2 ||
-        routeCount <= 1 ||
-        widget.selectedRouteId != null) {
-      return points;
-    }
-
-    final offsetMeters = ((routeIndex - ((routeCount - 1) / 2)) * 5.5)
-        .clamp(-11.0, 11.0)
-        .toDouble();
-    if (offsetMeters.abs() < 0.1) return points;
-
-    return _offsetPolyline(points, offsetMeters);
-  }
-
-  List<LatLng> _offsetPolyline(List<LatLng> points, double offsetMeters) {
-    final offsetPoints = <LatLng>[];
-    for (var i = 0; i < points.length; i++) {
-      final previous = points[math.max(0, i - 1)];
-      final next = points[math.min(points.length - 1, i + 1)];
-      final bearing = _bearing(previous, next) + 90;
-      offsetPoints.add(_destinationPoint(points[i], bearing, offsetMeters));
-    }
-    return offsetPoints;
+    return _displayRoutePoints(route);
   }
 
   List<Marker> _routeDirectionMarkers(
@@ -712,7 +690,7 @@ class _RealBusMapState extends State<RealBusMap> {
       ),
     );
 
-    for (final fraction in const [0.28, 0.66]) {
+    for (final fraction in const [0.16, 0.31, 0.46, 0.61, 0.76, 0.9]) {
       final index = (points.length * fraction).floor().clamp(
         1,
         points.length - 1,
@@ -725,29 +703,14 @@ class _RealBusMapState extends State<RealBusMap> {
       markers.add(
         Marker(
           point: current,
-          width: 28,
-          height: 28,
+          width: 18,
+          height: 18,
           child: IgnorePointer(
             child: Transform.rotate(
               angle: radians,
-              child: Container(
-                decoration: BoxDecoration(
-                  color: AppTheme.primaryGreen,
-                  shape: BoxShape.circle,
-                  border: Border.all(color: AppTheme.white, width: 2),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.18),
-                      blurRadius: 4,
-                      offset: const Offset(0, 1),
-                    ),
-                  ],
-                ),
-                child: const Icon(
-                  Icons.navigation,
-                  color: AppTheme.white,
-                  size: 15,
-                ),
+              child: CustomPaint(
+                painter: const _RouteArrowPainter(),
+                child: const SizedBox.expand(),
               ),
             ),
           ),
@@ -807,27 +770,6 @@ class _RealBusMapState extends State<RealBusMap> {
         math.cos(lat1) * math.sin(lat2) -
         math.sin(lat1) * math.cos(lat2) * math.cos(deltaLng);
     return (math.atan2(y, x) * 180 / math.pi + 360) % 360;
-  }
-
-  LatLng _destinationPoint(LatLng start, double bearing, double meters) {
-    const earthRadius = 6371000.0;
-    final angularDistance = meters / earthRadius;
-    final bearingRad = bearing * math.pi / 180;
-    final lat1 = start.latitude * math.pi / 180;
-    final lng1 = start.longitude * math.pi / 180;
-
-    final lat2 = math.asin(
-      math.sin(lat1) * math.cos(angularDistance) +
-          math.cos(lat1) * math.sin(angularDistance) * math.cos(bearingRad),
-    );
-    final lng2 =
-        lng1 +
-        math.atan2(
-          math.sin(bearingRad) * math.sin(angularDistance) * math.cos(lat1),
-          math.cos(angularDistance) - math.sin(lat1) * math.sin(lat2),
-        );
-
-    return LatLng(lat2 * 180 / math.pi, lng2 * 180 / math.pi);
   }
 
   String _routeKey(Map<String, dynamic> route, List<LatLng> points) {
@@ -1081,6 +1023,38 @@ class _BusInfoRow extends StatelessWidget {
       ),
     );
   }
+}
+
+class _RouteArrowPainter extends CustomPainter {
+  const _RouteArrowPainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final path = ui.Path()
+      ..moveTo(size.width / 2, 1)
+      ..lineTo(size.width - 2, size.height - 2)
+      ..lineTo(size.width / 2, size.height * 0.72)
+      ..lineTo(2, size.height - 2)
+      ..close();
+
+    canvas.drawPath(
+      path,
+      Paint()
+        ..color = AppTheme.white
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 3
+        ..strokeJoin = StrokeJoin.round,
+    );
+    canvas.drawPath(
+      path,
+      Paint()
+        ..color = AppTheme.primaryGreen
+        ..style = PaintingStyle.fill,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _RouteArrowPainter oldDelegate) => false;
 }
 
 class _MapAttribution extends StatelessWidget {
