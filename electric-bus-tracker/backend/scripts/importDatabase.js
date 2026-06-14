@@ -156,5 +156,10 @@ const main = async () => {
 
 main().catch((error) => {
   console.error(`Database import failed: ${error.message}`);
-  process.exit(1);
+  if (process.env.CRASH_ON_MIGRATION_ERROR === 'true') {
+    process.exit(1);
+  }
+
+  // Non-fatal in normal deployments: log and continue so the app can start.
+  console.warn('Continuing startup despite import failure (CRASH_ON_MIGRATION_ERROR not set).');
 });

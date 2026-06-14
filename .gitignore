@@ -1,0 +1,20 @@
+# Repo-level ignores
+node_modules/
+**/node_modules/
+
+# Logs and temp files
+*.log
+*.log.*
+**/var/log/**
+*.zip
+deploy/
+.deploy/
+
+# Environment
+.env
+.env.*
+
+# OS / Editor
+.DS_Store
+.vscode/
+/.idea/

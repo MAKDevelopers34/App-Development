@@ -1,11 +1,86 @@
+const fs = require('fs');
+const path = require('path');
 const mysql = require('mysql2/promise');
 
 const env = (name, fallback = '') => process.env[name] || fallback;
+
+const requiredProcedures = [
+  'sp_get_user_for_login',
+  'sp_record_login_failure',
+  'sp_record_login_success',
+  'sp_get_user_profile',
+  'sp_change_password',
+  'sp_save_reset_code',
+  'sp_reset_password',
+  'sp_get_routes',
+  'sp_create_route',
+  'sp_get_drivers',
+  'sp_update_driver',
+  'sp_set_driver_account_status',
+  'sp_create_duty',
+  'sp_get_admin_duties',
+  'sp_get_driver_monthly_duties',
+  'sp_start_duty',
+  'sp_complete_duty',
+  'sp_update_bus_location',
+  'sp_get_reports',
+  'sp_create_report'
+];
 
 const assertSafeDatabaseName = (dbName) => {
   if (!/^[A-Za-z0-9_]+$/.test(dbName)) {
     throw new Error(`Unsafe database name: ${dbName}`);
   }
+};
+
+const readSqlFile = (fileName) => {
+  const candidates = [
+    path.join(__dirname, '..', fileName),
+    path.join(__dirname, '..', '..', fileName),
+    path.join(process.cwd(), fileName)
+  ];
+  const filePath = candidates.find((candidate) => fs.existsSync(candidate));
+
+  if (!filePath) {
+    throw new Error(`${fileName} was not found in deployment bundle`);
+  }
+
+  return fs.readFileSync(filePath, 'utf8');
+};
+
+const splitSql = (sql) => {
+  const statements = [];
+  let delimiter = ';';
+  let buffer = '';
+
+  for (const rawLine of sql.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    const delimiterMatch = line.match(/^DELIMITER\s+(.+)$/i);
+
+    if (delimiterMatch) {
+      if (buffer.trim()) {
+        statements.push(buffer.trim());
+        buffer = '';
+      }
+      delimiter = delimiterMatch[1];
+      continue;
+    }
+
+    buffer += `${rawLine}\n`;
+
+    if (buffer.trimEnd().endsWith(delimiter)) {
+      const endIndex = buffer.lastIndexOf(delimiter);
+      const statement = buffer.slice(0, endIndex).trim();
+      if (statement) statements.push(statement);
+      buffer = '';
+    }
+  }
+
+  if (buffer.trim()) {
+    statements.push(buffer.trim());
+  }
+
+  return statements;
 };
 
 const getTableStatus = async (connection, dbName) => {
@@ -20,23 +95,21 @@ const getTableStatus = async (connection, dbName) => {
   return Number(rows[0]?.count || 0) > 0;
 };
 
-const runStatements = async (connection, statements) => {
-  for (const statement of statements) {
-    await connection.query(statement);
-  }
-};
-
-const ensureDriverAddressColumn = async (connection, dbName) => {
+const hasColumn = async (connection, dbName, tableName, columnName) => {
   const [rows] = await connection.query(
     `SELECT COUNT(*) AS count
      FROM information_schema.columns
      WHERE table_schema = ?
-       AND table_name = 'drivers'
-       AND column_name = 'address'`,
-    [dbName]
+       AND table_name = ?
+       AND column_name = ?`,
+    [dbName, tableName, columnName]
   );
 
-  if (Number(rows[0]?.count || 0) === 0) {
+  return Number(rows[0]?.count || 0) > 0;
+};
+
+const ensureDriverAddressColumn = async (connection, dbName) => {
+  if (!await hasColumn(connection, dbName, 'drivers', 'address')) {
     await connection.query(
       `ALTER TABLE \`${dbName}\`.drivers
        ADD COLUMN address VARCHAR(255) NULL AFTER hire_date`
@@ -44,164 +117,53 @@ const ensureDriverAddressColumn = async (connection, dbName) => {
   }
 };
 
-const spGetDrivers = `
-CREATE PROCEDURE sp_get_drivers()
-BEGIN
-  SELECT
-    d.driver_id,
-    d.license_no,
-    d.hire_date,
-    d.status AS driver_status,
-    d.address,
-    u.user_id,
-    u.username,
-    u.user_code,
-    u.name,
-    u.email,
-    u.contact,
-    u.account_status
-  FROM drivers d
-  JOIN users u ON u.user_id = d.user_id
-  WHERE u.deletion_date IS NULL
-  ORDER BY u.name;
-END`;
-
-const spUpdateDriver = `
-CREATE PROCEDURE sp_update_driver(
-  IN p_driver_id INT,
-  IN p_name VARCHAR(100),
-  IN p_email VARCHAR(100),
-  IN p_contact VARCHAR(20),
-  IN p_license_no VARCHAR(50),
-  IN p_driver_status VARCHAR(20),
-  IN p_address VARCHAR(255)
-)
-BEGIN
-  UPDATE users u
-  JOIN drivers d ON d.user_id = u.user_id
-  SET u.name = p_name,
-      u.email = LOWER(p_email),
-      u.contact = p_contact,
-      d.license_no = p_license_no,
-      d.status = p_driver_status,
-      d.address = p_address
-  WHERE d.driver_id = p_driver_id;
-END`;
-
-const spGetDriverMonthlyDuties = `
-CREATE PROCEDURE sp_get_driver_monthly_duties(
-  IN p_user_id INT,
-  IN p_month INT,
-  IN p_year INT
-)
-BEGIN
-  SELECT
-    da.*,
-    b.bus_number,
-    r.route_id,
-    r.name AS route_name
-  FROM duty_assignments da
-  JOIN drivers d ON d.driver_id = da.driver_id
-  JOIN buses b ON b.bus_id = da.bus_id
-  JOIN schedules s ON s.schedule_id = da.schedule_id
-  JOIN routes r ON r.route_id = s.route_id
-  WHERE d.user_id = p_user_id
-    AND MONTH(da.scheduled_date) = p_month
-    AND YEAR(da.scheduled_date) = p_year
-  ORDER BY da.scheduled_date, da.scheduled_start_time;
-
-  SELECT
-    COUNT(*) AS total,
-    COALESCE(SUM(da.status = 'Completed'), 0) AS completed,
-    COALESCE(SUM(da.status = 'Skipped'), 0) AS skipped,
-    COALESCE(SUM(da.status = 'Scheduled'), 0) AS assigned,
-    COALESCE(SUM(da.status = 'In-Progress'), 0) AS in_progress
-  FROM duty_assignments da
-  JOIN drivers d ON d.driver_id = da.driver_id
-  WHERE d.user_id = p_user_id
-    AND MONTH(da.scheduled_date) = p_month
-    AND YEAR(da.scheduled_date) = p_year;
-END`;
-
-const spStartDuty = `
-CREATE PROCEDURE sp_start_duty(
-  IN p_user_id INT,
-  IN p_duty_id INT
-)
-BEGIN
-  DECLARE v_driver_id INT DEFAULT NULL;
-
-  SELECT driver_id
-  INTO v_driver_id
-  FROM drivers
-  WHERE user_id = p_user_id
-  LIMIT 1;
-
-  UPDATE duty_assignments
-  SET status = 'In-Progress',
-      actual_start_time = NOW()
-  WHERE duty_id = p_duty_id
-    AND driver_id = v_driver_id
-    AND status = 'Scheduled'
-    AND NOW() < DATE_ADD(
-      TIMESTAMP(scheduled_date, scheduled_start_time),
-      INTERVAL 25 MINUTE
+const ensureBusColumns = async (connection, dbName) => {
+  if (!await hasColumn(connection, dbName, 'buses', 'capacity')) {
+    await connection.query(
+      `ALTER TABLE \`${dbName}\`.buses
+       ADD COLUMN capacity INT NOT NULL DEFAULT 40 AFTER bus_number`
     );
+  }
 
-  SELECT ROW_COUNT() AS affected_rows;
-END`;
+  if (!await hasColumn(connection, dbName, 'buses', 'model')) {
+    await connection.query(
+      `ALTER TABLE \`${dbName}\`.buses
+       ADD COLUMN model VARCHAR(80) NOT NULL DEFAULT 'Electric Bus' AFTER capacity`
+    );
+  }
 
-const spCompleteDuty = `
-CREATE PROCEDURE sp_complete_duty(
-  IN p_user_id INT,
-  IN p_duty_id INT,
-  IN p_note TEXT
-)
-BEGIN
-  DECLARE v_affected_rows INT DEFAULT 0;
-  DECLARE v_driver_id INT DEFAULT NULL;
+  if (!await hasColumn(connection, dbName, 'buses', 'created_at')) {
+    await connection.query(
+      `ALTER TABLE \`${dbName}\`.buses
+       ADD COLUMN created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP`
+    );
+  }
+};
 
-  SELECT driver_id
-  INTO v_driver_id
-  FROM drivers
-  WHERE user_id = p_user_id
-  LIMIT 1;
+const getRoutineStatements = () => {
+  const statements = splitSql(readSqlFile('dbDDL.sql'));
 
-  UPDATE duty_assignments
-  SET status = 'Completed',
-      actual_end_time = NOW(),
-      completion_note = p_note
-  WHERE duty_id = p_duty_id
-    AND driver_id = v_driver_id
-    AND status = 'In-Progress';
+  return statements.filter((statement) => {
+    const procedureMatch = statement.match(/^CREATE\s+PROCEDURE\s+`?([A-Za-z0-9_]+)`?/i);
+    if (procedureMatch) {
+      return requiredProcedures.includes(procedureMatch[1]);
+    }
 
-  SET v_affected_rows = ROW_COUNT();
+    return /^CREATE\s+OR\s+REPLACE\s+VIEW\s+view_admin_dashboard_stats/i.test(statement);
+  });
+};
 
-  UPDATE bus_locations
-  SET is_active = FALSE
-  WHERE duty_id = p_duty_id;
+const applyRoutineStatements = async (connection, statements) => {
+  for (const statement of statements) {
+    const procedureMatch = statement.match(/^CREATE\s+PROCEDURE\s+`?([A-Za-z0-9_]+)`?/i);
 
-  SELECT v_affected_rows AS affected_rows;
-END`;
+    if (procedureMatch) {
+      await connection.query(`DROP PROCEDURE IF EXISTS \`${procedureMatch[1]}\``);
+    }
 
-const spSaveResetCode = `
-CREATE PROCEDURE sp_save_reset_code(
-  IN p_email VARCHAR(100),
-  IN p_reset_code VARCHAR(10)
-)
-BEGIN
-  UPDATE users
-  SET reset_code = p_reset_code,
-      reset_code_expiry = DATE_ADD(NOW(), INTERVAL 5 MINUTE)
-  WHERE LOWER(email) = LOWER(p_email)
-    AND deletion_date IS NULL;
-
-  SELECT user_id, name, email
-  FROM users
-  WHERE LOWER(email) = LOWER(p_email)
-    AND deletion_date IS NULL
-  LIMIT 1;
-END`;
+    await connection.query(statement);
+  }
+};
 
 const main = async () => {
   const dbName = env('DB_NAME', 'electric_bus_tracker');
@@ -224,31 +186,8 @@ const main = async () => {
 
     await connection.query(`USE \`${dbName}\``);
     await ensureDriverAddressColumn(connection, dbName);
-    await runStatements(connection, [
-      'DROP PROCEDURE IF EXISTS sp_get_drivers',
-      spGetDrivers,
-      'DROP PROCEDURE IF EXISTS sp_create_driver',
-      'DROP PROCEDURE IF EXISTS sp_get_route_by_id',
-      'DROP PROCEDURE IF EXISTS sp_search_routes',
-      'DROP PROCEDURE IF EXISTS sp_delete_route',
-      'DROP PROCEDURE IF EXISTS sp_get_buses',
-      'DROP PROCEDURE IF EXISTS sp_update_duty_times',
-      'DROP PROCEDURE IF EXISTS sp_get_active_buses',
-      'DROP PROCEDURE IF EXISTS sp_get_buses_by_route',
-      'DROP PROCEDURE IF EXISTS sp_update_driver',
-      spUpdateDriver,
-      'DROP PROCEDURE IF EXISTS sp_get_driver_monthly_duties',
-      spGetDriverMonthlyDuties,
-      'DROP PROCEDURE IF EXISTS sp_get_driver_today_duty',
-      'DROP PROCEDURE IF EXISTS sp_get_driver_upcoming_duty',
-      'DROP PROCEDURE IF EXISTS sp_start_duty',
-      spStartDuty,
-      'DROP PROCEDURE IF EXISTS sp_complete_duty',
-      spCompleteDuty,
-      'DROP PROCEDURE IF EXISTS sp_save_reset_code',
-      spSaveResetCode,
-      'DROP VIEW IF EXISTS view_active_buses'
-    ]);
+    await ensureBusColumns(connection, dbName);
+    await applyRoutineStatements(connection, getRoutineStatements());
 
     console.log(`Database ${dbName} migrations applied successfully.`);
   } finally {
@@ -258,5 +197,10 @@ const main = async () => {
 
 main().catch((error) => {
   console.error(`Database migration failed: ${error.message}`);
-  process.exit(1);
+  if (process.env.CRASH_ON_MIGRATION_ERROR === 'true') {
+    process.exit(1);
+  }
+
+  // Non-fatal in normal deployments: log and continue so the app can start.
+  console.warn('Continuing startup despite migration failure (CRASH_ON_MIGRATION_ERROR not set).');
 });
