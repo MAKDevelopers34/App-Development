@@ -1,12 +1,42 @@
-const { callProcedure, firstResultSet } = require('../config/database');
+const { callProcedure, firstResultSet, query } = require('../config/database');
 const { formatDuty } = require('../utils/formatters');
+const { refreshDutyStatuses } = require('../utils/dutyMaintenance');
+
+const driverDutySelect = `
+  SELECT
+    da.*,
+    b.bus_number,
+    b.bus_id,
+    r.route_id,
+    r.name AS route_name,
+    r.starting_point,
+    r.destination_point
+  FROM duty_assignments da
+  JOIN drivers d ON d.driver_id = da.driver_id
+  JOIN buses b ON b.bus_id = da.bus_id
+  JOIN schedules s ON s.schedule_id = da.schedule_id
+  JOIN routes r ON r.route_id = s.route_id
+`;
 
 const getTodayDuty = async (req, res) => {
   try {
-    const result = await callProcedure('sp_get_driver_today_duty', [
-      req.user.userId
-    ]);
-    const duty = firstResultSet(result)[0];
+    await refreshDutyStatuses();
+
+    const rows = await query(
+      `${driverDutySelect}
+       WHERE d.user_id = ?
+         AND da.scheduled_date = CURDATE()
+         AND da.status IN ('In-Progress', 'Scheduled')
+       ORDER BY
+         CASE da.status
+           WHEN 'In-Progress' THEN 0
+           ELSE 1
+         END,
+         da.scheduled_start_time
+       LIMIT 1`,
+      [req.user.userId]
+    );
+    const duty = rows[0];
 
     return res.json({
       success: true,
@@ -22,10 +52,18 @@ const getTodayDuty = async (req, res) => {
 
 const getUpcomingDuty = async (req, res) => {
   try {
-    const result = await callProcedure('sp_get_driver_upcoming_duty', [
-      req.user.userId
-    ]);
-    const duty = firstResultSet(result)[0];
+    await refreshDutyStatuses();
+
+    const rows = await query(
+      `${driverDutySelect}
+       WHERE d.user_id = ?
+         AND da.status = 'Scheduled'
+         AND TIMESTAMP(da.scheduled_date, da.scheduled_start_time) > NOW()
+       ORDER BY da.scheduled_date, da.scheduled_start_time
+       LIMIT 1`,
+      [req.user.userId]
+    );
+    const duty = rows[0];
 
     return res.json({
       success: true,
@@ -41,6 +79,8 @@ const getUpcomingDuty = async (req, res) => {
 
 const getMonthlyDuties = async (req, res) => {
   try {
+    await refreshDutyStatuses();
+
     const month = Number(req.query.month || new Date().getMonth() + 1);
     const year = Number(req.query.year || new Date().getFullYear());
 
@@ -74,6 +114,8 @@ const getMonthlyDuties = async (req, res) => {
 
 const startDuty = async (req, res) => {
   try {
+    await refreshDutyStatuses();
+
     const { dutyId } = req.body;
 
     if (!dutyId) {
@@ -106,6 +148,8 @@ const startDuty = async (req, res) => {
 
 const completeDuty = async (req, res) => {
   try {
+    await refreshDutyStatuses();
+
     const { dutyId, note } = req.body;
 
     if (!dutyId) {

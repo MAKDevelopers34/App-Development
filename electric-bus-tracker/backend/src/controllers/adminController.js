@@ -10,6 +10,7 @@ const {
   formatDuty,
   formatRoute
 } = require('../utils/formatters');
+const { refreshDutyStatuses } = require('../utils/dutyMaintenance');
 
 const normalizeUsername = (value) => String(value || '')
   .trim()
@@ -53,6 +54,8 @@ const sqlTime = (value) => String(value || '').slice(0, 5);
 
 const dashboard = async (req, res) => {
   try {
+    await refreshDutyStatuses();
+
     const statsRows = await query('SELECT * FROM view_admin_dashboard_stats');
     const routesResult = await callProcedure('sp_get_routes');
 
@@ -266,6 +269,8 @@ const getBuses = async (req, res) => {
 
 const getDuties = async (req, res) => {
   try {
+    await refreshDutyStatuses();
+
     const result = await callProcedure('sp_get_admin_duties');
     const duties = firstResultSet(result).map(formatDuty);
 

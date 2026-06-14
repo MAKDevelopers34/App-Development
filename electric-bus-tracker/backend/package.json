@@ -7,7 +7,8 @@
     "prestart": "node scripts/applyMigrations.js && node scripts/importDatabase.js",
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
-    "db:import": "node scripts/importDatabase.js"
+    "db:import": "node scripts/importDatabase.js",
+    "seed:live-demo": "node scripts/seedLiveDutyDemo.js"
   },
   "keywords": [],
   "author": "",

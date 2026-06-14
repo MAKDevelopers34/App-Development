@@ -7,11 +7,16 @@ import '../screens/manage_routes_screen.dart';
 
 class AdminBottomNav extends StatelessWidget {
   final int selectedIndex;
+  final bool allowSelectedTap;
 
-  const AdminBottomNav({super.key, this.selectedIndex = 2});
+  const AdminBottomNav({
+    super.key,
+    this.selectedIndex = -1,
+    this.allowSelectedTap = false,
+  });
 
   void _openSection(BuildContext context, int index) {
-    if (index == selectedIndex) return;
+    if (!allowSelectedTap && index == selectedIndex) return;
 
     Widget screen;
     switch (index) {

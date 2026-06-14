@@ -261,8 +261,10 @@ JOIN buses b ON b.bus_id = latest.bus_id
 JOIN drivers d ON d.driver_id = latest.driver_id
 JOIN users u ON u.user_id = d.user_id
 JOIN routes r ON r.route_id = latest.route_id
+JOIN duty_assignments da ON da.duty_id = latest.duty_id
 WHERE latest.is_active = TRUE
-  AND latest.recorded_at >= DATE_SUB(NOW(), INTERVAL 1 DAY);
+  AND da.status = 'In-Progress'
+  AND latest.recorded_at >= DATE_SUB(NOW(), INTERVAL 10 MINUTE);
 
 CREATE OR REPLACE VIEW view_admin_dashboard_stats AS
 SELECT
@@ -820,7 +822,13 @@ BEGIN
   JOIN routes r ON r.route_id = s.route_id
   WHERE d.user_id = p_user_id
     AND da.scheduled_date = CURDATE()
-  ORDER BY da.scheduled_start_time
+    AND da.status IN ('In-Progress', 'Scheduled')
+  ORDER BY
+    CASE da.status
+      WHEN 'In-Progress' THEN 0
+      ELSE 1
+    END,
+    da.scheduled_start_time
   LIMIT 1;
 END$$
 
@@ -837,11 +845,8 @@ BEGIN
   JOIN schedules s ON s.schedule_id = da.schedule_id
   JOIN routes r ON r.route_id = s.route_id
   WHERE d.user_id = p_user_id
-    AND (
-      da.scheduled_date > CURDATE()
-      OR (da.scheduled_date = CURDATE() AND da.scheduled_start_time > CURTIME())
-    )
     AND da.status = 'Scheduled'
+    AND TIMESTAMP(da.scheduled_date, da.scheduled_start_time) > NOW()
   ORDER BY da.scheduled_date, da.scheduled_start_time
   LIMIT 1;
 END$$
@@ -898,7 +903,11 @@ BEGIN
       actual_start_time = NOW()
   WHERE duty_id = p_duty_id
     AND driver_id = v_driver_id
-    AND status = 'Scheduled';
+    AND status = 'Scheduled'
+    AND NOW() < DATE_ADD(
+      TIMESTAMP(scheduled_date, scheduled_start_time),
+      INTERVAL 25 MINUTE
+    );
 
   SELECT ROW_COUNT() AS affected_rows;
 END$$

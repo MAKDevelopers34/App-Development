@@ -30,12 +30,15 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
   Map<String, dynamic>? _summary;
   DateTime _selectedMonth = DateTime.now();
   Timer? _refreshTimer;
+  Timer? _gpsHeartbeatTimer;
 
   StreamSubscription<Position>? _locationSubscription;
+  Map<String, dynamic>? _activeLocationDuty;
   Position? _lastPosition;
   double _distanceCoveredKm = 0;
   double _currentSpeedKmh = 0;
   DateTime? _lastLocationAt;
+  bool _isPublishingLocation = false;
 
   @override
   void initState() {
@@ -50,6 +53,7 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
   @override
   void dispose() {
     _refreshTimer?.cancel();
+    _gpsHeartbeatTimer?.cancel();
     _locationSubscription?.cancel();
     super.dispose();
   }
@@ -185,7 +189,11 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
   }
 
   Future<void> _startLocationSharing(Map<String, dynamic> duty) async {
-    if (_locationSubscription != null) return;
+    _activeLocationDuty = Map<String, dynamic>.from(duty);
+    if (_locationSubscription != null) {
+      _ensureGpsHeartbeat();
+      return;
+    }
 
     final allowed = await _ensureLocationPermission();
     if (!allowed) return;
@@ -206,12 +214,35 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
 
     _locationSubscription = Geolocator.getPositionStream(
       locationSettings: settings,
-    ).listen((position) => _publishPosition(position, duty));
+    ).listen((position) {
+      final activeDuty = _activeLocationDuty ?? duty;
+      _publishPosition(position, activeDuty);
+    });
+    _ensureGpsHeartbeat();
+  }
+
+  void _ensureGpsHeartbeat() {
+    _gpsHeartbeatTimer?.cancel();
+    _gpsHeartbeatTimer = Timer.periodic(const Duration(seconds: 10), (_) async {
+      final activeDuty = _activeLocationDuty;
+      if (activeDuty == null) return;
+      try {
+        final current = await Geolocator.getCurrentPosition(
+          desiredAccuracy: LocationAccuracy.high,
+        );
+        await _publishPosition(current, activeDuty);
+      } catch (e) {
+        debugPrint('GPS heartbeat error: $e');
+      }
+    });
   }
 
   Future<void> _stopLocationSharing() async {
+    _gpsHeartbeatTimer?.cancel();
+    _gpsHeartbeatTimer = null;
     await _locationSubscription?.cancel();
     _locationSubscription = null;
+    _activeLocationDuty = null;
     _lastPosition = null;
   }
 
@@ -224,26 +255,28 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
     final routeId = duty['routeId'];
 
     if (busId == null || routeId == null) return;
-
-    final speedKmh = position.speed.isFinite ? position.speed * 3.6 : 0.0;
-    if (_lastPosition != null) {
-      final meters = Geolocator.distanceBetween(
-        _lastPosition!.latitude,
-        _lastPosition!.longitude,
-        position.latitude,
-        position.longitude,
-      );
-      if (meters >= 5 && meters <= 500) {
-        _distanceCoveredKm += meters / 1000;
-      }
-    }
-
-    _lastPosition = position;
-    _currentSpeedKmh = speedKmh < 0 ? 0 : speedKmh;
-    _lastLocationAt = DateTime.now();
-    if (mounted) setState(() {});
+    if (_isPublishingLocation) return;
+    _isPublishingLocation = true;
 
     try {
+      final speedKmh = position.speed.isFinite ? position.speed * 3.6 : 0.0;
+      if (_lastPosition != null) {
+        final meters = Geolocator.distanceBetween(
+          _lastPosition!.latitude,
+          _lastPosition!.longitude,
+          position.latitude,
+          position.longitude,
+        );
+        if (meters >= 5 && meters <= 500) {
+          _distanceCoveredKm += meters / 1000;
+        }
+      }
+
+      _lastPosition = position;
+      _currentSpeedKmh = speedKmh < 0 ? 0 : speedKmh;
+      _lastLocationAt = DateTime.now();
+      if (mounted) setState(() {});
+
       await ApiService.post('/gps/update-location', {
         'busId': busId,
         'routeId': routeId,
@@ -255,6 +288,8 @@ class _DriverDashboardScreenState extends State<DriverDashboardScreen> {
       await _loadLiveBuses();
     } catch (e) {
       debugPrint('Location publish error: $e');
+    } finally {
+      _isPublishingLocation = false;
     }
   }
 

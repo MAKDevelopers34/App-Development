@@ -10,6 +10,7 @@ const {
   formatSchedule,
   formatLocation
 } = require('../utils/formatters');
+const { refreshDutyStatuses } = require('../utils/dutyMaintenance');
 
 const toNumberId = (value) => {
   const id = Number(value);
@@ -29,6 +30,79 @@ const distanceKm = (aLat, aLng, bLat, bLng) => {
     Math.sin(dLng / 2) * Math.sin(dLng / 2);
 
   return radius * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+};
+
+const durationText = (minutes) => {
+  const safeMinutes = Math.max(1, Math.round(Number(minutes || 0)));
+  if (safeMinutes < 60) return `${safeMinutes} min`;
+  const hours = Math.floor(safeMinutes / 60);
+  const remainder = safeMinutes % 60;
+  return remainder === 0 ? `${hours}h` : `${hours}h ${remainder}m`;
+};
+
+const projectToSegment = (start, end, target) => {
+  const latScale = Math.cos(start.latitude * Math.PI / 180);
+  const ax = start.longitude * latScale;
+  const ay = start.latitude;
+  const bx = end.longitude * latScale;
+  const by = end.latitude;
+  const px = target.longitude * latScale;
+  const py = target.latitude;
+  const dx = bx - ax;
+  const dy = by - ay;
+  const lengthSquared = dx * dx + dy * dy;
+  if (lengthSquared === 0) return 0;
+  return Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / lengthSquared));
+};
+
+const interpolatePoint = (start, end, amount) => ({
+  latitude: start.latitude + ((end.latitude - start.latitude) * amount),
+  longitude: start.longitude + ((end.longitude - start.longitude) * amount)
+});
+
+const progressAlongRouteMeters = (points, target) => {
+  if (points.length < 2) return null;
+
+  let bestDistance = Infinity;
+  let bestProgress = 0;
+  let cumulative = 0;
+
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const start = points[index];
+    const end = points[index + 1];
+    const segmentMeters = distanceKm(
+      start.latitude,
+      start.longitude,
+      end.latitude,
+      end.longitude
+    ) * 1000;
+    if (segmentMeters <= 0) continue;
+
+    const amount = projectToSegment(start, end, target);
+    const projected = interpolatePoint(start, end, amount);
+    const distanceToSegment = distanceKm(
+      target.latitude,
+      target.longitude,
+      projected.latitude,
+      projected.longitude
+    ) * 1000;
+
+    if (distanceToSegment < bestDistance) {
+      bestDistance = distanceToSegment;
+      bestProgress = cumulative + (segmentMeters * amount);
+    }
+
+    cumulative += segmentMeters;
+  }
+
+  return bestProgress;
+};
+
+const averageRouteSpeed = (route) => {
+  const distance = Number(route.distance || 0);
+  const minutes = Number(route.estimated_duration || 0);
+  if (distance > 0 && minutes > 0) return Math.max(12, distance / (minutes / 60));
+  return 24;
 };
 
 const codeFromName = (name) => String(name || 'STOP')
@@ -429,6 +503,8 @@ const createRoute = async (req, res) => {
 
 const getRouteEat = async (req, res) => {
   try {
+    await refreshDutyStatuses();
+
     const routeId = toNumberId(req.params.routeId);
     const stopId = toNumberId(req.params.stopId);
 
@@ -436,50 +512,191 @@ const getRouteEat = async (req, res) => {
       return res.status(400).json({ message: 'Invalid route or stop id' });
     }
 
+    const routeRows = await query(
+      `SELECT *
+       FROM routes
+       WHERE route_id = ?
+         AND status = 'Active'
+       LIMIT 1`,
+      [routeId]
+    );
+    const route = routeRows[0];
+    if (!route) {
+      return res.status(404).json({ message: 'Route not found' });
+    }
+
     const stops = await query(
-      `SELECT s.*, rsd.stop_order
+      `SELECT
+         s.*,
+         rsd.stop_order,
+         rsd.distance_from_start,
+         rsd.estimated_minutes_from_start
        FROM route_stop_details rsd
        JOIN stops s ON s.stop_id = rsd.stop_id
-       JOIN routes r ON r.route_id = rsd.route_id
        WHERE rsd.route_id = ?
-         AND s.stop_id = ?
-         AND r.status = 'Active'
          AND s.status = 'Active'
          AND s.deletion_date IS NULL
-       LIMIT 1`,
-      [routeId, stopId]
+       ORDER BY rsd.stop_order`,
+      [routeId]
     );
-    const targetStop = stops[0];
+    const targetStop = stops.find((stop) => Number(stop.stop_id) === stopId);
 
     if (!targetStop) {
       return res.status(404).json({ message: 'Stop not found on route' });
     }
 
-    const active = await callProcedure('sp_get_buses_by_route', [routeId]);
-    const buses = firstResultSet(active).map(formatLocation);
+    const routePoints = [
+      {
+        latitude: Number(route.start_latitude),
+        longitude: Number(route.start_longitude)
+      },
+      ...stops.map((stop) => ({
+        latitude: Number(stop.latitude),
+        longitude: Number(stop.longitude)
+      })),
+      {
+        latitude: Number(route.destination_latitude),
+        longitude: Number(route.destination_longitude)
+      }
+    ];
+    const targetPoint = {
+      latitude: Number(targetStop.latitude),
+      longitude: Number(targetStop.longitude)
+    };
+    const targetProgress = progressAlongRouteMeters(routePoints, targetPoint);
+    const routeSpeed = averageRouteSpeed(route);
+
+    const busRows = await query(
+      `SELECT
+         latest.location_id,
+         latest.bus_id,
+         b.bus_number,
+         latest.driver_id,
+         u.name AS driver_name,
+         latest.route_id,
+         r.name AS route_name,
+         latest.duty_id,
+         latest.latitude,
+         latest.longitude,
+         latest.speed,
+         latest.recorded_at
+       FROM bus_locations latest
+       JOIN (
+         SELECT bus_id, MAX(recorded_at) AS max_recorded_at
+         FROM bus_locations
+         WHERE is_active = TRUE
+         GROUP BY bus_id
+       ) pick
+         ON pick.bus_id = latest.bus_id
+        AND pick.max_recorded_at = latest.recorded_at
+       JOIN duty_assignments da
+         ON da.duty_id = latest.duty_id
+        AND da.status = 'In-Progress'
+       JOIN buses b ON b.bus_id = latest.bus_id
+       JOIN drivers d ON d.driver_id = latest.driver_id
+       JOIN users u ON u.user_id = d.user_id
+       JOIN routes r ON r.route_id = latest.route_id
+       WHERE latest.is_active = TRUE
+         AND latest.route_id = ?
+         AND latest.recorded_at >= DATE_SUB(NOW(), INTERVAL 10 MINUTE)
+       ORDER BY latest.recorded_at DESC`,
+      [routeId]
+    );
+    const buses = busRows.map(formatLocation);
 
     const estimates = buses.map((bus) => {
-      const km = distanceKm(
-        bus.location.latitude,
-        bus.location.longitude,
-        Number(targetStop.latitude),
-        Number(targetStop.longitude)
-      );
-      const speed = Math.max(Number(bus.speed || 0), 18);
+      const busPoint = {
+        latitude: bus.location.latitude,
+        longitude: bus.location.longitude
+      };
+      const busProgress = progressAlongRouteMeters(routePoints, busPoint);
+      if (targetProgress == null || busProgress == null) return null;
+
+      const remainingMeters = targetProgress - busProgress;
+      if (remainingMeters <= 35) return null;
+
+      const speed = Math.max(Number(bus.speed || 0), routeSpeed);
+      const km = remainingMeters / 1000;
       const minutes = Math.max(1, Math.round((km / speed) * 60));
 
       return {
-        busId: bus.busNumber || bus.busId,
+        busId: bus.busNumber || `Bus ${bus.busId}`,
+        busNumber: bus.busNumber,
+        driverName: bus.driverName,
         routeId: bus.routeId,
         stopId: String(targetStop.stop_id),
         stopName: targetStop.name,
         distanceKm: Number(km.toFixed(2)),
         durationMinutes: minutes,
-        durationText: minutes >= 60
-          ? `${Math.floor(minutes / 60)}h ${minutes % 60}m`
-          : `${minutes} min`
+        durationText: durationText(minutes),
+        source: 'live'
       };
-    });
+    }).filter(Boolean);
+
+    if (estimates.length === 0) {
+      const scheduled = await query(
+        `SELECT
+           da.duty_id,
+           b.bus_number,
+           u.name AS driver_name,
+           TIMESTAMPDIFF(
+             MINUTE,
+             NOW(),
+             TIMESTAMP(da.scheduled_date, da.scheduled_start_time)
+           ) AS minutes_until_start
+         FROM duty_assignments da
+         JOIN schedules s ON s.schedule_id = da.schedule_id
+         JOIN buses b ON b.bus_id = da.bus_id
+         JOIN drivers d ON d.driver_id = da.driver_id
+         JOIN users u ON u.user_id = d.user_id
+         WHERE s.route_id = ?
+           AND da.status = 'Scheduled'
+           AND TIMESTAMP(da.scheduled_date, da.scheduled_start_time)
+             >= DATE_SUB(NOW(), INTERVAL 25 MINUTE)
+         ORDER BY da.scheduled_date, da.scheduled_start_time
+         LIMIT 3`,
+        [routeId]
+      );
+      const averageMinutesToStop = Math.max(
+        1,
+        Number(targetStop.estimated_minutes_from_start || 0) ||
+          Math.round(((targetProgress || 0) / 1000 / routeSpeed) * 60)
+      );
+
+      for (const duty of scheduled) {
+        const minutes = Math.max(
+          1,
+          Number(duty.minutes_until_start || 0) + averageMinutesToStop
+        );
+        estimates.push({
+          busId: duty.bus_number || `Duty ${duty.duty_id}`,
+          busNumber: duty.bus_number,
+          driverName: duty.driver_name,
+          routeId: String(routeId),
+          stopId: String(targetStop.stop_id),
+          stopName: targetStop.name,
+          distanceKm: Number(((targetProgress || 0) / 1000).toFixed(2)),
+          durationMinutes: minutes,
+          durationText: durationText(minutes),
+          source: 'scheduled'
+        });
+      }
+
+      if (estimates.length === 0) {
+        estimates.push({
+          busId: 'Average ETA',
+          routeId: String(routeId),
+          stopId: String(targetStop.stop_id),
+          stopName: targetStop.name,
+          distanceKm: Number(((targetProgress || 0) / 1000).toFixed(2)),
+          durationMinutes: averageMinutesToStop,
+          durationText: durationText(averageMinutesToStop),
+          source: 'average'
+        });
+      }
+    }
+
+    estimates.sort((a, b) => a.durationMinutes - b.durationMinutes);
 
     return res.json({
       success: true,

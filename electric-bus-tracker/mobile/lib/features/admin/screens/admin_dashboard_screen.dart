@@ -139,7 +139,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           ],
         ),
       ),
-      bottomNavigationBar: const AdminBottomNav(selectedIndex: 2),
+      bottomNavigationBar: const AdminBottomNav(selectedIndex: -1),
     );
   }
 

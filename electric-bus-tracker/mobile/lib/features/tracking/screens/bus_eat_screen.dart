@@ -205,6 +205,11 @@ class _BusEatScreenState extends State<BusEatScreen> {
   }
 
   Widget _buildBusEatCard(Map<String, dynamic> estimate) {
+    final title =
+        estimate['busNumber']?.toString() ??
+        estimate['busId']?.toString() ??
+        'BUS';
+
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.all(14),
@@ -244,7 +249,7 @@ class _BusEatScreenState extends State<BusEatScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  estimate['busId'] ?? 'BUS',
+                  title,
                   style: const TextStyle(
                     fontSize: 14,
                     fontWeight: FontWeight.w600,

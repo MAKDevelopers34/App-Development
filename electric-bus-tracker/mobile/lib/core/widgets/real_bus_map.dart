@@ -525,7 +525,9 @@ class _RealBusMapState extends State<RealBusMap> {
                 ),
                 const SizedBox(height: 3),
                 Text(
-                  '${estimate.distanceKm.toStringAsFixed(1)} km remaining at ${estimate.speedKmh.round()} km/h',
+                  estimate.isAverage
+                      ? '${estimate.distanceKm.toStringAsFixed(1)} km from route start, average timing'
+                      : '${estimate.distanceKm.toStringAsFixed(1)} km remaining at ${estimate.speedKmh.round()} km/h',
                   style: const TextStyle(
                     color: AppTheme.textGrey,
                     fontSize: 11,
@@ -970,8 +972,52 @@ class _RealBusMapState extends State<RealBusMap> {
       );
     }
 
+    if (estimates.isEmpty) {
+      final average = _averageStopEstimate(route, stop, targetProgress, routePoints);
+      if (average != null) estimates.add(average);
+    }
+
     estimates.sort((a, b) => a.durationMinutes.compareTo(b.durationMinutes));
     return estimates;
+  }
+
+  _StopEat? _averageStopEstimate(
+    Map<String, dynamic> route,
+    Map<String, dynamic> stop,
+    _RouteProgress targetProgress,
+    List<LatLng> routePoints,
+  ) {
+    final explicitMinutes = _numberFrom(stop['estimatedMinutesFromStart']);
+    var minutes = explicitMinutes?.round() ?? 0;
+
+    if (minutes <= 0) {
+      final totalMinutes = _numberFrom(route['estimatedTotalTime'])?.round() ?? 0;
+      final totalMeters = _routeLengthMeters(routePoints);
+      if (totalMinutes > 0 && totalMeters > 0) {
+        minutes = math.max(
+          1,
+          (totalMinutes * (targetProgress.meters / totalMeters)).round(),
+        );
+      }
+    }
+
+    if (minutes <= 0) return null;
+
+    return _StopEat(
+      busName: 'Average ETA',
+      distanceKm: targetProgress.meters / 1000,
+      speedKmh: 0,
+      durationMinutes: minutes,
+      isAverage: true,
+    );
+  }
+
+  double _routeLengthMeters(List<LatLng> points) {
+    var meters = 0.0;
+    for (var i = 0; i < points.length - 1; i++) {
+      meters += _distance.as(LengthUnit.Meter, points[i], points[i + 1]);
+    }
+    return meters;
   }
 
   _RouteProgress? _progressAlongRoute(List<LatLng> points, LatLng target) {
@@ -1474,12 +1520,14 @@ class _StopEat {
   final double distanceKm;
   final double speedKmh;
   final int durationMinutes;
+  final bool isAverage;
 
   const _StopEat({
     required this.busName,
     required this.distanceKm,
     required this.speedKmh,
     required this.durationMinutes,
+    this.isAverage = false,
   });
 
   String get durationText {

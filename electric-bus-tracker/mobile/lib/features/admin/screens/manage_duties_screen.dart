@@ -19,11 +19,13 @@ class _ManageDutiesScreenState extends State<ManageDutiesScreen> {
   final _searchController = TextEditingController();
   List<dynamic> _duties = [];
   List<dynamic> _filtered = [];
+  late DateTime _selectedDate;
   bool _isLoading = true;
 
   @override
   void initState() {
     super.initState();
+    _selectedDate = _dateOnly(DateTime.now());
     _loadDuties();
   }
 
@@ -40,7 +42,7 @@ class _ManageDutiesScreenState extends State<ManageDutiesScreen> {
       if (!mounted) return;
       setState(() {
         _duties = res['duties'] ?? [];
-        _filtered = _duties;
+        _applyFilters();
         _isLoading = false;
       });
     } catch (_) {
@@ -49,22 +51,72 @@ class _ManageDutiesScreenState extends State<ManageDutiesScreen> {
     }
   }
 
+  void _applyFilters() {
+    final term = _searchController.text.trim().toLowerCase();
+    _filtered = _duties.where((raw) {
+      final duty = Map<String, dynamic>.from(raw as Map);
+      final scheduledDate = _parseDate(duty['scheduledDate']);
+      if (scheduledDate == null || !_sameDay(scheduledDate, _selectedDate)) {
+        return false;
+      }
+
+      if (term.isEmpty) return true;
+
+      final driver = duty['driver'] as Map?;
+      final bus = duty['bus'] as Map?;
+      final values = [
+        duty['route'],
+        driver?['username'],
+        driver?['email'],
+        driver?['profileInfo']?['fullName'],
+        driver?['profileInfo']?['phone'],
+        bus?['busNumber'],
+        duty['scheduledStartTime'],
+      ].map((value) => value?.toString().toLowerCase() ?? '');
+      return values.any((value) => value.contains(term));
+    }).toList();
+  }
+
   void _search(String query) {
-    final term = query.trim().toLowerCase();
+    setState(_applyFilters);
+  }
+
+  Future<void> _pickDate() async {
+    final date = await showDatePicker(
+      context: context,
+      initialDate: _selectedDate,
+      firstDate: DateTime(2020),
+      lastDate: DateTime(2035),
+      builder: (context, child) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: Theme.of(context).colorScheme.copyWith(
+              primary: AppTheme.primaryGreen,
+            ),
+          ),
+          child: child!,
+        );
+      },
+    );
+
+    if (date == null) return;
     setState(() {
-      _filtered = _duties.where((raw) {
-        final duty = Map<String, dynamic>.from(raw as Map);
-        final driver = duty['driver'] as Map?;
-        final bus = duty['bus'] as Map?;
-        final values = [
-          duty['route'],
-          driver?['username'],
-          driver?['profileInfo']?['fullName'],
-          bus?['busNumber'],
-          duty['scheduledStartTime'],
-        ].map((value) => value?.toString().toLowerCase() ?? '');
-        return values.any((value) => value.contains(term));
-      }).toList();
+      _selectedDate = _dateOnly(date);
+      _applyFilters();
+    });
+  }
+
+  void _moveDate(int days) {
+    setState(() {
+      _selectedDate = _dateOnly(_selectedDate.add(Duration(days: days)));
+      _applyFilters();
+    });
+  }
+
+  void _jumpToday() {
+    setState(() {
+      _selectedDate = _dateOnly(DateTime.now());
+      _applyFilters();
     });
   }
 
@@ -168,42 +220,124 @@ class _ManageDutiesScreenState extends State<ManageDutiesScreen> {
     return Container(
       color: AppTheme.white,
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-      child: Container(
-        padding: const EdgeInsets.all(8),
-        decoration: BoxDecoration(
-          color: AppTheme.white,
-          borderRadius: BorderRadius.circular(8),
-          boxShadow: [
-            BoxShadow(
-              color: AppTheme.cardShadow,
-              blurRadius: 8,
-              offset: const Offset(0, 2),
+      child: Column(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: AppTheme.white,
+              borderRadius: BorderRadius.circular(8),
+              boxShadow: [
+                BoxShadow(
+                  color: AppTheme.cardShadow,
+                  blurRadius: 8,
+                  offset: const Offset(0, 2),
+                ),
+              ],
             ),
-          ],
-        ),
-        child: TextField(
-          controller: _searchController,
-          onChanged: _search,
-          style: const TextStyle(fontSize: 12),
-          decoration: InputDecoration(
-            hintText: 'Search by route or driver...',
-            hintStyle: const TextStyle(fontSize: 12, color: AppTheme.textGrey),
-            isDense: true,
-            contentPadding: const EdgeInsets.symmetric(
-              horizontal: 12,
-              vertical: 10,
+            child: TextField(
+              controller: _searchController,
+              onChanged: _search,
+              style: const TextStyle(fontSize: 12),
+              decoration: InputDecoration(
+                hintText: 'Search by route or driver...',
+                hintStyle: const TextStyle(
+                  fontSize: 12,
+                  color: AppTheme.textGrey,
+                ),
+                isDense: true,
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 10,
+                ),
+                suffixIcon: _searchController.text.isEmpty
+                    ? null
+                    : IconButton(
+                        icon: const Icon(Icons.close, size: 16),
+                        onPressed: () {
+                          _searchController.clear();
+                          _search('');
+                        },
+                      ),
+              ),
             ),
-            suffixIcon: _searchController.text.isEmpty
-                ? null
-                : IconButton(
-                    icon: const Icon(Icons.close, size: 16),
-                    onPressed: () {
-                      _searchController.clear();
-                      _search('');
-                    },
-                  ),
           ),
-        ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              _DateNavButton(
+                icon: Icons.chevron_left,
+                onTap: () => _moveDate(-1),
+              ),
+              Expanded(
+                child: InkWell(
+                  onTap: _pickDate,
+                  borderRadius: BorderRadius.circular(8),
+                  child: Container(
+                    height: 42,
+                    padding: const EdgeInsets.symmetric(horizontal: 10),
+                    decoration: BoxDecoration(
+                      color: AppTheme.lightGreen,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: AppTheme.primaryGreen.withValues(alpha: 0.18),
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Icon(
+                          Icons.calendar_month_outlined,
+                          color: AppTheme.primaryGreen,
+                          size: 17,
+                        ),
+                        const SizedBox(width: 7),
+                        Flexible(
+                          child: Text(
+                            _selectedDateLabel,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: AppTheme.primaryGreen,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              _DateNavButton(
+                icon: Icons.chevron_right,
+                onTap: () => _moveDate(1),
+              ),
+              const SizedBox(width: 6),
+              InkWell(
+                onTap: _jumpToday,
+                borderRadius: BorderRadius.circular(8),
+                child: Container(
+                  height: 42,
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  decoration: BoxDecoration(
+                    color: AppTheme.primaryGreen,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  alignment: Alignment.center,
+                  child: const Text(
+                    'Today',
+                    style: TextStyle(
+                      color: AppTheme.white,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }
@@ -339,6 +473,62 @@ class _ManageDutiesScreenState extends State<ManageDutiesScreen> {
     final minute = int.tryParse(parts[1]);
     if (hour == null || minute == null) return time;
     return DateFormat.jm().format(DateTime(2026, 1, 1, hour, minute));
+  }
+
+  String get _selectedDateLabel {
+    final today = _dateOnly(DateTime.now());
+    if (_sameDay(_selectedDate, today)) {
+      return 'Today, ${DateFormat('MMM d, yyyy').format(_selectedDate)}';
+    }
+    return DateFormat('EEE, MMM d, yyyy').format(_selectedDate);
+  }
+
+  DateTime _dateOnly(DateTime value) {
+    return DateTime(value.year, value.month, value.day);
+  }
+
+  DateTime? _parseDate(dynamic value) {
+    final text = value?.toString() ?? '';
+    if (text.isEmpty) return null;
+    final parsed = DateTime.tryParse(text);
+    if (parsed != null) return _dateOnly(parsed);
+    try {
+      return _dateOnly(DateFormat('yyyy-MM-dd').parseStrict(text));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  bool _sameDay(DateTime a, DateTime b) {
+    return a.year == b.year && a.month == b.month && a.day == b.day;
+  }
+}
+
+class _DateNavButton extends StatelessWidget {
+  final IconData icon;
+  final VoidCallback onTap;
+
+  const _DateNavButton({required this.icon, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(right: 6),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          width: 38,
+          height: 42,
+          decoration: BoxDecoration(
+            color: AppTheme.white,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: const Color(0xFFE1E5EA)),
+          ),
+          child: Icon(icon, color: AppTheme.textDark, size: 20),
+        ),
+      ),
+    );
   }
 }
 
