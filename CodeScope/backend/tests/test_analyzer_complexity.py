@@ -1,7 +1,10 @@
 import unittest
 import tempfile
+import io
+import zipfile
 from unittest.mock import patch
 
+from app import create_app
 from app import routes as routes_module
 from app.analyzer import CodeAnalyzer
 from app.ai_explainer import (
@@ -2685,7 +2688,7 @@ function b(n) {
             "error": None,
         }
 
-        with tempfile.TemporaryDirectory() as tmpdir, patch.object(routes_module, "ANALYSIS_JOB_DIR", tmpdir):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir, patch.object(routes_module, "ANALYSIS_JOB_DIR", tmpdir):
             with routes_module.ANALYSIS_JOBS_LOCK:
                 routes_module.ANALYSIS_JOBS.clear()
 
@@ -2699,6 +2702,48 @@ function b(n) {
         self.assertIsNotNone(restored)
         self.assertEqual(restored["status"], "completed")
         self.assertEqual(restored["result"]["success"], True)
+
+    def test_zip_analysis_route_can_run_as_async_job(self):
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, "w") as zipped:
+            zipped.writestr("src/sample.py", """def slow(n):
+    total = 0
+    for i in range(n):
+        for j in range(n):
+            total += i + j
+    return total
+""")
+        archive.seek(0)
+
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir, patch.object(routes_module, "ANALYSIS_JOB_DIR", tmpdir):
+            with routes_module.ANALYSIS_JOBS_LOCK:
+                routes_module.ANALYSIS_JOBS.clear()
+            app = create_app()
+            client = app.test_client()
+
+            response = client.post(
+                "/api/analyze/zip",
+                data={"async": "true", "file": (archive, "project.zip")},
+                content_type="multipart/form-data",
+            )
+
+            self.assertEqual(response.status_code, 202)
+            job_id = response.get_json()["job_id"]
+
+            payload = None
+            for _ in range(60):
+                poll = client.get(f"/api/analyze/jobs/{job_id}")
+                payload = poll.get_json()
+                if payload.get("status") == "completed":
+                    break
+                routes_module.time.sleep(0.05)
+
+            self.assertIsNotNone(payload)
+            self.assertEqual(payload["status"], "completed")
+            self.assertTrue(payload["success"])
+            self.assertEqual(payload["total_files"], 1)
+            self.assertEqual(payload["files"][0]["filename"], "src/sample.py")
+            self.assertTrue(payload["files"][0]["result"]["function_complexity_details"])
 
     def test_report_complexity_rank_handles_arbitrary_polynomial_powers(self):
         self.assertGreater(_report_complexity_rank("O(n^7)"), _report_complexity_rank("O(n^3)"))
@@ -3130,6 +3175,68 @@ def union(x, y):
         self.assertEqual(details["tricky_merge_sort"]["own_complexity"], expected_time)
         self.assertEqual(result["optimizations"][0]["complexity_after"], "O(n log n)")
         self.assertTrue(result["transformed_code"]["available"])
+
+    def test_python_multifunction_sample_reports_hotspots_and_real_function_complexities(self):
+        code = """from collections import deque, defaultdict
+import heapq
+
+def merge(left, right):
+    result = []
+    i = j = 0
+    while i < len(left) and j < len(right):
+        if left[i] < right[j]:
+            result.append(left[i])
+            i += 1
+        else:
+            result.append(right[j])
+            j += 1
+    result.extend(left[i:])
+    result.extend(right[j:])
+    return result
+
+def merge_sort(arr):
+    if len(arr) <= 1:
+        return arr
+    mid = len(arr) // 2
+    left = merge_sort(arr[:mid])
+    right = merge_sort(arr[mid:])
+    return merge(left, right)
+
+def generate_subsets(nums):
+    result = []
+    def backtrack(index, current):
+        if index == len(nums):
+            result.append(current[:])
+            return
+        current.append(nums[index])
+        backtrack(index + 1, current)
+        current.pop()
+        backtrack(index + 1, current)
+    backtrack(0, [])
+    return result
+
+def matrix_multiply(A, B):
+    n = len(A)
+    result = [[0] * n for _ in range(n)]
+    for i in range(n):
+        for j in range(n):
+            for k in range(n):
+                result[i][j] += A[i][k] * B[k][j]
+    return result
+"""
+
+        result = self.analyzer.analyze(code, "sample.py")
+        details = {item["function"]: item for item in result["function_complexity_details"]}
+        hotspots = {item["function"]: item["complexity"] for item in result["hotspots"]}
+
+        self.assertEqual(details["merge_sort"]["own_complexity"], "O(n log n)")
+        self.assertEqual(details["backtrack"]["own_complexity"], "O(n * 2^n)")
+        self.assertEqual(details["generate_subsets"]["effective_complexity"], "O(n * 2^n)")
+        self.assertEqual(details["matrix_multiply"]["own_complexity"], self.analyzer._cubic())
+        self.assertIn("generate_subsets", hotspots)
+        self.assertIn("matrix_multiply", hotspots)
+        self.assertIn("def merge_sort", details["merge_sort"]["snippet"])
+        self.assertNotEqual(result["time_complexity"], "O(1)")
 
     def test_cpp_vector_front_insert_inside_loop_is_quadratic(self):
         code = r"""#include <vector>
@@ -3844,6 +3951,80 @@ void f(int n) {
                 result = self.analyzer.analyze(code, filename)
                 self.assertEqual(result["time_complexity"], "O(n log n)")
                 self.assertEqual(result["space_complexity"], "O(n)")
+
+    def test_cpp_huffman_coding_reports_heap_complexity_and_fixed_demo_run(self):
+        code = r"""#include <iostream>
+#include <queue>
+#include <vector>
+#include <unordered_map>
+using namespace std;
+
+struct Node {
+    char data;
+    int freq;
+    Node* left;
+    Node* right;
+    Node(char data, int freq) {
+        this->data = data;
+        this->freq = freq;
+        left = right = nullptr;
+    }
+};
+
+struct Compare {
+    bool operator()(Node* a, Node* b) {
+        return a->freq > b->freq;
+    }
+};
+
+void generateCodes(Node* root, string code,
+                   unordered_map<char, string>& huffmanCode) {
+    if (root == nullptr)
+        return;
+    if (!root->left && !root->right) {
+        huffmanCode[root->data] = code;
+    }
+    generateCodes(root->left, code + "0", huffmanCode);
+    generateCodes(root->right, code + "1", huffmanCode);
+}
+
+int main() {
+    vector<char> chars = {'A', 'B', 'C', 'D', 'E', 'F'};
+    vector<int> freq = {5, 9, 12, 13, 16, 45};
+    priority_queue<Node*, vector<Node*>, Compare> pq;
+    for (int i = 0; i < chars.size(); i++) {
+        pq.push(new Node(chars[i], freq[i]));
+    }
+    while (pq.size() > 1) {
+        Node* left = pq.top();
+        pq.pop();
+        Node* right = pq.top();
+        pq.pop();
+        Node* merged = new Node('$', left->freq + right->freq);
+        merged->left = left;
+        merged->right = right;
+        pq.push(merged);
+    }
+    Node* root = pq.top();
+    unordered_map<char, string> huffmanCode;
+    generateCodes(root, "", huffmanCode);
+    for (auto pair : huffmanCode) {
+        cout << pair.first << " : " << pair.second << endl;
+    }
+    return 0;
+}
+"""
+
+        result = self.analyzer.analyze(code, "huffman.cpp")
+        details = {item["function"]: item for item in result["function_complexity_details"]}
+
+        self.assertEqual(result["time_complexity"], "O(n log n)")
+        self.assertEqual(result["space_complexity"], "O(n)")
+        self.assertEqual(details["main"]["own_complexity"], "O(n log n)")
+        self.assertEqual(details["generateCodes"]["own_complexity"], "O(n)")
+        self.assertEqual(result["concrete_analysis"]["kind"], "fixed_entrypoint_literals")
+        self.assertEqual(result["overall_complexity"]["current_run_time"], "O(1)")
+        self.assertEqual(result["overall_complexity"]["scalable_time"], "O(n log n)")
 
     def test_cpp_vector_string_memo_recursion_reports_conservative_average_and_collision_worst(self):
         code = r"""#include <bits/stdc++.h>

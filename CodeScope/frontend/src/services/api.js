@@ -19,7 +19,7 @@ export const getApiErrorMessage = (error, fallback = 'Request failed. Please try
 const sleep = (ms) => new Promise(resolve => window.setTimeout(resolve, ms));
 
 export const analyzeCode = async (code, filename = 'code.py', concreteInputs = '') => {
-  const payload = { code, filename };
+  const payload = { code, filename, async: true };
 
   if (concreteInputs) {
     if (typeof concreteInputs === 'string') {
@@ -29,19 +29,16 @@ export const analyzeCode = async (code, filename = 'code.py', concreteInputs = '
     }
   }
 
-  const response = await api.post('/api/analyze/code', payload);
-  return {
-    ...response.data,
-    result: response.data?.result
-      ? {
-          ...response.data.result,
-          source_code: response.data.result.source_code || code,
-          concrete_inputs: response.data.result.concrete_inputs || payload.concrete_inputs,
-        }
-      : response.data?.result,
-    source_code: code,
-    concrete_inputs: payload.concrete_inputs,
-  };
+  const response = await api.post('/api/analyze/code', payload, { timeout: 0 });
+  if (response.data?.job_id) {
+    const jobResult = await pollAnalysisJob(response.data.job_id, {
+      intervalMs: 1200,
+      timeoutMs: 300000,
+      missingGraceMs: 60000,
+    });
+    return attachSourceToPayload(jobResult, code, payload.concrete_inputs);
+  }
+  return attachSourceToPayload(response.data, code, payload.concrete_inputs);
 };
 
 const attachSourceToPayload = (payload, code, concreteInputs) => ({
@@ -145,10 +142,28 @@ export const inferInputs = async (code, filename = 'code.py') => {
 export const analyzeZip = async (file) => {
   const formData = new FormData();
   formData.append('file', file);
+  formData.append('async', 'true');
 
   const response = await api.post('/api/analyze/zip', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 0,
   });
+  if (response.data?.job_id) {
+    return pollAnalysisJob(response.data.job_id, {
+      intervalMs: 2500,
+      timeoutMs: 600000,
+      missingGraceMs: 60000,
+      onMissing: async () => {
+        const retryFormData = new FormData();
+        retryFormData.append('file', file);
+        const retry = await api.post('/api/analyze/zip', retryFormData, {
+          headers: { 'Content-Type': 'multipart/form-data' },
+          timeout: 0,
+        });
+        return retry.data;
+      },
+    });
+  }
   return response.data;
 };
 

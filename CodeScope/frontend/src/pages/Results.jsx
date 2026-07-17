@@ -475,14 +475,33 @@ const functionSummaryComplexity = (functions = []) => {
   };
 };
 
-const fileDisplayComplexity = (result) => {
-  const fromFunctions = functionSummaryComplexity(functionRowsFor(result));
+const hasFixedCurrentRun = (result) => (
+  Boolean(result?.overall_complexity?.current_run_time || result?.overall_complexity?.current_run_space) ||
+  result?.concrete_analysis?.kind === 'fixed_entrypoint_literals'
+);
+
+const resultDisplayComplexity = (result, functions = functionRowsFor(result)) => {
   const overall = result?.overall_complexity || {};
+  if (hasFixedCurrentRun(result)) {
+    return {
+      time: displayComplexityValue(overall.current_run_time || overall.time || 'O(1)'),
+      space: displayComplexityValue(overall.current_run_space || overall.space || 'O(1)'),
+      scalableTime: displayComplexityValue(overall.scalable_time || result?.time_complexity || 'O(1)'),
+      scalableSpace: displayComplexityValue(overall.scalable_space || result?.space_complexity || 'O(1)'),
+      fixedCurrentRun: true,
+    };
+  }
+  const fromFunctions = functionSummaryComplexity(functions);
   return {
     time: fromFunctions.time || displayComplexityValue(overall.scalable_time || overall.time || result?.time_complexity || 'O(1)'),
     space: fromFunctions.space || displayComplexityValue(overall.scalable_space || overall.space || result?.space_complexity || 'O(1)'),
+    scalableTime: null,
+    scalableSpace: null,
+    fixedCurrentRun: false,
   };
 };
+
+const fileDisplayComplexity = (result) => resultDisplayComplexity(result, functionRowsFor(result));
 
 const projectDisplayComplexity = (files = [], projectSummary = {}) => {
   const fileTimes = [];
@@ -731,9 +750,9 @@ function ResultOverview({ functions, hotspots, hasAiSolutions, modifiedChecked, 
 function ComplexitySummary({ result, filename, functions = [] }) {
   const overall = result?.overall_complexity || {};
   const allocation = result?.memory_allocation_analysis || {};
-  const fromFunctions = functionSummaryComplexity(functions);
-  const time = fromFunctions.time || displayComplexityValue(overall.scalable_time || overall.time || result?.time_complexity || 'O(1)');
-  const space = fromFunctions.space || displayComplexityValue(overall.scalable_space || overall.space || result?.space_complexity || 'O(1)');
+  const display = resultDisplayComplexity(result, functions);
+  const time = display.time;
+  const space = display.space;
   const rawTotalAllocatedSpace = overall.total_allocation || allocation.total_allocated_space;
   const totalAllocatedSpace = rawTotalAllocatedSpace ? displayComplexityValue(rawTotalAllocatedSpace) : '';
   const showTotalAllocated = totalAllocatedSpace && totalAllocatedSpace !== space;
@@ -755,8 +774,14 @@ function ComplexitySummary({ result, filename, functions = [] }) {
           </div>
         </div>
         <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
-          <MetricBadge label="Big O Time" value={time} />
-          <MetricBadge label="Big O Space" value={space} />
+          <MetricBadge label={display.fixedCurrentRun ? 'Current Run Time' : 'Big O Time'} value={time} />
+          <MetricBadge label={display.fixedCurrentRun ? 'Current Run Space' : 'Big O Space'} value={space} />
+          {display.fixedCurrentRun && display.scalableTime && display.scalableTime !== time && (
+            <MetricBadge label="Scalable Time" value={display.scalableTime} />
+          )}
+          {display.fixedCurrentRun && display.scalableSpace && display.scalableSpace !== space && (
+            <MetricBadge label="Scalable Space" value={display.scalableSpace} />
+          )}
           {showTotalAllocated && (
             <MetricBadge label="Total Allocated Space" value={totalAllocatedSpace} />
           )}

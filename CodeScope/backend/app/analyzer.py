@@ -600,6 +600,18 @@ class CodeAnalyzer:
                     'reason': f"{time_result['reason']}{reason_suffix}"
                 }
         space = self.detect_space_complexity(code, language)
+        if self.last_func_complexity_details:
+            function_spaces = [
+                item.get('effective_space_complexity') or item.get('space_complexity')
+                for item in self.last_func_complexity_details.values()
+                if item.get('effective_space_complexity') or item.get('space_complexity')
+            ]
+            if function_spaces:
+                function_worst_space = self._max_complexity(function_spaces)
+                current_space_rank = self._complexity_rank(self._parse_complexity_string(space))
+                function_space_rank = self._complexity_rank(self._parse_complexity_string(function_worst_space))
+                if function_space_rank > current_space_rank:
+                    space = function_worst_space
         memory_analysis = self.detect_memory_allocation_complexity(code, language, space, time_result)
         space_reason = self.explain_space_complexity(code, language, space, memory_analysis)
         issues = self.detect_issues(code, language)
@@ -646,6 +658,16 @@ class CodeAnalyzer:
             result['input_effect_analysis'] = input_effect
         if concrete:
             result['concrete_analysis'] = concrete
+        else:
+            fixed_entrypoint = self._detect_fixed_entrypoint_literal_analysis(
+                code,
+                language,
+                result['time_complexity'],
+                result['space_complexity'],
+            )
+            if fixed_entrypoint:
+                result['concrete_analysis'] = fixed_entrypoint
+                self._apply_fixed_entrypoint_overall(result, fixed_entrypoint)
         if amortized:
             result['amortized_analysis'] = amortized
         result['suggestions'] = self.generate_suggestions(result)
@@ -1148,6 +1170,11 @@ class CodeAnalyzer:
                 'complexity': 'O(1)',
                 'reason': 'OrderedDict recency operations use hash-table lookup plus linked-order updates'
             }
+        if self._looks_like_huffman_heap_driver(body, full_code):
+            return {
+                'complexity': 'O(n log n)',
+                'reason': 'Huffman coding builds a min-heap and repeatedly extracts/merges nodes, so heap work is O(n log n)'
+            }
         dynamic_execution = self.detect_dynamic_execution_complexity(body, language)
         if dynamic_execution.get('detected'):
             return dynamic_execution
@@ -1180,12 +1207,22 @@ class CodeAnalyzer:
                 'complexity': 'O(popcount(n)), worst-case O(log n)',
                 'reason': 'The loop uses n = n & (n - 1), clearing exactly one set bit per iteration'
             }
+        if self._looks_like_binary_choice_backtracking(name, body):
+            if self._backtracking_materializes_results(body):
+                return {
+                    'complexity': 'O(n * 2^n)',
+                    'reason': 'Binary include/exclude backtracking visits 2^n states and copies length-n subsets into the result'
+                }
+            return {
+                'complexity': 'O(2^n)',
+                'reason': 'Binary include/exclude backtracking explores both choices at each input position'
+            }
+        if self._looks_like_recursive_resort_merge(name, body):
+            return {'complexity': self._tuple_to_string(('n_log2', 1)), 'reason': 'sorted(left + right) at each merge'}
         if self._looks_like_memoized_recursive_slice_keys(name, body):
             return {'complexity': 'O(n log n)', 'reason': 'materialized memo keys and copied slices'}
         if self._looks_like_recursive_slice_partition(name, body):
             return {'complexity': 'O(n log n)', 'reason': 'copied slices at each recursion level'}
-        if self._looks_like_recursive_resort_merge(name, body):
-            return {'complexity': self._tuple_to_string(('n_log2', 1)), 'reason': 'sorted(left + right) at each merge'}
         if self.detect_recursive_ordered_map_access(full_code, language).get('detected') and re.search(rf'\b{name}\s*\([^)]*(?:-\s*1|\+\s*1)', body):
             return {'complexity': 'O(n log n)', 'reason': 'TreeMap/tree-map update in linear recursion'}
         line = self._find_function_line(full_code, name, language)
@@ -1268,6 +1305,10 @@ class CodeAnalyzer:
             return 'O(V^2)'
         if self._looks_like_residual_matrix_bfs(name, body, full_code, language):
             return 'O(V)'
+        if self._looks_like_huffman_heap_driver(body, full_code):
+            return 'O(n)'
+        if self._looks_like_binary_choice_backtracking(name, body):
+            return 'O(n * 2^n)' if self._backtracking_materializes_results(body) else 'O(n)'
         return None
 
     def detect_dynamic_execution_complexity(self, code, language):
@@ -1825,6 +1866,23 @@ class CodeAnalyzer:
                 )
             }
 
+        if self._looks_like_binary_choice_backtracking(func_name, body):
+            if self._backtracking_materializes_results(body):
+                return {
+                    'complexity': 'O(n * 2^n)',
+                    'reason': 'Binary include/exclude backtracking visits 2^n states and copies each stored subset'
+                }
+            return {
+                'complexity': 'O(2^n)',
+                'reason': 'Binary include/exclude backtracking explores both choices at every position'
+            }
+
+        if self._looks_like_recursive_resort_merge(func_name, body):
+            return {
+                'complexity': self._tuple_to_string(('n_log2', 1)),
+                'reason': 'Recursive merge calls sorted(left + right), adding a sort at each merge level'
+            }
+
         if self._looks_like_memoized_recursive_slice_keys(func_name, body):
             return {
                 'complexity': 'O(n log n)',
@@ -1835,12 +1893,6 @@ class CodeAnalyzer:
             return {
                 'complexity': 'O(n log n)',
                 'reason': 'Divide-and-conquer recursion copies slices at each level, giving O(n log n) copied slices'
-            }
-
-        if self._looks_like_recursive_resort_merge(func_name, body):
-            return {
-                'complexity': self._tuple_to_string(('n_log2', 1)),
-                'reason': 'Recursive merge calls sorted(left + right), adding a sort at each merge level'
             }
 
         if has_memo:
@@ -2240,6 +2292,131 @@ class CodeAnalyzer:
             'symbolic_space_complexity': 'O(A(m, n))',
             'reason': 'Exact concrete-input simulation for fixed Ackermann inputs'
         }
+
+    def _detect_fixed_entrypoint_literal_analysis(self, code, language, scalable_time, scalable_space):
+        if language not in ('python', 'java', 'cpp', 'c', 'javascript', 'typescript'):
+            return None
+        if self._has_runtime_input_source(code):
+            return None
+
+        entrypoint = self._entrypoint_function_name(code, language)
+        if not entrypoint:
+            return None
+
+        line = self._find_function_line(code, entrypoint, language)
+        snippet = self._function_snippet(code, line, language, max_lines=80) or self._extract_function_body(code, entrypoint, language)
+        literal_inputs = self._literal_entrypoint_inputs(snippet)
+        if not literal_inputs:
+            return None
+
+        max_items = max(item.get('size', 0) for item in literal_inputs)
+        return {
+            'available': True,
+            'kind': 'fixed_entrypoint_literals',
+            'entrypoint': entrypoint,
+            'inputs': {item['name']: item['size'] for item in literal_inputs if item.get('name')},
+            'input_count': max_items,
+            'fixed_input_time_complexity': 'O(1)',
+            'fixed_input_space_complexity': 'O(1)',
+            'symbolic_time_complexity': scalable_time,
+            'symbolic_space_complexity': scalable_space,
+            'reason': (
+                f'The submitted {entrypoint}() uses literal in-code data and no runtime input source, '
+                'so this exact run is constant-size. CodeScope still reports scalable Big-O separately.'
+            ),
+        }
+
+    def _apply_fixed_entrypoint_overall(self, result, concrete):
+        overall = dict(result.get('overall_complexity') or {})
+        scalable_time = concrete.get('symbolic_time_complexity') or result.get('time_complexity') or overall.get('time') or 'O(1)'
+        scalable_space = concrete.get('symbolic_space_complexity') or result.get('space_complexity') or overall.get('space') or 'O(1)'
+        current_time = concrete.get('fixed_input_time_complexity') or 'O(1)'
+        current_space = concrete.get('fixed_input_space_complexity') or 'O(1)'
+        overall.update({
+            'time': current_time,
+            'space': current_space,
+            'current_run_time': current_time,
+            'current_run_space': current_space,
+            'scalable_time': scalable_time,
+            'scalable_space': scalable_space,
+            'headline': (
+                f'{current_time} current run, {current_space} current space; '
+                f'{scalable_time} scalable time, {scalable_space} scalable space'
+            ),
+        })
+        result['overall_complexity'] = overall
+
+    def _entrypoint_function_name(self, code, language):
+        names = set(self._function_names(code, language))
+        if language == 'python':
+            if 'main' in names and re.search(r'if\s+__name__\s*==\s*[\'"]__main__[\'"]', code):
+                return 'main'
+            return None
+        if language in ('java', 'cpp', 'c') and 'main' in names:
+            return 'main'
+        if language in ('javascript', 'typescript') and 'main' in names and re.search(r'\bmain\s*\(\s*\)', code):
+            return 'main'
+        return None
+
+    def _has_runtime_input_source(self, code):
+        return bool(re.search(
+            r'\binput\s*\(|\bsys\.stdin\b|\bstdin\b|\bScanner\s*\(|\bBufferedReader\s*\(|'
+            r'\bcin\s*>>|\bscanf\s*\(|\bfgets\s*\(|\breadline\s*\(|\bprocess\.argv\b|'
+            r'\bargv\b|\bprompt\s*\(',
+            code,
+            re.IGNORECASE
+        ))
+
+    def _literal_entrypoint_inputs(self, snippet):
+        items = []
+        seen = set()
+        for pattern in (
+            r'\b(?:vector|array|List|ArrayList|int\[\]|char\[\]|String\[\])[\w<>\[\],\s*&*]*\s+([A-Za-z_]\w*)\s*(?:=|\{)\s*\{([^{};]+)\}',
+            r'\b([A-Za-z_]\w*)\s*=\s*\[([^\]\n]+)\]',
+            r'\b([A-Za-z_]\w*)\s*=\s*\(([^)\n]+)\)',
+            r'\b([A-Za-z_]\w*)\s*=\s*\{([^{}\n:]+)\}',
+        ):
+            for name, values in re.findall(pattern, snippet, re.MULTILINE):
+                size = self._count_literal_items(values)
+                key = (name, size)
+                if size > 0 and key not in seen:
+                    seen.add(key)
+                    items.append({'name': name, 'size': size})
+        return items
+
+    def _count_literal_items(self, values):
+        text = str(values or '').strip()
+        if not text:
+            return 0
+        parts = []
+        depth = 0
+        quote = ''
+        current = []
+        for char in text:
+            if quote:
+                current.append(char)
+                if char == quote:
+                    quote = ''
+                continue
+            if char in ('"', "'"):
+                quote = char
+                current.append(char)
+                continue
+            if char in '([{':
+                depth += 1
+            elif char in ')]}' and depth > 0:
+                depth -= 1
+            if char == ',' and depth == 0:
+                item = ''.join(current).strip()
+                if item:
+                    parts.append(item)
+                current = []
+            else:
+                current.append(char)
+        last = ''.join(current).strip()
+        if last:
+            parts.append(last)
+        return len([part for part in parts if part and part not in ('...',)])
 
     def _find_dfs_function(self, code, language):
         for name in self._function_names(code, language):
@@ -4751,7 +4928,7 @@ class CodeAnalyzer:
         if not isinstance(complexity, str):
             return False
         return bool(re.search(
-            r'\b(?:average|worst|best|amortized|build|query|preprocess|V|E)\b',
+            r'\b(?:average|worst|best|amortized|build|query|preprocess|V|E|k)\b',
             complexity,
             re.IGNORECASE
         ))
@@ -4802,6 +4979,8 @@ class CodeAnalyzer:
             'O(n log n) build, O(log² n) query': ('n_log', 1),
             'O(n log n) worst, O(n) best': ('n_log', 1),
             'O(n) build, O(log n) query/update': ('n', 1),
+            f'O(n{chr(178)})': ('n', 2), f'O(n{chr(179)})': ('n', 3),
+            f'O(n{chr(178)} log n)': ('n2_log', 1), f'O(n{chr(179)} log n)': ('n3_log', 1),
             'O(n²)': ('n', 2), 'O(n^2)': ('n', 2),
             'O(n² log n)': ('n2_log', 1), 'O(n^2 log n)': ('n2_log', 1),
             'O(n³)': ('n', 3), 'O(n^3)': ('n', 3),
@@ -4840,7 +5019,10 @@ class CodeAnalyzer:
             'O(n/m) best, O(nm) worst': ('n', 2),
             'O(m)': ('log', 1),
             'O(k)': ('const', 0),
+            f'O(k{chr(178)})': ('n', 2), f'O(k{chr(179)})': ('n', 3),
+            'O(kÂ²)': ('n', 2), 'O(k^2)': ('n', 2),
             'O(k log M)': ('log', 1),
+            f'O(k{chr(179)} log n)': ('k3_log', 1),
             'O(k³ log n)': ('n', 3),
             'O(epochs × n × L × w)': ('n', 2),
             'O(epochs × batch × L × w)': ('n', 2),
@@ -4870,7 +5052,11 @@ class CodeAnalyzer:
         if fractional:
             exponent = float(fractional.group(1))
             return ('const', 0) if exponent <= 0 else ('n', exponent)
-        return mapping.get(s, ('n', 1))
+        if s in mapping:
+            return mapping[s]
+        if normalized in mapping:
+            return mapping[normalized]
+        return ('n', 1)
 
     def _tuple_to_string(self, c):
         type_c, pow_c = c
@@ -5464,7 +5650,24 @@ class CodeAnalyzer:
         }
 
     def _looks_like_recursive_slice_partition(self, func_name, body):
-        return bool(re.search(rf'\b{func_name}\s*\([^)]*\.slice\s*\(', body)) and bool(re.search(r'\.slice\s*\(', body))
+        if not func_name or not body:
+            return False
+        if bool(re.search(rf'\b{func_name}\s*\([^)]*\.slice\s*\(', body)) and bool(re.search(r'\.slice\s*\(', body)):
+            return True
+        escaped = re.escape(func_name)
+        has_mid_halving = bool(re.search(
+            r'\bmid\s*=\s*(?:len\s*\([^)]*\)|\w+(?:\.size\s*\(\))?)\s*(?://|/|>>)\s*2',
+            body
+        ))
+        left_slice_call = bool(re.search(
+            rf'\b{escaped}\s*\([^)]*\[[^\]]*:\s*mid\s*\]',
+            body
+        ))
+        right_slice_call = bool(re.search(
+            rf'\b{escaped}\s*\([^)]*\[\s*mid\s*:\s*[^\]]*\]',
+            body
+        ))
+        return has_mid_halving and left_slice_call and right_slice_call
 
     def _looks_like_memoized_recursive_slice_keys(self, func_name, body):
         return (
@@ -5477,6 +5680,60 @@ class CodeAnalyzer:
             bool(re.search(rf'\b{func_name}\s*\(', body)) and
             bool(re.search(r'\bsorted\s*\([^)]*\+[^)]*\)|\.sort\s*\(', body))
         )
+
+    def _looks_like_binary_choice_backtracking(self, func_name, body):
+        if not func_name or not body:
+            return False
+        escaped = re.escape(func_name)
+        calls = re.findall(rf'\b{escaped}\s*\(([^)]*)\)', body)
+        if len(calls) < 2:
+            return False
+        progresses = 0
+        for args in calls:
+            first_arg = args.split(',', 1)[0]
+            if re.search(r'\b(?:index|idx|i|pos|start)\s*\+\s*1\b|\b(?:index|idx|i|pos|start)\s*-\s*1\b', first_arg):
+                progresses += 1
+        if progresses < 2:
+            return False
+        has_choice_mutation = bool(re.search(
+            r'\.(?:append|push|add)\s*\(|\.(?:pop|remove)\s*\(',
+            body,
+            re.IGNORECASE
+        ))
+        has_length_base = bool(re.search(
+            r'\b(?:index|idx|i|pos|start)\s*(?:==|>=)\s*len\s*\(|'
+            r'\b(?:index|idx|i|pos|start)\s*(?:==|>=)\s*\w+\.size\s*\(\)',
+            body
+        ))
+        return has_choice_mutation and has_length_base
+
+    def _backtracking_materializes_results(self, body):
+        return bool(re.search(
+            r'\b(?:result|results|res|ans|output)\s*\.(?:append|push|add)\s*\(\s*(?:\w+\s*\[:\]|list\s*\(|new\s+ArrayList|\[[^\]]*\.\.\.)|'
+            r'\b(?:result|results|res|ans|output)\s*\.(?:append|push|add)\s*\(',
+            body,
+            re.IGNORECASE
+        ))
+
+    def _looks_like_huffman_heap_driver(self, code, full_code=''):
+        combined = self._compact_ws(f'{full_code}\n{code}')
+        local = self._compact_ws(code)
+        has_heap = bool(re.search(r'\bpriority_queue\s*<|\bPriorityQueue\s*<|\bheapq\b', local))
+        if not has_heap:
+            return False
+        has_huffman_context = bool(re.search(
+            r'huffman|freq|frequency|Node|left|right|code\s*\+\s*["\']?[01]',
+            combined,
+            re.IGNORECASE
+        ))
+        has_merge_loop = bool(re.search(
+            r'(?:while|for)[^{;\n]*(?:size\s*\(\)\s*>\s*1|len\s*\([^)]*\)\s*>\s*1|\.size\s*>\s*1)',
+            local,
+            re.IGNORECASE
+        ))
+        pop_count = len(re.findall(r'\.(?:pop|poll)\s*\(|\bheapq\.heappop\s*\(', local))
+        push_count = len(re.findall(r'\.(?:push|offer|add)\s*\(|\bheapq\.heappush\s*\(', local))
+        return has_huffman_context and has_merge_loop and pop_count >= 2 and push_count >= 1
 
     def _looks_like_structural_tree_recursion(self, func_name, body):
         compact = self._compact_ws(body)
@@ -6267,6 +6524,12 @@ class CodeAnalyzer:
                 return 'O(n)'
             if self._looks_like_looped_halving_recursion(name, body):
                 return 'O(log n)'
+            if self._looks_like_matrix_power_recursion(
+                name,
+                body,
+                getattr(self, 'last_func_own_complexities', {}) or getattr(self, 'last_func_complexities', {})
+            ):
+                return 'O(k²)'
             if self._looks_like_memoized_recursive_slice_keys(name, body):
                 return 'O(n log n)'
             if self._looks_like_recursive_slice_partition(name, body):

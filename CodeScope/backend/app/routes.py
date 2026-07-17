@@ -403,6 +403,10 @@ def _analyzer_function_explanations(function_details):
             'space_complexity': effective_space,
             'calls': detail.get('calls') or [],
             'explanation': detail.get('reason', ''),
+            'line': detail.get('line'),
+            'snippet': detail.get('snippet') or '',
+            'reason': detail.get('reason', ''),
+            'target_index': detail.get('target_index'),
         })
     return explanations
 
@@ -495,6 +499,38 @@ def _run_github_analysis_job(job_id, url, selected_path='', selected_ref=None):
     _update_analysis_job(job_id, status='running')
     try:
         result = _analyze_github_repository(url, selected_path, selected_ref)
+        _update_analysis_job(job_id, status='completed', result=result)
+    except Exception as exc:
+        _update_analysis_job(job_id, status='failed', error=str(exc))
+
+
+def _start_zip_analysis_job(file_bytes, filename='upload.zip'):
+    _cleanup_analysis_jobs()
+    job_id = uuid.uuid4().hex
+    job = {
+        'status': 'queued',
+        'created_at': time.time(),
+        'updated_at': time.time(),
+        'filename': filename,
+        'result': None,
+        'error': None,
+    }
+    with ANALYSIS_JOBS_LOCK:
+        ANALYSIS_JOBS[job_id] = job
+    _persist_analysis_job(job_id, job)
+    thread = threading.Thread(
+        target=_run_zip_analysis_job,
+        args=(job_id, file_bytes, filename),
+        daemon=True,
+    )
+    thread.start()
+    return job_id
+
+
+def _run_zip_analysis_job(job_id, file_bytes, filename='upload.zip'):
+    _update_analysis_job(job_id, status='running')
+    try:
+        result = _analyze_zip_bytes(file_bytes)
         _update_analysis_job(job_id, status='completed', result=result)
     except Exception as exc:
         _update_analysis_job(job_id, status='failed', error=str(exc))
@@ -1625,6 +1661,63 @@ def infer_inputs():
 
 
 # ─── Analyze ZIP file ───────────────────────────────────────
+def _analyze_zip_bytes(file_bytes):
+    zip_buffer = io.BytesIO(file_bytes)
+    results = []
+    source_files = []
+
+    with zipfile.ZipFile(zip_buffer, 'r') as zip_ref:
+        for info in zip_ref.infolist():
+            if len(results) >= MAX_BATCH_FILES:
+                break
+            filename = _normalize_project_path(info.filename)
+            if _should_skip_batch_path(filename):
+                continue
+            ext = os.path.splitext(filename)[1].lower()
+            if ext not in SUPPORTED_CODE_EXTENSIONS:
+                continue
+            if info.file_size > MAX_SOURCE_BYTES:
+                continue
+
+            with zip_ref.open(info) as source:
+                try:
+                    code = source.read().decode('utf-8')
+                    if not code.strip():
+                        continue
+
+                    result = _analyze_with_extras(
+                        code,
+                        filename,
+                        include_ai=False,
+                        include_ai_explanations=False,
+                    )
+                    result['source_code'] = code
+
+                    results.append({'filename': filename, 'result': result})
+                    source_files.append({'filename': filename, 'code': code})
+
+                except UnicodeDecodeError:
+                    continue
+
+    if not results:
+        raise ValueError('No supported code files found in ZIP')
+
+    avg_rating = round(
+        sum(r['result']['rating'] for r in results) / len(results))
+    total_lines = sum(r['result']['lines_of_code'] for r in results)
+    all_issues = sum(len(r['result']['issues']) for r in results)
+
+    return {
+        'success': True,
+        'total_files': len(results),
+        'total_lines': total_lines,
+        'total_issues': all_issues,
+        'average_rating': avg_rating,
+        'project_summary': _build_batch_summary(results, 'zip', source_files),
+        'files': results,
+    }
+
+
 @main.route('/api/analyze/zip', methods=['POST'])
 def analyze_zip():
     try:
@@ -1638,61 +1731,24 @@ def analyze_zip():
         file_bytes = file.read(MAX_ZIP_BYTES + 1)
         if len(file_bytes) > MAX_ZIP_BYTES:
             return jsonify({'error': 'ZIP file is too large. Please upload 8 MB or less.'}), 400
-        zip_buffer = io.BytesIO(file_bytes)
 
-        results = []
-        source_files = []
-        with zipfile.ZipFile(zip_buffer, 'r') as zip_ref:
-            for info in zip_ref.infolist():
-                if len(results) >= MAX_BATCH_FILES:
-                    break
-                filename = _normalize_project_path(info.filename)
-                if _should_skip_batch_path(filename):
-                    continue
-                ext = os.path.splitext(filename)[1].lower()
-                if ext not in SUPPORTED_CODE_EXTENSIONS:
-                    continue
-                if info.file_size > MAX_SOURCE_BYTES:
-                    continue
-
-                with zip_ref.open(filename) as f:
-                    try:
-                        code = f.read().decode('utf-8')
-                        if not code.strip():
-                            continue
-
-                        result = _analyze_with_extras(
-                            code,
-                            filename,
-                            include_ai=False,
-                            include_ai_explanations=False,
-                        )
-                        result['source_code'] = code
-
-                        results.append({'filename': filename, 'result': result})
-                        source_files.append({'filename': filename, 'code': code})
-
-                    except UnicodeDecodeError:
-                        continue
-
-        if not results:
-            return jsonify({'error': 'No supported code files found in ZIP'}), 400
-
-        avg_rating = round(
-            sum(r['result']['rating'] for r in results) / len(results))
-        total_lines = sum(r['result']['lines_of_code'] for r in results)
-        all_issues = sum(len(r['result']['issues']) for r in results)
-
-        return jsonify({
-            'success': True,
-            'total_files': len(results),
-            'total_lines': total_lines,
-            'total_issues': all_issues,
-            'average_rating': avg_rating,
-            'project_summary': _build_batch_summary(results, 'zip', source_files),
-            'files': results
+        wants_async = _wants_async_analysis({
+            'async': request.form.get('async') or request.args.get('async')
         })
+        if wants_async:
+            job_id = _start_zip_analysis_job(file_bytes, file.filename)
+            return jsonify({
+                'success': True,
+                'async': True,
+                'job_id': job_id,
+                'status': 'queued',
+                'filename': file.filename,
+            }), 202
 
+        return jsonify(_analyze_zip_bytes(file_bytes))
+
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
