@@ -4392,6 +4392,65 @@ def edmonds_karp(capacity, source, sink):
         self.assertEqual(details["edmonds_karp"]["effective_space_complexity"], "O(V^2)")
         self.assertEqual(result["hotspots"][0]["function"], "edmonds_karp")
 
+    def test_edmonds_karp_adjacency_dict_reports_driver_hotspot(self):
+        code = """from collections import deque
+
+def bfs(residual_graph, source, sink, parent):
+    visited = {node: False for node in residual_graph}
+    queue = deque([source])
+    visited[source] = True
+
+    while queue:
+        u = queue.popleft()
+        for v, capacity in residual_graph[u].items():
+            if not visited[v] and capacity > 0:
+                queue.append(v)
+                visited[v] = True
+                parent[v] = u
+                if v == sink:
+                    return True
+    return False
+
+def edmonds_karp(graph, source, sink):
+    residual_graph = {u: {v: graph[u][v] for v in graph[u]} for u in graph}
+    parent = {}
+    max_flow = 0
+
+    while bfs(residual_graph, source, sink, parent):
+        path_flow = float("Inf")
+        s = sink
+        while s != source:
+            path_flow = min(path_flow, residual_graph[parent[s]][s])
+            s = parent[s]
+        max_flow += path_flow
+        v = sink
+        while v != source:
+            u = parent[v]
+            residual_graph[u][v] -= path_flow
+            residual_graph[v][u] = residual_graph[v].get(v, 0) + path_flow
+            v = parent[v]
+
+    return max_flow
+"""
+
+        result = self.analyzer.analyze(code, "flow.py")
+        details = {
+            item["function"]: item
+            for item in result["function_complexity_details"]
+        }
+
+        self.assertEqual(result["time_complexity"], "O(V E²)")
+        self.assertEqual(result["space_complexity"], "O(V + E)")
+        self.assertEqual(result["memory_allocation_analysis"]["pattern"], "max_flow_residual_network")
+        self.assertEqual(details["bfs"]["own_complexity"], "O(V + E)")
+        self.assertEqual(details["edmonds_karp"]["effective_complexity"], "O(V E²)")
+        self.assertEqual(details["edmonds_karp"]["effective_space_complexity"], "O(V + E)")
+        self.assertEqual(result["hotspots"][0]["function"], "edmonds_karp")
+        self.assertTrue(any(
+            issue["type"] == "correctness" and "get(u, 0)" in issue["message"]
+            for issue in result["issues"]
+        ))
+
     def test_repeated_dfs_with_fresh_visited_repeats_graph_work(self):
         code = """def dfs(graph, node, visited):
     if node in visited:

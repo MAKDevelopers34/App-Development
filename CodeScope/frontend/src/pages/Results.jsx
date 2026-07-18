@@ -565,28 +565,6 @@ const hotspotsFor = (result, functionRows) => {
     }));
 };
 
-const functionHotspotKey = (item = {}) => (
-  `${String(item.function || '').trim().toLowerCase()}::${Number(item.line || 0) || ''}`
-);
-
-const functionsWithoutHotspots = (functions, hotspots) => {
-  if (!Array.isArray(functions) || functions.length === 0) return [];
-  if (!Array.isArray(hotspots) || hotspots.length === 0) return functions;
-
-  const hotspotKeys = new Set(hotspots.map(functionHotspotKey));
-  const hotspotNames = new Set(
-    hotspots.map(item => String(item.function || '').trim().toLowerCase()).filter(Boolean)
-  );
-
-  return functions.filter(fn => {
-    const name = String(fn.function || '').trim().toLowerCase();
-    if (!name) return true;
-    const exactKey = functionHotspotKey(fn);
-    if (hotspotKeys.has(exactKey)) return false;
-    return !hotspotNames.has(name);
-  });
-};
-
 const aiSolutionsFor = (result, hotspots, functionRows) => {
   const aiTransformed = result?.ai_transformed_code;
   const optimizations = Array.isArray(result?.optimizations) ? result.optimizations : [];
@@ -1305,7 +1283,7 @@ export default function Results() {
       Array.isArray(fn.ai_solutions) && fn.ai_solutions.length > 0
     ));
     const hasAiSolutions = hasAttachedAiSolutions || standaloneAiSolutions.length > 0;
-    const functionTableRows = functionsWithoutHotspots(functionsWithAiSolutions, hotspots);
+    const functionTableRows = functionsWithAiSolutions;
     const modifiedRunStarted = modifiedState.loading || modifiedState.checked || hasAiSolutions || Boolean(modifiedState.error);
     const visibleGroqStatus = modifiedRunStarted ? groqStatus : '';
 
@@ -1333,7 +1311,7 @@ export default function Results() {
           groqStatus={visibleGroqStatus}
           sourceCode={sourceCode}
           language={fileResult?.language || ''}
-          hiddenHotspotCount={hotspots.length}
+          hiddenHotspotCount={0}
           hasAnyAiSolution={hasAiSolutions}
         />
         <StandaloneAiRewrites solutions={standaloneAiSolutions} />

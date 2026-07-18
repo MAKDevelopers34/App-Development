@@ -1155,6 +1155,11 @@ class CodeAnalyzer:
                 'complexity': 'O(V^2)',
                 'reason': 'Adjacency-matrix BFS may visit V vertices and scans a full V-capacity row for each vertex'
             }
+        if self._looks_like_residual_adjacency_bfs(name, body, full_code, language):
+            return {
+                'complexity': 'O(V + E)',
+                'reason': 'Residual-graph BFS visits reachable vertices and scans outgoing residual edges'
+            }
         if self._looks_like_edmonds_karp_matrix_driver(name, body, full_code, language):
             return {
                 'complexity': 'O(V E²)',
@@ -1277,6 +1282,30 @@ class CodeAnalyzer:
             reads_matrix_capacity or scans_enumerated_row
         ) and (scans_range_row or scans_enumerated_row)
 
+    def _looks_like_residual_adjacency_bfs(self, name, body, full_code, language):
+        if language != 'python':
+            return False
+        compact = self._compact_ws(body)
+        has_bfs_context = re.search(r'\bbfs\b|breadth.?first', str(name or ''), re.IGNORECASE) or re.search(
+            r'\b(?:deque|queue|popleft)\b', compact, re.IGNORECASE
+        )
+        has_queue_loop = bool(re.search(r'\bwhile\s+\w*queue\w*\s*:', body))
+        scans_adjacency_items = bool(re.search(
+            r'\bfor\s+\w+\s*,\s*\w+\s+in\s+\w+\s*\[\s*\w+\s*\]\s*\.items\s*\(\s*\)\s*:',
+            body
+        ))
+        checks_positive_capacity = bool(re.search(r'\b\w+\s*>\s*0\b', body))
+        marks_parent = bool(re.search(r'\bparent\s*\[\s*\w+\s*\]\s*=', body))
+        has_flow_names = bool(re.search(r'\b(?:residual|capacity|cap|sink|source|parent)\b', compact, re.IGNORECASE))
+        return (
+            has_bfs_context and
+            has_queue_loop and
+            scans_adjacency_items and
+            checks_positive_capacity and
+            marks_parent and
+            has_flow_names
+        )
+
     def _looks_like_edmonds_karp_matrix_driver(self, name, body, full_code, language):
         if language != 'python':
             return False
@@ -1287,23 +1316,37 @@ class CodeAnalyzer:
         has_reverse_update = bool(re.search(
             r'\b\w+\s*\[\s*\w+\s*\]\s*\[\s*\w+\s*\]\s*\+=\s*(?:path_flow|flow)',
             body
+        )) or bool(re.search(
+            r'\b\w+\s*\[\s*\w+\s*\]\s*\[\s*\w+\s*\]\s*=\s*\w+\s*\[\s*\w+\s*\]\s*\.get\s*\(',
+            body
         ))
         has_matrix_residual = bool(re.search(
             r'\b\w+\s*=\s*\[\s*\[.*?\bfor\b.*?\]\s*\bfor\b',
             compact
         )) or bool(re.search(r'\b\w+\s*\[\s*\w+\s*\]\s*\[\s*\w+\s*\]', body))
+        has_adjacency_residual = bool(re.search(
+            r'\b\w+\s*=\s*\{\s*\w+\s*:\s*\{.*?\bfor\b.*?\}\s*\bfor\b',
+            compact
+        )) or bool(re.search(
+            r'\bfor\s+\w+\s*,\s*\w+\s+in\s+\w+\s*\[\s*\w+\s*\]\s*\.items\s*\(\s*\)\s*:',
+            full_code
+        ))
         return (
             calls_bfs_in_augment_loop and
             has_flow_state and
             has_reverse_update and
-            has_matrix_residual and
+            (has_matrix_residual or has_adjacency_residual) and
             (named_like_flow or re.search(r'edmonds|karp|max.?flow', full_code, re.IGNORECASE))
         )
 
     def _function_special_space_complexity(self, name, body, full_code, language):
         if self._looks_like_edmonds_karp_matrix_driver(name, body, full_code, language):
+            if re.search(r'\b\w+\s*=\s*\{\s*\w+\s*:\s*\{.*?\bfor\b.*?\}\s*\bfor\b', self._compact_ws(body)):
+                return 'O(V + E)'
             return 'O(V^2)'
         if self._looks_like_residual_matrix_bfs(name, body, full_code, language):
+            return 'O(V)'
+        if self._looks_like_residual_adjacency_bfs(name, body, full_code, language):
             return 'O(V)'
         if self._looks_like_huffman_heap_driver(body, full_code):
             return 'O(n)'
@@ -2875,7 +2918,14 @@ class CodeAnalyzer:
             }
         # Max-flow
         if re.search(r'max.?flow|ford.?fulkerson|edmonds.?karp|bfs.*flow|flow.*bfs', code, re.IGNORECASE):
-            if self._looks_like_edmonds_karp_matrix_driver('', code, code, 'python'):
+            has_adjacency_residual = bool(re.search(
+                r'\b\w+\s*=\s*\{\s*\w+\s*:\s*\{.*?\bfor\b.*?\}\s*\bfor\b',
+                self._compact_ws(code)
+            )) or bool(re.search(
+                r'\bfor\s+\w+\s*,\s*\w+\s+in\s+\w+\s*\[\s*\w+\s*\]\s*\.items\s*\(\s*\)\s*:',
+                code
+            ))
+            if self._looks_like_edmonds_karp_matrix_driver('', code, code, 'python') and not has_adjacency_residual:
                 return {
                     'detected': True, 'algorithm': 'Max-Flow (Edmonds-Karp, adjacency matrix)',
                     'complexity': 'O(V E²)', 'space': 'O(V^2)',
@@ -5812,6 +5862,13 @@ class CodeAnalyzer:
 
     def detect_memory_allocation_complexity(self, code, language, space_complexity=None, time_result=None):
         graph = self.detect_graph_algorithm(code)
+        if graph.get('detected') and str(graph.get('algorithm', '')).startswith('Max-Flow'):
+            return {
+                'pattern': 'max_flow_residual_network',
+                'peak_live_auxiliary_space': graph.get('space', space_complexity or 'O(V + E)'),
+                'total_allocated_space': graph.get('space', space_complexity or 'O(V + E)'),
+                'reason': 'The residual network and parent/visited structures dominate auxiliary storage.'
+            }
         if graph.get('detected') and graph.get('algorithm') == 'Repeated DFS from All Nodes':
             return {
                 'pattern': 'repeated_dfs_fresh_visited',
@@ -6655,6 +6712,14 @@ class CodeAnalyzer:
                 'message': f'{graph["algorithm"]} ({graph["complexity"]}) — {graph.get("note", "")}'
             })
 
+        reverse_edge_bug_line = self._max_flow_reverse_edge_bug_line(lines)
+        if reverse_edge_bug_line:
+            issues.append({
+                'line': reverse_edge_bug_line,
+                'type': 'correctness', 'severity': 'high',
+                'message': 'Reverse residual edge update appears to read the wrong key; use get(u, 0) when updating residual_graph[v][u].'
+            })
+
         if self.detect_immutable_string_concat(code, language).get('detected'):
             issues.append({
                 'line': 1, 'type': 'performance', 'severity': 'high',
@@ -6724,6 +6789,16 @@ class CodeAnalyzer:
                 })
 
         return issues
+
+    def _max_flow_reverse_edge_bug_line(self, lines):
+        pattern = re.compile(
+            r'\b(?P<graph>\w+)\s*\[\s*(?P<v>\w+)\s*\]\s*\[\s*(?P<u>\w+)\s*\]\s*='
+            r'\s*(?P=graph)\s*\[\s*(?P=v)\s*\]\s*\.get\s*\(\s*(?P=v)\s*,\s*0\s*\)'
+        )
+        for index, line in enumerate(lines, 1):
+            if pattern.search(line):
+                return index
+        return None
 
     def _check_nested_loop_issues(self, loops, issues, lines, depth=0):
         if depth == 0:
